@@ -8,6 +8,10 @@ import {
   saveAllocations,
   validateAgreementAllocations
 } from '../allocation-data'
+import {
+  getOutcomeCostAllocationErrorMessage,
+  localizeAllocationIssues
+} from '../errors'
 
 const AllocationSchema = z.object({
   agreementBudgetFiscalYearId: z.string().min(1),
@@ -40,14 +44,11 @@ export default async (event: AllocationPutEvent) => {
   const issues = await validateAgreementAllocations(db, agreementId, streamId, body.allocations)
 
   if (issues.length > 0) {
+    const code = issues[0]?.code ?? 'GCS_OUTCOME_COST_ALLOCATION_INVALID'
     throw createGcsExtensionUserError({
-      code: issues[0]?.code ?? 'GCS_OUTCOME_COST_ALLOCATION_INVALID',
-      message: issues[0]?.message ?? 'apiErrors.extensions.outcome_cost_allocation.invalid',
-      details: issues.map(issue => ({
-        path: issue.path,
-        message: issue.message,
-        code: issue.code
-      }))
+      code,
+      message: getOutcomeCostAllocationErrorMessage(event, code),
+      details: localizeAllocationIssues(event, issues)
     })
   }
 

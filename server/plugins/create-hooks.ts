@@ -6,6 +6,10 @@ import {
 import { asOutcomeCostAllocationDb } from '../db'
 import { getGeneratedCommitmentLines } from '../allocation-data'
 import {
+  getOutcomeCostAllocationErrorMessage,
+  localizeAllocationIssues
+} from '../errors'
+import {
   EXTENSION_KEY,
   isCommitmentType
 } from '../../shared/allocation'
@@ -35,14 +39,11 @@ export default defineNitroPlugin(nitroApp => {
     }
 
     if (generated.issues.length > 0) {
+      const code = generated.issues[0]?.code ?? 'GCS_OUTCOME_COST_ALLOCATION_INVALID'
       throw createGcsExtensionUserError({
-        code: generated.issues[0]?.code ?? 'GCS_OUTCOME_COST_ALLOCATION_INVALID',
-        message: generated.issues[0]?.message ?? 'apiErrors.extensions.outcome_cost_allocation.invalid',
-        details: generated.issues.map(issue => ({
-          path: issue.path,
-          message: issue.message,
-          code: issue.code
-        }))
+        code,
+        message: getOutcomeCostAllocationErrorMessage(context.event as Parameters<typeof getOutcomeCostAllocationErrorMessage>[0], code),
+        details: localizeAllocationIssues(context.event as Parameters<typeof localizeAllocationIssues>[0], generated.issues)
       })
     }
 
