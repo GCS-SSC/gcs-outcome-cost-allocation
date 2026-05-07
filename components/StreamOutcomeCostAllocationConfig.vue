@@ -45,17 +45,21 @@ const config = defineModel<GcsExtensionJsonConfig>({ required: true })
 const { locale } = useI18n()
 
 const localConfig: Ref<OutcomeCostAllocationConfig> = ref(parseOutcomeCostAllocationConfig(config.value))
+const lastSyncedConfigJson: Ref<string> = ref(JSON.stringify({
+  enabledCommitmentTypes: localConfig.value.enabledCommitmentTypes,
+  mappings: localConfig.value.mappings
+}))
 
 const { data: outcomesResponse } = useFetch<ListResponse<OutcomeItem>>(
-  () => transferPaymentId ? `/api/transfer-payments/${transferPaymentId}/outcomes?page=1&limit=500` : '',
+  () => transferPaymentId ? `/api/transfer-payments/${transferPaymentId}/outcomes?page=1&limit=100` : '',
   { watch: [() => transferPaymentId] }
 )
 const { data: budgetsResponse } = useFetch<ListResponse<StreamBudgetItem>>(
-  () => transferPaymentId ? `/api/transfer-payments/${transferPaymentId}/streams/${streamId}/budgets?page=1&limit=500` : '',
+  () => transferPaymentId ? `/api/transfer-payments/${transferPaymentId}/streams/${streamId}/budgets?page=1&limit=100` : '',
   { watch: [() => transferPaymentId, () => streamId] }
 )
 const { data: commitmentsResponse } = useFetch<ListResponse<StreamCommitmentItem>>(
-  () => transferPaymentId ? `/api/transfer-payments/${transferPaymentId}/streams/${streamId}/commitments?page=1&limit=500` : '',
+  () => transferPaymentId ? `/api/transfer-payments/${transferPaymentId}/streams/${streamId}/commitments?page=1&limit=100` : '',
   { watch: [() => transferPaymentId, () => streamId] }
 )
 
@@ -138,7 +142,7 @@ const updateMappedCommitmentId = (
 }
 
 watch(localConfig, value => {
-  config.value = {
+  const nextConfig = {
     enabledCommitmentTypes: value.enabledCommitmentTypes,
     mappings: value.mappings.map(mapping => ({
       commitmentType: mapping.commitmentType,
@@ -147,10 +151,24 @@ watch(localConfig, value => {
       streamCommitmentId: mapping.streamCommitmentId
     }))
   }
+  const nextConfigJson = JSON.stringify(nextConfig)
+  if (nextConfigJson === lastSyncedConfigJson.value) {
+    return
+  }
+
+  lastSyncedConfigJson.value = nextConfigJson
+  config.value = nextConfig
 }, { deep: true })
 
 watch(config, value => {
-  localConfig.value = parseOutcomeCostAllocationConfig(value)
+  const nextConfig = parseOutcomeCostAllocationConfig(value)
+  const nextConfigJson = JSON.stringify(nextConfig)
+  if (nextConfigJson === lastSyncedConfigJson.value) {
+    return
+  }
+
+  lastSyncedConfigJson.value = nextConfigJson
+  localConfig.value = nextConfig
 }, { deep: true })
 
 const commitmentTypeLabels: Record<CommitmentType, { en: string, fr: string }> = {

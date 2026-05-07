@@ -1,5 +1,7 @@
 /* eslint-disable jsdoc/require-jsdoc */
+import type { H3Event } from 'h3'
 import { z } from 'zod'
+import { readBody } from 'h3'
 import { createGcsExtensionUserError } from '@gcs-ssc/extensions/server'
 import { asOutcomeCostAllocationDb } from '../db'
 import {
@@ -18,7 +20,7 @@ const SaveAllocationsSchema = z.object({
   allocations: z.array(AllocationSchema)
 })
 
-export default async (event: {
+type AllocationPutEvent = H3Event & {
   context: {
     $db: unknown
     params?: Record<string, string | undefined>
@@ -28,14 +30,9 @@ export default async (event: {
       }
     }
   }
-}) => {
-  const readBody = (globalThis as typeof globalThis & {
-    readBody?: (targetEvent: unknown) => Promise<unknown>
-  }).readBody
-  if (!readBody) {
-    throw new Error('readBody is unavailable in the extension route runtime.')
-  }
+}
 
+export default async (event: AllocationPutEvent) => {
   const body = SaveAllocationsSchema.parse(await readBody(event))
   const agreementId = event.context.params?.agreementId ?? ''
   const streamId = event.context.gcsExtension?.entity?.streamId ?? ''

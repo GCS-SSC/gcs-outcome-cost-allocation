@@ -95,6 +95,11 @@ const updateAllocationMethod = (yearId: string, outcomeId: string, value: string
 
 const activeAllocations = computed(() => allocations.value.filter(allocation => allocation.allocationValue > 0))
 
+const allocationMethodForYear = (yearId: string): AllocationMethod => {
+  const allocation = activeAllocations.value.find(item => item.agreementBudgetFiscalYearId === yearId)
+  return allocation?.allocationMethod ?? 'amount'
+}
+
 const validationIssues = computed(() => validateAllocationTotals(
   activeAllocations.value,
   budgetYears.value.map(year => ({
@@ -104,11 +109,60 @@ const validationIssues = computed(() => validateAllocationTotals(
   new Set(outcomes.value.map(outcome => String(outcome.id)))
 ))
 
-const yearAllocatedTotal = (yearId: string) => toMoney(
-  activeAllocations.value
+const validationMessage = computed(() => {
+  const issue = validationIssues.value[0]
+  if (!issue) {
+    return ''
+  }
+
+  const messages: Record<string, { en: string, fr: string }> = {
+    GCS_OUTCOME_COST_ALLOCATION_YEAR_MISSING: {
+      en: 'Each budget year needs at least one allocation.',
+      fr: 'Chaque exercice budgetaire doit avoir au moins une repartition.'
+    },
+    GCS_OUTCOME_COST_ALLOCATION_MIXED_METHODS: {
+      en: 'Use either amounts or percentages within a budget year, not both.',
+      fr: 'Utilisez soit des montants, soit des pourcentages dans un exercice budgetaire, pas les deux.'
+    },
+    GCS_OUTCOME_COST_ALLOCATION_PERCENTAGE_TOTAL_INVALID: {
+      en: 'Percentage allocations must total 100 for each budget year.',
+      fr: 'Les pourcentages doivent totaliser 100 pour chaque exercice budgetaire.'
+    },
+    GCS_OUTCOME_COST_ALLOCATION_AMOUNT_TOTAL_INVALID: {
+      en: 'Amount allocations must equal the program funding for each budget year.',
+      fr: 'Les montants doivent egaler le financement de programme pour chaque exercice budgetaire.'
+    },
+    GCS_OUTCOME_COST_ALLOCATION_STALE_OUTCOME: {
+      en: 'One saved allocation references an outcome that is no longer used by agreement activities.',
+      fr: 'Une repartition enregistree reference un resultat qui n est plus utilise par les activites de l entente.'
+    },
+    GCS_OUTCOME_COST_ALLOCATION_STALE_BUDGET_YEAR: {
+      en: 'One saved allocation references a budget year that is no longer active.',
+      fr: 'Une repartition enregistree reference un exercice budgetaire qui n est plus actif.'
+    }
+  }
+
+  const message = messages[issue.code]
+  if (!message) {
+    return issue.message
+  }
+
+  return locale.value === 'fr' ? message.fr : message.en
+})
+
+const yearAllocatedTotal = (yearId: string) => {
+  const method = allocationMethodForYear(yearId)
+  const total = activeAllocations.value
     .filter(allocation => allocation.agreementBudgetFiscalYearId === yearId)
     .reduce((sum, allocation) => sum + allocation.allocationValue, 0)
-)
+  if (method === 'percentage') {
+    return `${toMoney(total)}%`
+  }
+
+  return locale.value === 'fr'
+    ? new Intl.NumberFormat('fr-CA', { style: 'currency', currency: 'CAD' }).format(total)
+    : new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(total)
+}
 
 const save = async () => {
   if (isSaving.value || validationIssues.value.length > 0) {
@@ -184,7 +238,7 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
     </p>
 
     <p v-if="validationIssues.length > 0" class="text-sm text-error">
-      {{ validationIssues[0]?.message }}
+      {{ validationMessage }}
     </p>
     <p v-if="saveError" class="text-sm text-error">
       {{ saveError }}
@@ -198,7 +252,7 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
         <div class="text-sm text-zinc-600 dark:text-zinc-300">
           {{ tLocal('programFunding') }}: {{ Number(year.program_funding).toLocaleString(localeCode, { style: 'currency', currency: 'CAD' }) }}
           |
-          {{ tLocal('allocated') }}: {{ yearAllocatedTotal(String(year.id)).toLocaleString(localeCode, { maximumFractionDigits: 2 }) }}
+          {{ tLocal('allocated') }}: {{ yearAllocatedTotal(String(year.id)) }}
         </div>
       </div>
 

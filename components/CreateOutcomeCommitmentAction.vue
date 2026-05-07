@@ -53,6 +53,79 @@ const typeOptions = computed(() => COMMITMENT_TYPES.map(type => ({
 const buttonLabel = computed(() => locale.value === 'fr' ? label.fr : label.en)
 const isFrench = computed(() => locale.value === 'fr')
 
+const errorMessages: Record<string, { en: string, fr: string }> = {
+  GCS_OUTCOME_COST_ALLOCATION_YEAR_MISSING: {
+    en: 'Each budget year needs at least one allocation before this commitment can be created.',
+    fr: 'Chaque exercice budgetaire doit avoir au moins une repartition avant de creer cet engagement.'
+  },
+  GCS_OUTCOME_COST_ALLOCATION_MIXED_METHODS: {
+    en: 'Use either amounts or percentages within each budget year before creating this commitment.',
+    fr: 'Utilisez soit des montants, soit des pourcentages dans chaque exercice budgetaire avant de creer cet engagement.'
+  },
+  GCS_OUTCOME_COST_ALLOCATION_PERCENTAGE_TOTAL_INVALID: {
+    en: 'Percentage allocations must total 100 for each budget year before this commitment can be created.',
+    fr: 'Les pourcentages doivent totaliser 100 pour chaque exercice budgetaire avant de creer cet engagement.'
+  },
+  GCS_OUTCOME_COST_ALLOCATION_AMOUNT_TOTAL_INVALID: {
+    en: 'Amount allocations must equal the program funding for each budget year before this commitment can be created.',
+    fr: 'Les montants doivent egaler le financement de programme de chaque exercice budgetaire avant de creer cet engagement.'
+  },
+  GCS_OUTCOME_COST_ALLOCATION_STALE_OUTCOME: {
+    en: 'One saved allocation references an outcome that is no longer used by agreement activities.',
+    fr: 'Une repartition enregistree reference un resultat qui n est plus utilise par les activites de l entente.'
+  },
+  GCS_OUTCOME_COST_ALLOCATION_STALE_BUDGET_YEAR: {
+    en: 'One saved allocation references a budget year that is no longer active.',
+    fr: 'Une repartition enregistree reference un exercice budgetaire qui n est plus actif.'
+  },
+  GCS_OUTCOME_COST_ALLOCATION_STREAM_BUDGET_MISSING: {
+    en: 'A budget year is missing its stream budget mapping.',
+    fr: 'Un exercice budgetaire n a pas de correspondance avec un budget de volet.'
+  },
+  GCS_OUTCOME_COST_ALLOCATION_MAPPING_MISSING: {
+    en: 'Configure an outcome-to-commitment-line mapping for this commitment type before creating the commitment.',
+    fr: 'Configurez une correspondance entre resultat et ligne d engagement pour ce type d engagement avant de creer l engagement.'
+  },
+  GCS_OUTCOME_COST_ALLOCATION_STREAM_COMMITMENT_INACTIVE: {
+    en: 'One configured stream commitment line is no longer active.',
+    fr: 'Une ligne d engagement de volet configuree n est plus active.'
+  }
+}
+
+const resolveErrorMessage = (error: unknown): string => {
+  if (!error || typeof error !== 'object') {
+    return String(error)
+  }
+
+  const err = error as {
+    data?: {
+      code?: string
+      message?: string
+      data?: {
+        code?: string
+        message?: string
+      }
+    }
+    message?: string
+  }
+
+  const errorCode = err.data?.code ?? err.data?.data?.code
+  const configuredMessage = errorCode ? errorMessages[errorCode] : undefined
+  if (configuredMessage) {
+    return locale.value === 'fr' ? configuredMessage.fr : configuredMessage.en
+  }
+
+  if (err.data?.data?.message) {
+    return err.data.data.message
+  }
+
+  if (err.data?.message) {
+    return err.data.message
+  }
+
+  return err.message ?? String(error)
+}
+
 const createCommitment = async () => {
   if (isSaving.value) {
     return
@@ -75,7 +148,7 @@ const createCommitment = async () => {
     })
     onCreated()
   } catch (error: unknown) {
-    errorMessage.value = error instanceof Error ? error.message : String(error)
+    errorMessage.value = resolveErrorMessage(error)
   } finally {
     isSaving.value = false
   }

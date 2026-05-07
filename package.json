@@ -9,7 +9,8 @@
     "test:unit": "vitest run"
   },
   "dependencies": {
-    "@gcs-ssc/extensions": "github:GCS-SSC/gcs-ssc-extensions#main"
+    "@gcs-ssc/extensions": "github:GCS-SSC/gcs-ssc-extensions#main",
+    "h3": "1.15.5"
   },
   "peerDependencies": {
     "@nuxt/ui": "^4.4.0",
