@@ -21,7 +21,7 @@ const years = [
 const activeOutcomes = new Set(['outcome-1', 'outcome-2'])
 
 describe('outcome cost allocation logic', () => {
-  it('validates amount allocations against yearly program funding', () => {
+  it('validates amount allocations against the total agreement budget', () => {
     expect(validateAllocationTotals([
       {
         agreementBudgetFiscalYearId: 'year-1',
@@ -49,17 +49,11 @@ describe('outcome cost allocation logic', () => {
         outcomeId: 'outcome-1',
         allocationMethod: 'amount',
         allocationValue: 999
-      },
-      {
-        agreementBudgetFiscalYearId: 'year-2',
-        outcomeId: 'outcome-1',
-        allocationMethod: 'amount',
-        allocationValue: 333.33
       }
-    ], years, activeOutcomes).map(issue => issue.code)).toContain('GCS_OUTCOME_COST_ALLOCATION_AMOUNT_TOTAL_INVALID')
+    ], years, activeOutcomes).map(issue => issue.code)).toContain('GCS_OUTCOME_COST_ALLOCATION_TOTAL_INVALID')
   })
 
-  it('validates percentage allocations and rejects mixed methods', () => {
+  it('validates percentage allocations and allows mixed methods when the total resolves to the agreement budget', () => {
     expect(validateAllocationTotals([
       {
         agreementBudgetFiscalYearId: 'year-1',
@@ -100,7 +94,18 @@ describe('outcome cost allocation logic', () => {
         allocationMethod: 'percentage',
         allocationValue: 100
       }
-    ], years, activeOutcomes).map(issue => issue.code)).toContain('GCS_OUTCOME_COST_ALLOCATION_MIXED_METHODS')
+    ], years, activeOutcomes)).toEqual([])
+  })
+
+  it('allows the full agreement budget to be allocated in one budget year', () => {
+    expect(validateAllocationTotals([
+      {
+        agreementBudgetFiscalYearId: 'year-1',
+        outcomeId: 'outcome-1',
+        allocationMethod: 'amount',
+        allocationValue: 1333.33
+      }
+    ], years, activeOutcomes)).toEqual([])
   })
 
   it('rounds generated percentage lines so the year total is exact', () => {
@@ -135,7 +140,7 @@ describe('outcome cost allocation logic', () => {
 
     expect(issues).toContain('GCS_OUTCOME_COST_ALLOCATION_STALE_OUTCOME')
     expect(issues).toContain('GCS_OUTCOME_COST_ALLOCATION_STALE_BUDGET_YEAR')
-    expect(issues).toContain('GCS_OUTCOME_COST_ALLOCATION_YEAR_MISSING')
+    expect(issues).toContain('GCS_OUTCOME_COST_ALLOCATION_TOTAL_INVALID')
   })
 
   it('parses stream config and validates missing or inactive mappings', () => {

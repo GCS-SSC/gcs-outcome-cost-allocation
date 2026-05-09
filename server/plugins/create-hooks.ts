@@ -79,6 +79,7 @@ export default defineNitroPlugin(nitroApp => {
           }
 
           return {
+            allocation_version_id: generatedLine.allocationVersionId,
             generated_commitment_id: String(commitment.id),
             commitment_line_id: String(line.id),
             agreement_id: context.agreementId,

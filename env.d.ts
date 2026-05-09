@@ -1,4 +1,3 @@
-import type { Component } from 'vue'
 import '@gcs-ssc/extensions/nuxt'
 
 declare global {
@@ -12,13 +11,6 @@ declare global {
   const useToast: () => {
     add: (message: Record<string, unknown>) => void
   }
-  const UButton: Component
-  const UCheckbox: Component
-  const UFormField: Component
-  const UModal: Component
-  const USelect: Component
-  const USelectMenu: Component
-  const UTable: Component
 }
 
 export {}

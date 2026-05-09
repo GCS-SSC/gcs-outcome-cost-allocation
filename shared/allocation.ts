@@ -6,12 +6,27 @@ export type CommitmentType = typeof COMMITMENT_TYPES[number]
 
 export const ALLOCATION_METHODS = ['amount', 'percentage'] as const
 export type AllocationMethod = typeof ALLOCATION_METHODS[number]
+export const ALLOCATION_VERSION_STATUSES = ['draft', 'active', 'inactive'] as const
+export type AllocationVersionStatus = typeof ALLOCATION_VERSION_STATUSES[number]
 
 export interface OutcomeAllocationInput {
   agreementBudgetFiscalYearId: string
   outcomeId: string
   allocationMethod: AllocationMethod
   allocationValue: number
+}
+
+export interface VersionedOutcomeAllocationInput extends OutcomeAllocationInput {
+  allocationVersionId: string
+}
+
+export interface CostAllocationVersion {
+  id: string
+  agreementId: string
+  status: AllocationVersionStatus
+  versionNumber: number
+  createdAt?: string | null
+  completedAt?: string | null
 }
 
 export interface OutcomeAllocationResolved extends OutcomeAllocationInput {
@@ -99,7 +114,7 @@ export const validateAllocationTotals = (
 ): AllocationValidationIssue[] => {
   const issues: AllocationValidationIssue[] = []
   const totalsByYearId = new Map(yearTotals.map(total => [total.agreementBudgetFiscalYearId, total.programFunding]))
-  const allocationsByYearId = new Map<string, OutcomeAllocationInput[]>()
+  let allocatedTotal = 0
 
   for (const [index, allocation] of allocations.entries()) {
     if (!activeOutcomeIds.has(allocation.outcomeId)) {
@@ -118,46 +133,21 @@ export const validateAllocationTotals = (
       })
     }
 
-    const current = allocationsByYearId.get(allocation.agreementBudgetFiscalYearId) ?? []
-    current.push(allocation)
-    allocationsByYearId.set(allocation.agreementBudgetFiscalYearId, current)
+    const yearTotal = totalsByYearId.get(allocation.agreementBudgetFiscalYearId) ?? 0
+    if (allocation.allocationMethod === 'percentage') {
+      allocatedTotal = toMoney(allocatedTotal + yearTotal * allocation.allocationValue / 100)
+    } else {
+      allocatedTotal = toMoney(allocatedTotal + allocation.allocationValue)
+    }
   }
 
-  for (const total of yearTotals) {
-    const yearAllocations = allocationsByYearId.get(total.agreementBudgetFiscalYearId) ?? []
-    if (yearAllocations.length === 0) {
-      issues.push({
-        code: 'GCS_OUTCOME_COST_ALLOCATION_YEAR_MISSING',
-        path: `years.${total.agreementBudgetFiscalYearId}`,
-        message: 'apiErrors.extensions.outcome_cost_allocation.year_missing'
-      })
-      continue
-    }
-
-    const methods = new Set(yearAllocations.map(allocation => allocation.allocationMethod))
-    if (methods.size > 1) {
-      issues.push({
-        code: 'GCS_OUTCOME_COST_ALLOCATION_MIXED_METHODS',
-        path: `years.${total.agreementBudgetFiscalYearId}`,
-        message: 'apiErrors.extensions.outcome_cost_allocation.mixed_methods'
-      })
-      continue
-    }
-
-    const method = yearAllocations[0]?.allocationMethod
-    const sum = toMoney(yearAllocations.reduce((value, allocation) => value + allocation.allocationValue, 0))
-    const expected = method === 'percentage' ? 100 : toMoney(total.programFunding)
-    if (Math.abs(sum - expected) > 0.01) {
-      issues.push({
-        code: method === 'percentage'
-          ? 'GCS_OUTCOME_COST_ALLOCATION_PERCENTAGE_TOTAL_INVALID'
-          : 'GCS_OUTCOME_COST_ALLOCATION_AMOUNT_TOTAL_INVALID',
-        path: `years.${total.agreementBudgetFiscalYearId}`,
-        message: method === 'percentage'
-          ? 'apiErrors.extensions.outcome_cost_allocation.percentage_total_invalid'
-          : 'apiErrors.extensions.outcome_cost_allocation.amount_total_invalid'
-      })
-    }
+  const agreementBudgetTotal = toMoney(yearTotals.reduce((sum, total) => sum + total.programFunding, 0))
+  if (Math.abs(toMoney(allocatedTotal) - agreementBudgetTotal) > 0.01) {
+    issues.push({
+      code: 'GCS_OUTCOME_COST_ALLOCATION_TOTAL_INVALID',
+      path: 'allocations',
+      message: 'apiErrors.extensions.outcome_cost_allocation.total_invalid'
+    })
   }
 
   return issues
@@ -168,7 +158,6 @@ export const resolveAllocationAmounts = (
   yearTotals: YearFundingTotal[]
 ): OutcomeAllocationResolved[] => {
   const totalsByYearId = new Map(yearTotals.map(total => [total.agreementBudgetFiscalYearId, total.programFunding]))
-  const percentageAllocationsByYearId = new Map<string, OutcomeAllocationInput[]>()
   const resolved: OutcomeAllocationResolved[] = []
 
   for (const allocation of allocations) {
@@ -180,25 +169,10 @@ export const resolveAllocationAmounts = (
       continue
     }
 
-    const current = percentageAllocationsByYearId.get(allocation.agreementBudgetFiscalYearId) ?? []
-    current.push(allocation)
-    percentageAllocationsByYearId.set(allocation.agreementBudgetFiscalYearId, current)
-  }
-
-  for (const [yearId, yearAllocations] of percentageAllocationsByYearId.entries()) {
-    const total = totalsByYearId.get(yearId) ?? 0
-    let allocated = 0
-
-    yearAllocations.forEach((allocation, index) => {
-      const isLast = index === yearAllocations.length - 1
-      const amount = isLast
-        ? toMoney(total - allocated)
-        : toMoney(total * allocation.allocationValue / 100)
-      allocated = toMoney(allocated + amount)
-      resolved.push({
-        ...allocation,
-        amount
-      })
+    const total = totalsByYearId.get(allocation.agreementBudgetFiscalYearId) ?? 0
+    resolved.push({
+      ...allocation,
+      amount: toMoney(total * allocation.allocationValue / 100)
     })
   }
 

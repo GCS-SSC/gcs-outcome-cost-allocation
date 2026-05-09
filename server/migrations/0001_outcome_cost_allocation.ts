@@ -5,8 +5,36 @@ import { defineGcsExtensionMigration } from '@gcs-ssc/extensions/server'
 export default defineGcsExtensionMigration({
   async up(db) {
     await db.schema
+      .createTable('extensions.gcs_outcome_cost_allocation_versions')
+      .addColumn('id', 'bigserial', col => col.primaryKey())
+      .addColumn('agreement_id', 'bigint', col => col.notNull().references('Funding_Case_Agreement_Profile.id').onDelete('restrict'))
+      .addColumn('version_number', 'integer', col => col.notNull())
+      .addColumn('status', 'varchar(20)', col => col.notNull())
+      .addColumn('created_at', 'timestamp', col => col.defaultTo(sql`now()`).notNull())
+      .addColumn('completed_at', 'timestamp')
+      .addColumn('_deleted', 'boolean', col => col.defaultTo(false).notNull())
+      .addCheckConstraint(
+        'gcs_outcome_cost_allocation_version_status',
+        sql`status IN ('draft', 'active', 'inactive')`
+      )
+      .execute()
+
+    await sql`
+      CREATE UNIQUE INDEX gcs_outcome_cost_allocation_unique_version
+      ON extensions.gcs_outcome_cost_allocation_versions (agreement_id, version_number)
+      WHERE _deleted = false
+    `.execute(db)
+
+    await sql`
+      CREATE UNIQUE INDEX gcs_outcome_cost_allocation_one_active_version
+      ON extensions.gcs_outcome_cost_allocation_versions (agreement_id)
+      WHERE _deleted = false AND status = 'active'
+    `.execute(db)
+
+    await db.schema
       .createTable('extensions.gcs_outcome_cost_allocation_allocations')
       .addColumn('id', 'bigserial', col => col.primaryKey())
+      .addColumn('allocation_version_id', 'bigint', col => col.notNull().references('extensions.gcs_outcome_cost_allocation_versions.id').onDelete('restrict'))
       .addColumn('agreement_id', 'bigint', col => col.notNull().references('Funding_Case_Agreement_Profile.id').onDelete('restrict'))
       .addColumn('agreement_budget_fiscal_year_id', 'bigint', col => col.notNull().references('Funding_Case_Agreement_Budget_Fiscal_Year.id').onDelete('restrict'))
       .addColumn('outcome_id', 'bigint', col => col.notNull().references('Transfer_Payment_Outcome.id').onDelete('restrict'))
@@ -20,9 +48,9 @@ export default defineGcsExtensionMigration({
       .execute()
 
     await sql`
-      CREATE UNIQUE INDEX gcs_outcome_cost_allocation_active_allocation
+      CREATE UNIQUE INDEX gcs_outcome_cost_allocation_version_allocation
       ON extensions.gcs_outcome_cost_allocation_allocations (
-        agreement_id,
+        allocation_version_id,
         agreement_budget_fiscal_year_id,
         outcome_id
       )
@@ -32,6 +60,7 @@ export default defineGcsExtensionMigration({
     await db.schema
       .createTable('extensions.gcs_outcome_cost_allocation_commitment_lines')
       .addColumn('id', 'bigserial', col => col.primaryKey())
+      .addColumn('allocation_version_id', 'bigint', col => col.notNull().references('extensions.gcs_outcome_cost_allocation_versions.id').onDelete('restrict'))
       .addColumn('generated_commitment_id', 'bigint', col => col.notNull().references('Funding_Case_Agreement_Commitment.id').onDelete('restrict'))
       .addColumn('commitment_line_id', 'bigint', col => col.notNull().references('Funding_Case_Agreement_Commitment_Line.id').onDelete('restrict'))
       .addColumn('agreement_id', 'bigint', col => col.notNull().references('Funding_Case_Agreement_Profile.id').onDelete('restrict'))

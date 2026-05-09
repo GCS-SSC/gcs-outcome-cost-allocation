@@ -1,5 +1,6 @@
 /* eslint-disable jsdoc/require-jsdoc */
 import type { Generated, Kysely } from 'kysely'
+import type { AllocationVersionStatus } from '../shared/allocation'
 
 export interface OutcomeCostAllocationHostDatabase {
   Funding_Case_Agreement_Profile: {
@@ -52,6 +53,8 @@ export interface OutcomeCostAllocationHostDatabase {
     id: string
     egcs_tp_streambudget: string
     egcs_tp_transferpaymentstream: string
+    egcs_tp_gl: number
+    egcs_tp_gldescription: string
     _deleted: boolean
   }
   Agency_Fiscal_Year: {
@@ -77,8 +80,18 @@ export interface OutcomeCostAllocationHostDatabase {
     egcs_fc_amount: number
     _deleted?: boolean
   }
+  'extensions.gcs_outcome_cost_allocation_versions': {
+    id: Generated<string>
+    agreement_id: string
+    version_number: number
+    status: AllocationVersionStatus
+    created_at: Generated<Date | string>
+    completed_at: Date | string | null
+    _deleted?: boolean
+  }
   'extensions.gcs_outcome_cost_allocation_allocations': {
     id: Generated<string>
+    allocation_version_id: string
     agreement_id: string
     agreement_budget_fiscal_year_id: string
     outcome_id: string
@@ -88,6 +101,7 @@ export interface OutcomeCostAllocationHostDatabase {
   }
   'extensions.gcs_outcome_cost_allocation_commitment_lines': {
     id: Generated<string>
+    allocation_version_id: string
     generated_commitment_id: string
     commitment_line_id: string
     agreement_id: string

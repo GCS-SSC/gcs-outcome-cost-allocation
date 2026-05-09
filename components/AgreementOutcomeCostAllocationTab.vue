@@ -3,8 +3,14 @@ import type { Ref } from 'vue'
 import type { GcsExtensionJsonConfig, GcsExtensionRbacRequirement } from '@gcs-ssc/extensions'
 import type { ExtensionEntityTabContext } from '@gcs-ssc/extensions/server'
 import {
+  COMMITMENT_TYPES,
   type AllocationMethod,
+  type AllocationVersionStatus,
+  type CommitmentType,
+  type CostAllocationVersion,
   type OutcomeAllocationInput,
+  type VersionedOutcomeAllocationInput,
+  parseOutcomeCostAllocationConfig,
   toMoney,
   validateAllocationTotals
 } from '../shared/allocation'
@@ -17,15 +23,55 @@ interface AllocationResponse {
   }>
   budgetYears: Array<{
     id: string
+    stream_budget_id?: string | null
     fiscal_year_display: string
     program_funding: number
   }>
-  allocations: OutcomeAllocationInput[]
+  versions: CostAllocationVersion[]
+  allocations: VersionedOutcomeAllocationInput[]
+  streamCommitments: Array<{
+    id: string
+    stream_budget_id: string
+    fiscal_year_display: string
+    gl: number
+    gl_description: string
+  }>
+}
+
+interface ConfiguredAssociationRow {
+  id: string
+  commitmentType: CommitmentType
+  commitmentTypeLabel: string
+  yearId: string
+  yearLabel: string
+  programFunding: number
+  streamBudgetId: string
+  streamCommitmentId: string
+  commitmentLineLabel: string
+  outcomeId: string
+  outcomeLabel: string
+}
+
+interface AllocationTableRow {
+  id: string
+  rowType: 'commitmentType' | 'fiscalYear' | 'association'
+  commitmentType?: CommitmentType
+  commitmentTypeLabel: string
+  yearId: string
+  yearLabel: string
+  streamBudgetId: string
+  commitmentLineLabel: string
+  outcomeId: string
+  outcomeLabel: string
+  associationCount: number
+  programFunding: number
+  association?: ConfiguredAssociationRow
 }
 
 const {
   extensionKey,
-  context
+  context,
+  config
 } = defineProps<{
   extensionKey: string
   context: ExtensionEntityTabContext
@@ -35,21 +81,44 @@ const {
 
 const { locale } = useI18n()
 const toast = useToast()
-const allocations: Ref<OutcomeAllocationInput[]> = ref([])
+const allocations: Ref<VersionedOutcomeAllocationInput[]> = ref([])
+const selectedVersionId: Ref<string> = ref('')
 const isSaving: Ref<boolean> = ref(false)
+const isCompleting: Ref<boolean> = ref(false)
+const isCreatingDraft: Ref<boolean> = ref(false)
 const saveError: Ref<string> = ref('')
+const expandedRows: Ref<Record<string, boolean>> = ref({})
 
 const endpoint = computed(() => `/api/extensions/${extensionKey}/agreements/${context.agreementId}/allocations`)
 const { data, refresh, status } = useFetch<AllocationResponse>(() => endpoint.value)
 
 watch(() => data.value, value => {
   allocations.value = value?.allocations.map(allocation => ({ ...allocation })) ?? []
+  const versions = value?.versions ?? []
+  if (!selectedVersionId.value || !versions.some(version => version.id === selectedVersionId.value)) {
+    selectedVersionId.value = versions.find(version => version.status === 'draft')?.id
+      ?? versions.find(version => version.status === 'active')?.id
+      ?? versions[0]?.id
+      ?? ''
+  }
 }, { immediate: true })
 
 const outcomes = computed(() => data.value?.outcomes ?? [])
 const budgetYears = computed(() => data.value?.budgetYears ?? [])
-const localeCode = computed(() => locale.value)
+const streamCommitments = computed(() => data.value?.streamCommitments ?? [])
+const versions = computed(() => data.value?.versions ?? [])
+const selectedVersion = computed(() => versions.value.find(version => version.id === selectedVersionId.value) ?? null)
+const canEditSelectedVersion = computed(() => selectedVersion.value?.status === 'draft')
+const hasDraftVersion = computed(() => versions.value.some(version => version.status === 'draft'))
 const isLoading = computed(() => status.value === 'pending')
+const streamConfig = computed(() => parseOutcomeCostAllocationConfig(config))
+
+const versionColumns = computed(() => [
+  { id: 'version', accessorKey: 'versionNumber', header: tLocal('version') },
+  { id: 'status', accessorKey: 'status', header: tLocal('status') },
+  { id: 'total', header: tLocal('amount') },
+  { id: 'actions', header: tLocal('actions') }
+])
 
 const methodOptions = computed(() => [
   { label: locale.value === 'fr' ? 'Montant' : 'Amount', value: 'amount' },
@@ -60,16 +129,227 @@ const getOutcomeLabel = (outcome: AllocationResponse['outcomes'][number]) => loc
   ? outcome.label_fr
   : outcome.label_en
 
+const commitmentTypeLabels: Record<CommitmentType, { en: string, fr: string }> = {
+  commitment: { en: 'Commitment', fr: 'Engagement' },
+  paye: { en: 'PAYE', fr: 'CAFE' },
+  paye2: { en: 'PAYE 2', fr: 'CAFE 2' },
+  pyp: { en: 'PYP', fr: 'PAE' }
+}
+
+const allocationColumns = computed(() => [
+  {
+    id: 'commitmentLine',
+    accessorKey: 'commitmentLineLabel',
+    header: tLocal('commitmentLine')
+  },
+  {
+    id: 'outcome',
+    accessorKey: 'outcomeLabel',
+    header: tLocal('outcome')
+  },
+  {
+    id: 'method',
+    header: tLocal('method')
+  },
+  {
+    id: 'value',
+    header: tLocal('value')
+  },
+  {
+    id: 'amount',
+    header: tLocal('amount')
+  }
+])
+
+const formatMoney = (value: number) => new Intl.NumberFormat(
+  locale.value === 'fr' ? 'fr-CA' : 'en-CA',
+  { style: 'currency', currency: 'CAD' }
+).format(value)
+
+const formatDate = (value?: string | null) => {
+  if (!value) {
+    return ''
+  }
+
+  return new Intl.DateTimeFormat(locale.value === 'fr' ? 'fr-CA' : 'en-CA', {
+    dateStyle: 'medium'
+  }).format(new Date(value))
+}
+
+const getStatusLabel = (statusValue: AllocationVersionStatus) => {
+  const labels: Record<AllocationVersionStatus, { en: string, fr: string }> = {
+    draft: { en: 'Draft', fr: 'Brouillon' },
+    active: { en: 'Active', fr: 'Active' },
+    inactive: { en: 'Inactive', fr: 'Inactive' }
+  }
+  const label = labels[statusValue]
+  return locale.value === 'fr' ? label.fr : label.en
+}
+
+type BadgeColor = 'neutral' | 'success' | 'warning'
+
+const getStatusColor = (statusValue: AllocationVersionStatus): BadgeColor => {
+  const colors: Record<AllocationVersionStatus, BadgeColor> = {
+    draft: 'neutral',
+    active: 'success',
+    inactive: 'warning'
+  }
+  return colors[statusValue]
+}
+
+const getCommitmentTypeLabel = (commitmentType: CommitmentType) =>
+  locale.value === 'fr' ? commitmentTypeLabels[commitmentType].fr : commitmentTypeLabels[commitmentType].en
+
+const getOutcomeName = (outcomeId: string) => {
+  const outcome = outcomes.value.find(item => String(item.id) === outcomeId)
+  return outcome ? getOutcomeLabel(outcome) : outcomeId
+}
+
+const getCommitmentLineLabel = (streamCommitmentId: string) => {
+  const commitment = streamCommitments.value.find(item => String(item.id) === streamCommitmentId)
+  return commitment ? `GL ${commitment.gl} - ${commitment.gl_description}` : streamCommitmentId
+}
+
+const getYearForStreamBudget = (streamBudgetId: string) =>
+  budgetYears.value.find(year => String(year.stream_budget_id ?? '') === streamBudgetId) ?? null
+
+const configuredAssociationRows = computed<ConfiguredAssociationRow[]>(() => streamConfig.value.mappings.flatMap(mapping => {
+  const year = getYearForStreamBudget(mapping.streamBudgetId)
+  const hasOutcome = outcomes.value.some(outcome => String(outcome.id) === mapping.outcomeId)
+  if (!year || !hasOutcome) {
+    return []
+  }
+
+  return [{
+    id: `${mapping.commitmentType}:${mapping.streamBudgetId}:${mapping.streamCommitmentId}:${mapping.outcomeId}`,
+    commitmentType: mapping.commitmentType,
+    commitmentTypeLabel: getCommitmentTypeLabel(mapping.commitmentType),
+    yearId: String(year.id),
+    yearLabel: year.fiscal_year_display,
+    programFunding: Number(year.program_funding),
+    streamBudgetId: mapping.streamBudgetId,
+    streamCommitmentId: mapping.streamCommitmentId,
+    commitmentLineLabel: getCommitmentLineLabel(mapping.streamCommitmentId),
+    outcomeId: mapping.outcomeId,
+    outcomeLabel: getOutcomeName(mapping.outcomeId)
+  }]
+}).sort((a, b) => {
+  const typeCompare = COMMITMENT_TYPES.indexOf(a.commitmentType) - COMMITMENT_TYPES.indexOf(b.commitmentType)
+  if (typeCompare !== 0) {
+    return typeCompare
+  }
+  const yearCompare = a.yearLabel.localeCompare(b.yearLabel)
+  if (yearCompare !== 0) {
+    return yearCompare
+  }
+  const lineCompare = a.commitmentLineLabel.localeCompare(b.commitmentLineLabel)
+  if (lineCompare !== 0) {
+    return lineCompare
+  }
+  return a.outcomeLabel.localeCompare(b.outcomeLabel)
+}))
+
+const getCommitmentTypeGroupId = (commitmentType: CommitmentType) => `type:${commitmentType}`
+const getFiscalYearGroupId = (commitmentType: CommitmentType, yearId: string) => `year:${commitmentType}:${yearId}`
+const isExpanded = (groupId: string) => expandedRows.value[groupId] !== false
+const toggleGroup = (groupId: string) => {
+  expandedRows.value = {
+    ...expandedRows.value,
+    [groupId]: !isExpanded(groupId)
+  }
+}
+
+const allocationRows = computed<AllocationTableRow[]>(() => {
+  const rows: AllocationTableRow[] = []
+
+  for (const commitmentType of COMMITMENT_TYPES) {
+    const typeRows = configuredAssociationRows.value.filter(row => row.commitmentType === commitmentType)
+    if (typeRows.length === 0) {
+      continue
+    }
+
+    const commitmentTypeLabel = getCommitmentTypeLabel(commitmentType)
+    const typeGroupId = getCommitmentTypeGroupId(commitmentType)
+    rows.push({
+      id: typeGroupId,
+      rowType: 'commitmentType',
+      commitmentType,
+      commitmentTypeLabel,
+      yearId: '',
+      yearLabel: '',
+      streamBudgetId: '',
+      commitmentLineLabel: commitmentTypeLabel,
+      outcomeId: '',
+      outcomeLabel: `${typeRows.length} ${tLocal('records')}`,
+      associationCount: typeRows.length,
+      programFunding: 0
+    })
+
+    if (!isExpanded(typeGroupId)) {
+      continue
+    }
+
+    const yearIds = Array.from(new Set(typeRows.map(row => row.yearId)))
+    for (const yearId of yearIds) {
+      const yearRows = typeRows.filter(row => row.yearId === yearId)
+      const firstYearRow = yearRows[0]
+      if (!firstYearRow) {
+        continue
+      }
+
+      const yearGroupId = getFiscalYearGroupId(commitmentType, yearId)
+      rows.push({
+        id: yearGroupId,
+        rowType: 'fiscalYear',
+        commitmentType,
+        commitmentTypeLabel,
+        yearId,
+        yearLabel: firstYearRow.yearLabel,
+        streamBudgetId: firstYearRow.streamBudgetId,
+        commitmentLineLabel: firstYearRow.yearLabel,
+        outcomeId: '',
+        outcomeLabel: `${yearRows.length} ${tLocal('records')}`,
+        associationCount: yearRows.length,
+        programFunding: firstYearRow.programFunding
+      })
+
+      if (!isExpanded(yearGroupId)) {
+        continue
+      }
+
+      rows.push(...yearRows.map(row => ({
+        id: row.id,
+        rowType: 'association' as const,
+        commitmentType,
+        commitmentTypeLabel,
+        yearId: row.yearId,
+        yearLabel: row.yearLabel,
+        streamBudgetId: row.streamBudgetId,
+        commitmentLineLabel: row.commitmentLineLabel,
+        outcomeId: row.outcomeId,
+        outcomeLabel: row.outcomeLabel,
+        associationCount: 1,
+        programFunding: row.programFunding,
+        association: row
+      })))
+    }
+  }
+
+  return rows
+})
+
 const getAllocation = (yearId: string, outcomeId: string): OutcomeAllocationInput => {
   const existing = allocations.value.find(allocation =>
-    allocation.agreementBudgetFiscalYearId === yearId
+    allocation.allocationVersionId === selectedVersionId.value
+    && allocation.agreementBudgetFiscalYearId === yearId
     && allocation.outcomeId === outcomeId
   )
   if (existing) {
     return existing
   }
 
-  const created: OutcomeAllocationInput = {
+  const created: VersionedOutcomeAllocationInput = {
+    allocationVersionId: selectedVersionId.value,
     agreementBudgetFiscalYearId: yearId,
     outcomeId,
     allocationMethod: 'amount',
@@ -93,11 +373,39 @@ const updateAllocationMethod = (yearId: string, outcomeId: string, value: string
   setAllocationMethod(yearId, outcomeId, String(value) as AllocationMethod)
 }
 
-const activeAllocations = computed(() => allocations.value.filter(allocation => allocation.allocationValue > 0))
+const updateAllocationRowValue = (row: AllocationTableRow, value: string | number) => {
+  if (!row.association) {
+    return
+  }
 
-const allocationMethodForYear = (yearId: string): AllocationMethod => {
-  const allocation = activeAllocations.value.find(item => item.agreementBudgetFiscalYearId === yearId)
-  return allocation?.allocationMethod ?? 'amount'
+  setAllocationValue(row.association.yearId, row.association.outcomeId, value)
+}
+
+const activeAllocations = computed(() => allocations.value.filter(allocation =>
+  allocation.allocationVersionId === selectedVersionId.value && allocation.allocationValue > 0
+))
+
+const getProgramFunding = (yearId: string) =>
+  Number(budgetYears.value.find(year => String(year.id) === yearId)?.program_funding ?? 0)
+
+const getAllocationInputAmount = (allocation: OutcomeAllocationInput) => allocation.allocationMethod === 'percentage'
+  ? toMoney(getProgramFunding(allocation.agreementBudgetFiscalYearId) * allocation.allocationValue / 100)
+  : toMoney(allocation.allocationValue)
+
+const getAllocationAmount = (yearId: string, outcomeId: string) => {
+  const allocation = getAllocation(yearId, outcomeId)
+  return getAllocationInputAmount(allocation)
+}
+
+const getVersionAllocations = (versionId: string) => allocations.value.filter(allocation =>
+  allocation.allocationVersionId === versionId && allocation.allocationValue > 0
+)
+
+const getVersionTotal = (versionId: string) => getVersionAllocations(versionId)
+  .reduce((sum, allocation) => toMoney(sum + getAllocationInputAmount(allocation)), 0)
+
+const selectVersion = (versionId: string) => {
+  selectedVersionId.value = versionId
 }
 
 const validationIssues = computed(() => validateAllocationTotals(
@@ -117,20 +425,24 @@ const validationMessage = computed(() => {
 
   const messages: Record<string, { en: string, fr: string }> = {
     GCS_OUTCOME_COST_ALLOCATION_YEAR_MISSING: {
-      en: 'Each budget year needs at least one allocation.',
-      fr: 'Chaque exercice budgetaire doit avoir au moins une repartition.'
+      en: 'The full agreement budget must be allocated.',
+      fr: 'Le budget complet de l entente doit etre reparti.'
     },
     GCS_OUTCOME_COST_ALLOCATION_MIXED_METHODS: {
-      en: 'Use either amounts or percentages within a budget year, not both.',
-      fr: 'Utilisez soit des montants, soit des pourcentages dans un exercice budgetaire, pas les deux.'
+      en: 'The full agreement budget must be allocated.',
+      fr: 'Le budget complet de l entente doit etre reparti.'
     },
     GCS_OUTCOME_COST_ALLOCATION_PERCENTAGE_TOTAL_INVALID: {
-      en: 'Percentage allocations must total 100 for each budget year.',
-      fr: 'Les pourcentages doivent totaliser 100 pour chaque exercice budgetaire.'
+      en: 'The full agreement budget must be allocated.',
+      fr: 'Le budget complet de l entente doit etre reparti.'
     },
     GCS_OUTCOME_COST_ALLOCATION_AMOUNT_TOTAL_INVALID: {
-      en: 'Amount allocations must equal the program funding for each budget year.',
-      fr: 'Les montants doivent egaler le financement de programme pour chaque exercice budgetaire.'
+      en: 'The full agreement budget must be allocated.',
+      fr: 'Le budget complet de l entente doit etre reparti.'
+    },
+    GCS_OUTCOME_COST_ALLOCATION_TOTAL_INVALID: {
+      en: 'The full agreement budget must be allocated.',
+      fr: 'Le budget complet de l entente doit etre reparti.'
     },
     GCS_OUTCOME_COST_ALLOCATION_STALE_OUTCOME: {
       en: 'One saved allocation references an outcome that is no longer used by agreement activities.',
@@ -150,23 +462,32 @@ const validationMessage = computed(() => {
   return locale.value === 'fr' ? message.fr : message.en
 })
 
-const yearAllocatedTotal = (yearId: string) => {
-  const method = allocationMethodForYear(yearId)
-  const total = activeAllocations.value
-    .filter(allocation => allocation.agreementBudgetFiscalYearId === yearId)
-    .reduce((sum, allocation) => sum + allocation.allocationValue, 0)
-  if (method === 'percentage') {
-    return `${toMoney(total)}%`
+const getGroupAmountTotal = (rows: ConfiguredAssociationRow[]) => rows
+  .reduce((sum, row) => sum + getAllocationAmount(row.yearId, row.outcomeId), 0)
+
+const getCommitmentTypeAmountTotal = (commitmentType: CommitmentType) =>
+  getGroupAmountTotal(configuredAssociationRows.value.filter(row => row.commitmentType === commitmentType))
+
+const getFiscalYearAmountTotal = (commitmentType: CommitmentType, yearId: string) =>
+  getGroupAmountTotal(configuredAssociationRows.value.filter(row =>
+    row.commitmentType === commitmentType && row.yearId === yearId
+  ))
+
+const getAmountForRow = (row: AllocationTableRow) => {
+  if (row.rowType === 'commitmentType' && row.commitmentType) {
+    return getCommitmentTypeAmountTotal(row.commitmentType)
   }
 
-  return locale.value === 'fr'
-    ? new Intl.NumberFormat('fr-CA', { style: 'currency', currency: 'CAD' }).format(total)
-    : new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(total)
+  if (row.rowType === 'fiscalYear' && row.commitmentType) {
+    return getFiscalYearAmountTotal(row.commitmentType, row.yearId)
+  }
+
+  return row.association ? getAllocationAmount(row.association.yearId, row.association.outcomeId) : 0
 }
 
 const save = async () => {
-  if (isSaving.value || validationIssues.value.length > 0) {
-    return
+  if (isSaving.value || !canEditSelectedVersion.value || !selectedVersionId.value) {
+    return false
   }
 
   try {
@@ -175,6 +496,7 @@ const save = async () => {
     await $fetch(endpoint.value, {
       method: 'PUT',
       body: {
+        allocationVersionId: selectedVersionId.value,
         allocations: activeAllocations.value
       }
     })
@@ -184,29 +506,137 @@ const save = async () => {
       description: locale.value === 'fr' ? 'Repartition enregistree.' : 'Allocation saved.',
       color: 'success'
     })
+    return true
   } catch (error: unknown) {
     saveError.value = error instanceof Error ? error.message : String(error)
+    return false
   } finally {
     isSaving.value = false
   }
 }
 
+const completeSelectedVersion = async () => {
+  if (isCompleting.value || !canEditSelectedVersion.value || validationIssues.value.length > 0 || !selectedVersionId.value) {
+    return
+  }
+
+  try {
+    isCompleting.value = true
+    saveError.value = ''
+    const saved = await save()
+    if (!saved) {
+      return
+    }
+    await $fetch(`${endpoint.value.replace('/allocations', '/allocation-versions')}/${selectedVersionId.value}/complete`, {
+      method: 'POST'
+    })
+    await refresh()
+    toast.add({
+      title: locale.value === 'fr' ? 'Succes' : 'Success',
+      description: locale.value === 'fr' ? 'Repartition activee.' : 'Cost allocation activated.',
+      color: 'success'
+    })
+  } catch (error: unknown) {
+    saveError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    isCompleting.value = false
+  }
+}
+
+const createDraftVersion = async () => {
+  if (isCreatingDraft.value) {
+    return
+  }
+
+  try {
+    isCreatingDraft.value = true
+    saveError.value = ''
+    const response = await $fetch<{ version?: CostAllocationVersion }>(endpoint.value.replace('/allocations', '/allocation-versions'), {
+      method: 'POST'
+    })
+    await refresh()
+    if (response.version?.id) {
+      selectedVersionId.value = response.version.id
+    }
+  } catch (error: unknown) {
+    saveError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    isCreatingDraft.value = false
+  }
+}
+
 const text = {
   title: {
-    en: 'Outcome cost allocation',
-    fr: 'Repartition des couts par resultat'
+    en: 'Cost allocation',
+    fr: 'Repartition des couts'
   },
   empty: {
-    en: 'Add agreement activities with outcomes and budget fiscal years before allocating costs.',
-    fr: 'Ajoutez des activites avec des resultats et des exercices budgetaires avant de repartir les couts.'
+    en: 'Add agreement activities with outcomes, budget fiscal years, and stream cost allocation configuration before allocating costs.',
+    fr: 'Ajoutez des activites avec des resultats, des exercices budgetaires et la configuration de repartition des couts du volet avant de repartir les couts.'
   },
-  programFunding: {
-    en: 'Program funding',
-    fr: 'Financement de programme'
+  outcome: {
+    en: 'Outcome',
+    fr: 'Resultat'
   },
-  allocated: {
-    en: 'Allocated',
-    fr: 'Reparti'
+  commitmentLine: {
+    en: 'Commitment line',
+    fr: 'Ligne d engagement'
+  },
+  method: {
+    en: 'Method',
+    fr: 'Methode'
+  },
+  value: {
+    en: 'Value',
+    fr: 'Valeur'
+  },
+  amount: {
+    en: 'Amount',
+    fr: 'Montant'
+  },
+  version: {
+    en: 'Version',
+    fr: 'Version'
+  },
+  status: {
+    en: 'Status',
+    fr: 'Statut'
+  },
+  actions: {
+    en: 'Actions',
+    fr: 'Actions'
+  },
+  allocationVersions: {
+    en: 'Cost allocations',
+    fr: 'Repartitions des couts'
+  },
+  selectedAllocation: {
+    en: 'Selected allocation',
+    fr: 'Repartition selectionnee'
+  },
+  newDraft: {
+    en: 'New draft',
+    fr: 'Nouveau brouillon'
+  },
+  complete: {
+    en: 'Complete',
+    fr: 'Terminer'
+  },
+  view: {
+    en: 'View',
+    fr: 'Voir'
+  },
+  selected: {
+    en: 'Selected',
+    fr: 'Selectionnee'
+  },
+  readonly: {
+    en: 'Only draft allocations can be edited.',
+    fr: 'Seules les repartitions en brouillon peuvent etre modifiees.'
+  },
+  records: {
+    en: 'allocations',
+    fr: 'repartitions'
   },
   save: {
     en: 'Save',
@@ -224,16 +654,17 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
         {{ tLocal('title') }}
       </h2>
       <UButton
-        icon="i-lucide-save"
-        :label="tLocal('save')"
-        color="primary"
+        icon="i-lucide-plus"
+        :label="tLocal('newDraft')"
+        color="neutral"
+        variant="outline"
         class="cursor-default"
-        :loading="isSaving"
-        :disabled="isSaving || validationIssues.length > 0 || isLoading"
-        @click="save" />
+        :loading="isCreatingDraft"
+        :disabled="isCreatingDraft || isLoading || hasDraftVersion"
+        @click="createDraftVersion" />
     </div>
 
-    <p v-if="outcomes.length === 0 || budgetYears.length === 0" class="text-sm text-zinc-500">
+    <p v-if="outcomes.length === 0 || budgetYears.length === 0 || configuredAssociationRows.length === 0" class="text-sm text-zinc-500">
       {{ tLocal('empty') }}
     </p>
 
@@ -244,40 +675,163 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
       {{ saveError }}
     </p>
 
-    <div v-for="year in budgetYears" :key="year.id" class="space-y-3">
-      <div class="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-200 pb-2 dark:border-zinc-800">
-        <h3 class="text-base font-semibold text-zinc-900 dark:text-white">
-          {{ year.fiscal_year_display }}
-        </h3>
-        <div class="text-sm text-zinc-600 dark:text-zinc-300">
-          {{ tLocal('programFunding') }}: {{ Number(year.program_funding).toLocaleString(localeCode, { style: 'currency', currency: 'CAD' }) }}
-          |
-          {{ tLocal('allocated') }}: {{ yearAllocatedTotal(String(year.id)) }}
-        </div>
+    <div class="space-y-3">
+      <h3 class="text-base font-semibold text-zinc-900 dark:text-white">
+        {{ tLocal('allocationVersions') }}
+      </h3>
+      <div class="overflow-hidden rounded-md border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
+        <UTable
+          :data="versions"
+          :columns="versionColumns"
+          class="min-w-full">
+          <template #version-cell="{ row }">
+            <div class="text-sm font-semibold text-zinc-900 dark:text-white">
+              {{ tLocal('version') }} {{ row.original.versionNumber }}
+            </div>
+            <div class="text-xs text-zinc-500 dark:text-zinc-400">
+              {{ formatDate(row.original.completedAt ?? row.original.createdAt) }}
+            </div>
+          </template>
+          <template #status-cell="{ row }">
+            <UBadge :color="getStatusColor(row.original.status)" variant="subtle">
+              {{ getStatusLabel(row.original.status) }}
+            </UBadge>
+          </template>
+          <template #total-cell="{ row }">
+            <span class="text-sm font-medium text-zinc-700 dark:text-zinc-200">
+              {{ formatMoney(getVersionTotal(row.original.id)) }}
+            </span>
+          </template>
+          <template #actions-cell="{ row }">
+            <div class="flex justify-end">
+              <UButton
+                color="neutral"
+                variant="ghost"
+                size="sm"
+                class="cursor-default"
+                :icon="row.original.id === selectedVersionId ? 'i-lucide-check' : 'i-lucide-panel-top-open'"
+                :disabled="row.original.id === selectedVersionId"
+                @click="selectVersion(row.original.id)">
+                {{ row.original.id === selectedVersionId ? tLocal('selected') : tLocal('view') }}
+              </UButton>
+            </div>
+          </template>
+        </UTable>
       </div>
+    </div>
 
-      <div class="overflow-hidden border-y border-zinc-200 dark:border-zinc-800">
-        <div
-          v-for="outcome in outcomes"
-          :key="`${year.id}:${outcome.id}`"
-          class="grid gap-3 border-b border-zinc-100 py-3 last:border-b-0 dark:border-zinc-800 md:grid-cols-[minmax(0,1fr)_10rem_12rem]">
-          <div class="text-sm font-medium text-zinc-800 dark:text-zinc-100">
-            {{ getOutcomeLabel(outcome) }}
-          </div>
-          <USelect
-            :model-value="getAllocation(String(year.id), String(outcome.id)).allocationMethod"
-            value-key="value"
-            :items="methodOptions"
-            class="w-full"
-            @update:model-value="updateAllocationMethod(String(year.id), String(outcome.id), $event)" />
-          <input
-            :value="getAllocation(String(year.id), String(outcome.id)).allocationValue"
-            type="number"
-            min="0"
-            step="0.01"
-            class="h-9 w-full rounded-md border border-zinc-300 bg-white px-3 text-sm text-zinc-900 dark:border-zinc-700 dark:bg-zinc-950 dark:text-white"
-            @input="event => setAllocationValue(String(year.id), String(outcome.id), (event.target as HTMLInputElement).value)" >
+    <div v-if="selectedVersion" class="flex flex-wrap items-start justify-between gap-4">
+      <div class="space-y-1">
+        <div class="flex flex-wrap items-center gap-3">
+          <h3 class="text-base font-semibold text-zinc-900 dark:text-white">
+            {{ tLocal('selectedAllocation') }} {{ selectedVersion.versionNumber }}
+          </h3>
+          <UBadge :color="getStatusColor(selectedVersion.status)" variant="subtle">
+            {{ getStatusLabel(selectedVersion.status) }}
+          </UBadge>
         </div>
+        <p v-if="!canEditSelectedVersion" class="text-sm text-zinc-500 dark:text-zinc-400">
+          {{ tLocal('readonly') }}
+        </p>
+      </div>
+      <div class="flex flex-wrap gap-2">
+        <CommonSaveButton
+          v-if="canEditSelectedVersion"
+          :label="tLocal('save')"
+          :loading="isSaving"
+          :disabled="isSaving || isCompleting || isLoading"
+          @click="save" />
+        <UButton
+          v-if="canEditSelectedVersion"
+          icon="i-lucide-check"
+          :label="tLocal('complete')"
+          color="primary"
+          class="cursor-default"
+          :loading="isCompleting"
+          :disabled="isSaving || isCompleting || validationIssues.length > 0 || isLoading"
+          @click="completeSelectedVersion" />
+      </div>
+    </div>
+
+    <div class="overflow-hidden rounded-md border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
+      <UTable
+        :data="allocationRows"
+        :columns="allocationColumns"
+        class="min-w-full">
+        <template #commitmentLine-cell="{ row }">
+          <div v-if="row.original.rowType === 'commitmentType'" class="flex w-full items-center gap-3 py-1">
+            <button type="button" class="group flex min-w-0 items-center gap-3 text-left" @click="toggleGroup(row.original.id)">
+              <UIcon :name="isExpanded(row.original.id) ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" class="size-4 text-zinc-400 transition-colors group-hover:text-primary" />
+              <span class="text-sm font-semibold text-zinc-900 dark:text-white">{{ row.original.commitmentTypeLabel }}</span>
+              <span class="rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-semibold text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
+                {{ row.original.associationCount }}
+              </span>
+            </button>
+          </div>
+          <div v-else-if="row.original.rowType === 'fiscalYear'" class="flex w-full items-center gap-3 py-1 pl-6">
+            <button type="button" class="group flex min-w-0 items-center gap-3 text-left" @click="toggleGroup(row.original.id)">
+              <UIcon :name="isExpanded(row.original.id) ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" class="size-4 text-zinc-400 transition-colors group-hover:text-primary" />
+              <span class="text-sm font-semibold text-zinc-800 dark:text-zinc-100">{{ row.original.yearLabel }}</span>
+              <span class="rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-semibold text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
+                {{ row.original.associationCount }}
+              </span>
+            </button>
+          </div>
+          <div v-else class="flex min-w-0 items-center gap-3 py-1 pl-12">
+            <UIcon name="i-lucide-corner-down-right" class="size-4 shrink-0 text-zinc-400" />
+            <div class="min-w-0">
+              <div class="truncate text-sm font-semibold text-zinc-900 dark:text-white">
+                {{ row.original.commitmentLineLabel }}
+              </div>
+              <div class="text-xs text-zinc-500 dark:text-zinc-400">
+                {{ row.original.yearLabel }}
+              </div>
+            </div>
+          </div>
+        </template>
+
+        <template #outcome-cell="{ row }">
+          <span v-if="row.original.rowType !== 'association'" class="text-sm text-zinc-500 dark:text-zinc-400">
+            {{ row.original.associationCount }} {{ tLocal('records') }}
+          </span>
+          <span v-else class="text-sm font-medium text-zinc-700 dark:text-zinc-200">
+            {{ row.original.outcomeLabel }}
+          </span>
+        </template>
+
+        <template #method-cell="{ row }">
+          <div v-if="row.original.rowType === 'association' && row.original.association">
+            <USelect
+              :model-value="getAllocation(row.original.association.yearId, row.original.association.outcomeId).allocationMethod"
+              value-key="value"
+              :items="methodOptions"
+              class="w-full min-w-36"
+              :disabled="!canEditSelectedVersion"
+              @update:model-value="updateAllocationMethod(row.original.association.yearId, row.original.association.outcomeId, $event)" />
+          </div>
+        </template>
+
+        <template #value-cell="{ row }">
+          <div v-if="row.original.rowType === 'association' && row.original.association">
+            <UInput
+              :model-value="getAllocation(row.original.association.yearId, row.original.association.outcomeId).allocationValue"
+              type="number"
+              min="0"
+              step="0.01"
+              class="w-full min-w-40"
+              :disabled="!canEditSelectedVersion"
+              @update:model-value="(value: string | number) => updateAllocationRowValue(row.original, value)" />
+          </div>
+        </template>
+
+        <template #amount-cell="{ row }">
+          <span class="text-sm font-medium text-zinc-700 dark:text-zinc-200">
+            {{ formatMoney(getAmountForRow(row.original)) }}
+          </span>
+        </template>
+      </UTable>
+      <div class="border-t border-zinc-200 px-4 py-3 text-xs font-bold tracking-widest text-zinc-400 uppercase dark:border-zinc-800">
+        {{ configuredAssociationRows.length }} {{ tLocal('records') }}
       </div>
     </div>
   </div>

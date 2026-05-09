@@ -17,20 +17,28 @@ const errorMessages: Record<string, { en: string, fr: string }> = {
     fr: 'Une repartition enregistree reference un exercice budgetaire qui n est plus actif.'
   },
   GCS_OUTCOME_COST_ALLOCATION_YEAR_MISSING: {
-    en: 'Each budget year needs at least one allocation.',
-    fr: 'Chaque exercice budgetaire doit avoir au moins une repartition.'
+    en: 'The full agreement budget must be allocated.',
+    fr: 'Le budget complet de l entente doit etre reparti.'
   },
   GCS_OUTCOME_COST_ALLOCATION_MIXED_METHODS: {
-    en: 'Use either amounts or percentages within a budget year, not both.',
-    fr: 'Utilisez soit des montants, soit des pourcentages dans un exercice budgetaire, pas les deux.'
+    en: 'The full agreement budget must be allocated.',
+    fr: 'Le budget complet de l entente doit etre reparti.'
   },
   GCS_OUTCOME_COST_ALLOCATION_PERCENTAGE_TOTAL_INVALID: {
-    en: 'Percentage allocations must total 100 for each budget year.',
-    fr: 'Les pourcentages doivent totaliser 100 pour chaque exercice budgetaire.'
+    en: 'The full agreement budget must be allocated.',
+    fr: 'Le budget complet de l entente doit etre reparti.'
   },
   GCS_OUTCOME_COST_ALLOCATION_AMOUNT_TOTAL_INVALID: {
-    en: 'Amount allocations must equal the program funding for each budget year.',
-    fr: 'Les montants doivent egaler le financement de programme pour chaque exercice budgetaire.'
+    en: 'The full agreement budget must be allocated.',
+    fr: 'Le budget complet de l entente doit etre reparti.'
+  },
+  GCS_OUTCOME_COST_ALLOCATION_TOTAL_INVALID: {
+    en: 'The full agreement budget must be allocated.',
+    fr: 'Le budget complet de l entente doit etre reparti.'
+  },
+  GCS_OUTCOME_COST_ALLOCATION_ACTIVE_REQUIRED: {
+    en: 'Complete and activate a cost allocation before creating this commitment.',
+    fr: 'Terminez et activez une repartition des couts avant de creer cet engagement.'
   },
   GCS_OUTCOME_COST_ALLOCATION_STREAM_BUDGET_MISSING: {
     en: 'A budget year is missing its stream budget mapping.',

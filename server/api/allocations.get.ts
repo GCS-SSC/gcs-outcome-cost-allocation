@@ -1,9 +1,12 @@
 /* eslint-disable jsdoc/require-jsdoc */
 import { asOutcomeCostAllocationDb } from '../db'
 import {
+  createDraftAllocationVersion,
   getAgreementBudgetYears,
   getAgreementOutcomes,
-  getSavedAllocations
+  getAllocationVersions,
+  getSavedAllocations,
+  getStreamCommitmentLines
 } from '../allocation-data'
 
 export default async (event: {
@@ -21,15 +24,24 @@ export default async (event: {
   const streamId = event.context.gcsExtension?.entity?.streamId ?? ''
   const db = asOutcomeCostAllocationDb(event.context.$db)
 
-  const [outcomes, budgetYears, allocations] = await Promise.all([
+  let versions = await getAllocationVersions(db, agreementId)
+  if (versions.length === 0) {
+    await createDraftAllocationVersion(db, agreementId)
+    versions = await getAllocationVersions(db, agreementId)
+  }
+
+  const [outcomes, budgetYears, allocations, streamCommitments] = await Promise.all([
     getAgreementOutcomes(db, agreementId),
     getAgreementBudgetYears(db, agreementId, streamId),
-    getSavedAllocations(db, agreementId)
+    getSavedAllocations(db, agreementId),
+    getStreamCommitmentLines(db, streamId)
   ])
 
   return {
     outcomes,
     budgetYears,
-    allocations
+    versions,
+    allocations,
+    streamCommitments
   }
 }

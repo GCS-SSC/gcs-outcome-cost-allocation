@@ -55,20 +55,28 @@ const isFrench = computed(() => locale.value === 'fr')
 
 const errorMessages: Record<string, { en: string, fr: string }> = {
   GCS_OUTCOME_COST_ALLOCATION_YEAR_MISSING: {
-    en: 'Each budget year needs at least one allocation before this commitment can be created.',
-    fr: 'Chaque exercice budgetaire doit avoir au moins une repartition avant de creer cet engagement.'
+    en: 'The full agreement budget must be allocated before this commitment can be created.',
+    fr: 'Le budget complet de l entente doit etre reparti avant de creer cet engagement.'
   },
   GCS_OUTCOME_COST_ALLOCATION_MIXED_METHODS: {
-    en: 'Use either amounts or percentages within each budget year before creating this commitment.',
-    fr: 'Utilisez soit des montants, soit des pourcentages dans chaque exercice budgetaire avant de creer cet engagement.'
+    en: 'The full agreement budget must be allocated before this commitment can be created.',
+    fr: 'Le budget complet de l entente doit etre reparti avant de creer cet engagement.'
   },
   GCS_OUTCOME_COST_ALLOCATION_PERCENTAGE_TOTAL_INVALID: {
-    en: 'Percentage allocations must total 100 for each budget year before this commitment can be created.',
-    fr: 'Les pourcentages doivent totaliser 100 pour chaque exercice budgetaire avant de creer cet engagement.'
+    en: 'The full agreement budget must be allocated before this commitment can be created.',
+    fr: 'Le budget complet de l entente doit etre reparti avant de creer cet engagement.'
   },
   GCS_OUTCOME_COST_ALLOCATION_AMOUNT_TOTAL_INVALID: {
-    en: 'Amount allocations must equal the program funding for each budget year before this commitment can be created.',
-    fr: 'Les montants doivent egaler le financement de programme de chaque exercice budgetaire avant de creer cet engagement.'
+    en: 'The full agreement budget must be allocated before this commitment can be created.',
+    fr: 'Le budget complet de l entente doit etre reparti avant de creer cet engagement.'
+  },
+  GCS_OUTCOME_COST_ALLOCATION_TOTAL_INVALID: {
+    en: 'The full agreement budget must be allocated before this commitment can be created.',
+    fr: 'Le budget complet de l entente doit etre reparti avant de creer cet engagement.'
+  },
+  GCS_OUTCOME_COST_ALLOCATION_ACTIVE_REQUIRED: {
+    en: 'Complete and activate a cost allocation before creating this commitment.',
+    fr: 'Terminez et activez une repartition des couts avant de creer cet engagement.'
   },
   GCS_OUTCOME_COST_ALLOCATION_STALE_OUTCOME: {
     en: 'One saved allocation references an outcome that is no longer used by agreement activities.',

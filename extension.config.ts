@@ -22,7 +22,7 @@ export default defineGcsExtension({
         target: 'agreement',
         id: 'outcome-cost-allocation',
         label: {
-          en: 'Outcome cost allocation',
+          en: 'Cost Allocation',
           fr: 'Repartition des couts'
         },
         icon: 'i-lucide-chart-no-axes-combined',
@@ -54,6 +54,9 @@ export default defineGcsExtension({
   migrations: [
     {
       path: './server/migrations/0001_outcome_cost_allocation.ts'
+    },
+    {
+      path: './server/migrations/0002_versioned_allocations.ts'
     }
   ],
   serverHandlers: [
@@ -74,6 +77,32 @@ export default defineGcsExtension({
       route: '/agreements/[agreementId]/allocations',
       method: 'put',
       path: './server/api/allocations.put.ts',
+      rbac: {
+        subject: 'agreement',
+        action: 'update',
+        entity: {
+          target: 'agreement',
+          param: 'agreementId'
+        }
+      }
+    },
+    {
+      route: '/agreements/[agreementId]/allocation-versions',
+      method: 'post',
+      path: './server/api/allocation-versions.post.ts',
+      rbac: {
+        subject: 'agreement',
+        action: 'update',
+        entity: {
+          target: 'agreement',
+          param: 'agreementId'
+        }
+      }
+    },
+    {
+      route: '/agreements/[agreementId]/allocation-versions/[allocationVersionId]/complete',
+      method: 'post',
+      path: './server/api/allocation-version-complete.post.ts',
       rbac: {
         subject: 'agreement',
         action: 'update',

@@ -1,8 +1,11 @@
 /* eslint-disable jsdoc/require-jsdoc */
 import { sql } from 'kysely'
 import {
+  type AllocationValidationIssue,
+  type CostAllocationVersion,
   type CommitmentType,
   type OutcomeAllocationInput,
+  type VersionedOutcomeAllocationInput,
   type YearFundingTotal,
   parseOutcomeCostAllocationConfig,
   resolveAllocationAmounts,
@@ -24,6 +27,30 @@ export interface AgreementBudgetYear {
   program_funding: number
   stream_budget_id?: string | null
 }
+
+export interface StreamCommitmentLine {
+  id: string
+  stream_budget_id: string
+  fiscal_year_display: string
+  gl: number
+  gl_description: string
+}
+
+const mapAllocationVersion = (row: {
+  id: string
+  agreement_id: string
+  version_number: number
+  status: CostAllocationVersion['status']
+  created_at?: Date | string | null
+  completed_at?: Date | string | null
+}): CostAllocationVersion => ({
+  id: String(row.id),
+  agreementId: String(row.agreement_id),
+  versionNumber: Number(row.version_number),
+  status: row.status,
+  createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
+  completedAt: row.completed_at ? new Date(row.completed_at).toISOString() : null
+})
 
 export const getAgreementOutcomes = async (
   db: OutcomeCostAllocationDb,
@@ -106,15 +133,164 @@ export const getAgreementBudgetYears = async (
   .orderBy('Agency_Fiscal_Year.egcs_ay_fiscalyear', 'asc')
   .execute()
 
-export const getSavedAllocations = async (
+export const getAllocationVersions = async (
   db: OutcomeCostAllocationDb,
   agreementId: string
-): Promise<OutcomeAllocationInput[]> => {
+): Promise<CostAllocationVersion[]> => {
   const rows = await db
-    .selectFrom('extensions.gcs_outcome_cost_allocation_allocations')
+    .selectFrom('extensions.gcs_outcome_cost_allocation_versions')
     .where('agreement_id', '=', agreementId)
     .where('_deleted', '=', false)
     .select([
+      'id',
+      'agreement_id',
+      'version_number',
+      'status',
+      'created_at',
+      'completed_at'
+    ])
+    .orderBy('version_number', 'desc')
+    .execute()
+
+  return rows.map(mapAllocationVersion)
+}
+
+export const createDraftAllocationVersion = async (
+  db: OutcomeCostAllocationDb,
+  agreementId: string
+): Promise<CostAllocationVersion> => await db.transaction().execute(async trx => {
+  const existingDraft = await trx
+    .selectFrom('extensions.gcs_outcome_cost_allocation_versions')
+    .where('agreement_id', '=', agreementId)
+    .where('status', '=', 'draft')
+    .where('_deleted', '=', false)
+    .select([
+      'id',
+      'agreement_id',
+      'version_number',
+      'status',
+      'created_at',
+      'completed_at'
+    ])
+    .orderBy('version_number', 'desc')
+    .executeTakeFirst()
+
+  if (existingDraft) {
+    return mapAllocationVersion(existingDraft)
+  }
+
+  const maxVersion = await trx
+    .selectFrom('extensions.gcs_outcome_cost_allocation_versions')
+    .where('agreement_id', '=', agreementId)
+    .where('_deleted', '=', false)
+    .select(eb => eb.fn.max('version_number').as('max_version'))
+    .executeTakeFirst()
+
+  const inserted = await trx
+    .insertInto('extensions.gcs_outcome_cost_allocation_versions')
+    .values({
+      agreement_id: agreementId,
+      version_number: Number(maxVersion?.max_version ?? 0) + 1,
+      status: 'draft'
+    })
+    .returning([
+      'id',
+      'agreement_id',
+      'version_number',
+      'status',
+      'created_at',
+      'completed_at'
+    ])
+    .executeTakeFirstOrThrow()
+
+  return mapAllocationVersion(inserted)
+})
+
+export const ensureDraftAllocationVersion = async (
+  db: OutcomeCostAllocationDb,
+  agreementId: string
+): Promise<CostAllocationVersion> => {
+  const existingDraft = await db
+    .selectFrom('extensions.gcs_outcome_cost_allocation_versions')
+    .where('agreement_id', '=', agreementId)
+    .where('status', '=', 'draft')
+    .where('_deleted', '=', false)
+    .select([
+      'id',
+      'agreement_id',
+      'version_number',
+      'status',
+      'created_at',
+      'completed_at'
+    ])
+    .orderBy('version_number', 'desc')
+    .executeTakeFirst()
+
+  return existingDraft ? mapAllocationVersion(existingDraft) : await createDraftAllocationVersion(db, agreementId)
+}
+
+export const getAllocationVersion = async (
+  db: OutcomeCostAllocationDb,
+  agreementId: string,
+  allocationVersionId: string
+): Promise<CostAllocationVersion | null> => {
+  const row = await db
+    .selectFrom('extensions.gcs_outcome_cost_allocation_versions')
+    .where('id', '=', allocationVersionId)
+    .where('agreement_id', '=', agreementId)
+    .where('_deleted', '=', false)
+    .select([
+      'id',
+      'agreement_id',
+      'version_number',
+      'status',
+      'created_at',
+      'completed_at'
+    ])
+    .executeTakeFirst()
+
+  return row ? mapAllocationVersion(row) : null
+}
+
+export const getActiveAllocationVersion = async (
+  db: OutcomeCostAllocationDb,
+  agreementId: string
+): Promise<CostAllocationVersion | null> => {
+  const row = await db
+    .selectFrom('extensions.gcs_outcome_cost_allocation_versions')
+    .where('agreement_id', '=', agreementId)
+    .where('status', '=', 'active')
+    .where('_deleted', '=', false)
+    .select([
+      'id',
+      'agreement_id',
+      'version_number',
+      'status',
+      'created_at',
+      'completed_at'
+    ])
+    .executeTakeFirst()
+
+  return row ? mapAllocationVersion(row) : null
+}
+
+export const getSavedAllocations = async (
+  db: OutcomeCostAllocationDb,
+  agreementId: string,
+  allocationVersionId?: string
+): Promise<VersionedOutcomeAllocationInput[]> => {
+  let query = db
+    .selectFrom('extensions.gcs_outcome_cost_allocation_allocations')
+    .where('agreement_id', '=', agreementId)
+    .where('_deleted', '=', false)
+
+  if (allocationVersionId) {
+    query = query.where('allocation_version_id', '=', allocationVersionId)
+  }
+
+  const rows = await query
+    .select([
+      'allocation_version_id',
       'agreement_budget_fiscal_year_id',
       'outcome_id',
       'allocation_method',
@@ -124,6 +300,7 @@ export const getSavedAllocations = async (
     .execute()
 
   return rows.map(row => ({
+    allocationVersionId: String(row.allocation_version_id),
     agreementBudgetFiscalYearId: String(row.agreement_budget_fiscal_year_id),
     outcomeId: String(row.outcome_id),
     allocationMethod: row.allocation_method,
@@ -131,16 +308,66 @@ export const getSavedAllocations = async (
   }))
 }
 
+export const getStreamCommitmentLines = async (
+  db: OutcomeCostAllocationDb,
+  streamId: string
+): Promise<StreamCommitmentLine[]> => await db
+  .selectFrom('Transfer_Payment_Stream_Commitment')
+  .innerJoin(
+    'Transfer_Payment_Stream_Budget',
+    'Transfer_Payment_Stream_Budget.id',
+    'Transfer_Payment_Stream_Commitment.egcs_tp_streambudget'
+  )
+  .innerJoin(
+    'Transfer_Payment_Fiscal_Year_Budget',
+    'Transfer_Payment_Fiscal_Year_Budget.id',
+    'Transfer_Payment_Stream_Budget.egcs_tp_transferpaymentbudget'
+  )
+  .innerJoin(
+    'Agency_Fiscal_Year',
+    'Agency_Fiscal_Year.id',
+    'Transfer_Payment_Fiscal_Year_Budget.egcs_tp_fiscalyear'
+  )
+  .where('Transfer_Payment_Stream_Commitment.egcs_tp_transferpaymentstream', '=', streamId)
+  .where('Transfer_Payment_Stream_Commitment._deleted', '=', false)
+  .where('Transfer_Payment_Stream_Budget._deleted', '=', false)
+  .where('Transfer_Payment_Fiscal_Year_Budget._deleted', '=', false)
+  .where('Agency_Fiscal_Year._deleted', '=', false)
+  .select([
+    'Transfer_Payment_Stream_Commitment.id as id',
+    'Transfer_Payment_Stream_Commitment.egcs_tp_streambudget as stream_budget_id',
+    'Agency_Fiscal_Year.egcs_ay_fiscalyeardisplay as fiscal_year_display',
+    'Transfer_Payment_Stream_Commitment.egcs_tp_gl as gl',
+    'Transfer_Payment_Stream_Commitment.egcs_tp_gldescription as gl_description'
+  ])
+  .orderBy('Agency_Fiscal_Year.egcs_ay_fiscalyear', 'asc')
+  .orderBy('Transfer_Payment_Stream_Commitment.egcs_tp_gl', 'asc')
+  .execute()
+
 export const saveAllocations = async (
   db: OutcomeCostAllocationDb,
   agreementId: string,
+  allocationVersionId: string,
   allocations: OutcomeAllocationInput[]
 ) => {
   await db.transaction().execute(async trx => {
+    const version = await trx
+      .selectFrom('extensions.gcs_outcome_cost_allocation_versions')
+      .where('id', '=', allocationVersionId)
+      .where('agreement_id', '=', agreementId)
+      .where('_deleted', '=', false)
+      .select(['id', 'status'])
+      .executeTakeFirst()
+
+    if (!version || version.status !== 'draft') {
+      throw new Error('Only draft cost allocations can be edited.')
+    }
+
     await trx
       .updateTable('extensions.gcs_outcome_cost_allocation_allocations')
       .set({ _deleted: true })
       .where('agreement_id', '=', agreementId)
+      .where('allocation_version_id', '=', allocationVersionId)
       .where('_deleted', '=', false)
       .execute()
 
@@ -148,6 +375,7 @@ export const saveAllocations = async (
       await trx
         .insertInto('extensions.gcs_outcome_cost_allocation_allocations')
         .values(allocations.map(allocation => ({
+          allocation_version_id: allocationVersionId,
           agreement_id: agreementId,
           agreement_budget_fiscal_year_id: allocation.agreementBudgetFiscalYearId,
           outcome_id: allocation.outcomeId,
@@ -180,6 +408,59 @@ export const validateAgreementAllocations = async (
   )
 }
 
+export const completeAllocationVersion = async (
+  db: OutcomeCostAllocationDb,
+  agreementId: string,
+  streamId: string,
+  allocationVersionId: string
+): Promise<CostAllocationVersion> => await db.transaction().execute(async trx => {
+  const version = await getAllocationVersion(trx as OutcomeCostAllocationDb, agreementId, allocationVersionId)
+  if (!version || version.status !== 'draft') {
+    throw new Error('Only draft cost allocations can be completed.')
+  }
+
+  const allocations = await getSavedAllocations(trx as OutcomeCostAllocationDb, agreementId, allocationVersionId)
+  const issues = await validateAgreementAllocations(trx as OutcomeCostAllocationDb, agreementId, streamId, allocations)
+  if (issues.length > 0) {
+    const error = new Error('Cost allocation validation failed.') as Error & { issues?: AllocationValidationIssue[] }
+    error.issues = issues
+    throw error
+  }
+
+  await trx
+    .updateTable('extensions.gcs_outcome_cost_allocation_versions')
+    .set({
+      status: 'inactive',
+      completed_at: sql`COALESCE(completed_at, now())`
+    })
+    .where('agreement_id', '=', agreementId)
+    .where('status', '=', 'active')
+    .where('_deleted', '=', false)
+    .execute()
+
+  const completed = await trx
+    .updateTable('extensions.gcs_outcome_cost_allocation_versions')
+    .set({
+      status: 'active',
+      completed_at: sql`now()`
+    })
+    .where('id', '=', allocationVersionId)
+    .where('agreement_id', '=', agreementId)
+    .where('status', '=', 'draft')
+    .where('_deleted', '=', false)
+    .returning([
+      'id',
+      'agreement_id',
+      'version_number',
+      'status',
+      'created_at',
+      'completed_at'
+    ])
+    .executeTakeFirstOrThrow()
+
+  return mapAllocationVersion(completed)
+})
+
 export const getActiveStreamCommitmentIds = async (
   db: OutcomeCostAllocationDb,
   streamId: string
@@ -208,8 +489,21 @@ export const getGeneratedCommitmentLines = async (
     }
   }
 
+  const activeVersion = await getActiveAllocationVersion(db, agreementId)
+  if (!activeVersion) {
+    return {
+      status: 'handled' as const,
+      issues: [{
+        code: 'GCS_OUTCOME_COST_ALLOCATION_ACTIVE_REQUIRED',
+        path: 'allocationVersion',
+        message: 'apiErrors.extensions.outcome_cost_allocation.active_required'
+      }],
+      lines: []
+    }
+  }
+
   const [allocations, budgetYears, outcomes, activeStreamCommitmentIds] = await Promise.all([
-    getSavedAllocations(db, agreementId),
+    getSavedAllocations(db, agreementId, activeVersion.id),
     getAgreementBudgetYears(db, agreementId, streamId),
     getAgreementOutcomes(db, agreementId),
     getActiveStreamCommitmentIds(db, streamId)
@@ -252,6 +546,7 @@ export const getGeneratedCommitmentLines = async (
 
         return {
           allocation,
+          allocationVersionId: activeVersion.id,
           streamCommitmentId: mapping?.streamCommitmentId ?? ''
         }
       })
