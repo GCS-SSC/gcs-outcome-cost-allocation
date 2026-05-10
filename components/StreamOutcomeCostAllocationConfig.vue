@@ -185,7 +185,7 @@ const associationRows = computed<AssociationTableRow[]>(() => localConfig.value.
 
 const getCommitmentTypeGroupId = (commitmentType: CommitmentType) => `type:${commitmentType}`
 const getFiscalYearGroupId = (commitmentType: CommitmentType, fiscalYearGroup: string) => `year:${commitmentType}:${fiscalYearGroup}`
-const isExpanded = (groupId: string) => expandedRows.value[groupId] !== false
+const isExpanded = (groupId: string) => expandedRows.value[groupId] === true
 const toggleGroup = (groupId: string) => {
   expandedRows.value = {
     ...expandedRows.value,
