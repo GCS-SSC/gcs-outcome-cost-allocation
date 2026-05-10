@@ -10,8 +10,11 @@ import {
   type PaidCommitmentLineCoverage,
   type VersionedOutcomeAllocationInput,
   type YearFundingTotal,
+  allocatePaymentAmountToCommitmentLines,
+  isCommitmentType,
   parseOutcomeCostAllocationConfig,
   resolveAllocationAmounts,
+  toMoney,
   validateGeneratedCommitmentLinePaymentCoverage,
   validateAllocationTotals,
   validateCommitmentMappings
@@ -44,6 +47,11 @@ type GeneratedAllocationLine = {
   allocation: OutcomeAllocationResolved
   allocationVersionId: string
   streamCommitmentId: string
+}
+
+type GeneratedPaymentLine = {
+  commitmentLineId: string
+  amount: number
 }
 
 const mapAllocationVersion = (row: {
@@ -714,5 +722,234 @@ export const getGeneratedCommitmentLines = async (
     status: 'handled' as const,
     issues: [...totalIssues, ...mappingIssues, ...paymentCoverageIssues],
     lines: generatedLines
+  }
+}
+
+export const getGeneratedPaymentLines = async (
+  db: OutcomeCostAllocationDb,
+  agreementId: string,
+  streamId: string,
+  commitmentId: string,
+  agreementBudgetFiscalYearId: string,
+  paymentAmount: number,
+  config: unknown
+): Promise<{
+  status: 'continue'
+} | {
+  status: 'handled'
+  issues: AllocationValidationIssue[]
+  lines: GeneratedPaymentLine[]
+}> => {
+  const commitment = await db
+    .selectFrom('Funding_Case_Agreement_Commitment')
+    .where('id', '=', commitmentId)
+    .where('egcs_fc_fundingagreement', '=', agreementId)
+    .where('_deleted', '=', false)
+    .select(['id', 'egcs_fc_type'])
+    .executeTakeFirst()
+
+  if (!commitment || !isCommitmentType(commitment.egcs_fc_type)) {
+    return {
+      status: 'continue' as const
+    }
+  }
+
+  const commitmentType = commitment.egcs_fc_type
+  const parsedConfig = parseOutcomeCostAllocationConfig(config)
+  if (!parsedConfig.enabledCommitmentTypes.includes(commitmentType)) {
+    return {
+      status: 'continue' as const
+    }
+  }
+
+  const activeVersion = await getActiveAllocationVersion(db, agreementId)
+  if (!activeVersion) {
+    return {
+      status: 'handled' as const,
+      issues: [{
+        code: 'GCS_OUTCOME_COST_ALLOCATION_ACTIVE_REQUIRED',
+        path: 'allocationVersion',
+        message: 'apiErrors.extensions.outcome_cost_allocation.active_required'
+      }],
+      lines: []
+    }
+  }
+
+  const [allocations, budgetYears, outcomes, activeStreamCommitmentIds] = await Promise.all([
+    getSavedAllocations(db, agreementId, activeVersion.id),
+    getAgreementBudgetYears(db, agreementId, streamId),
+    getAgreementOutcomes(db, agreementId),
+    getActiveStreamCommitmentIds(db, streamId)
+  ])
+  const yearTotals: YearFundingTotal[] = budgetYears.map(year => ({
+    agreementBudgetFiscalYearId: String(year.id),
+    programFunding: Number(year.program_funding)
+  }))
+  const totalIssues = validateAllocationTotals(
+    allocations,
+    yearTotals,
+    new Set(outcomes.map(outcome => String(outcome.id)))
+  )
+  const resolvedAllocations = resolveAllocationAmounts(allocations, yearTotals)
+  const streamBudgetIdsByAgreementBudgetFiscalYearId = new Map(budgetYears.map(year => [
+    String(year.id),
+    String(year.stream_budget_id ?? '')
+  ]))
+  const mappingIssues = validateCommitmentMappings(
+    commitmentType,
+    resolvedAllocations,
+    parsedConfig,
+    streamBudgetIdsByAgreementBudgetFiscalYearId,
+    activeStreamCommitmentIds
+  )
+  const paymentAllocations = resolvedAllocations.filter(allocation =>
+    allocation.agreementBudgetFiscalYearId === agreementBudgetFiscalYearId
+    && allocation.amount > 0
+  )
+
+  const desiredStreamCommitmentIds = new Set(paymentAllocations.flatMap(allocation => {
+    const streamBudgetId = streamBudgetIdsByAgreementBudgetFiscalYearId.get(allocation.agreementBudgetFiscalYearId) ?? ''
+    const mapping = parsedConfig.mappings.find(candidate =>
+      candidate.commitmentType === commitmentType
+      && candidate.outcomeId === allocation.outcomeId
+      && candidate.streamBudgetId === streamBudgetId
+    )
+
+    return mapping?.streamCommitmentId ? [mapping.streamCommitmentId] : []
+  }))
+
+  if (desiredStreamCommitmentIds.size === 0) {
+    return {
+      status: 'handled' as const,
+      issues: [
+        ...totalIssues,
+        ...mappingIssues,
+        {
+          code: 'GCS_OUTCOME_COST_ALLOCATION_PAYMENT_LINES_MISSING',
+          path: 'paymentLines',
+          message: 'apiErrors.extensions.outcome_cost_allocation.payment_lines_missing'
+        }
+      ],
+      lines: []
+    }
+  }
+
+  const commitmentLines = await db
+    .selectFrom('Funding_Case_Agreement_Commitment_Line')
+    .where('egcs_fc_commitment', '=', commitmentId)
+    .where('egcs_fc_transferpaymentstreamcommitment', 'in', Array.from(desiredStreamCommitmentIds))
+    .where('_deleted', '=', false)
+    .select([
+      'id',
+      'egcs_fc_transferpaymentstreamcommitment',
+      'egcs_fc_amount'
+    ])
+    .forUpdate()
+    .execute()
+  const commitmentLineByStreamCommitmentId = new Map(commitmentLines.map(line => [
+    String(line.egcs_fc_transferpaymentstreamcommitment),
+    {
+      id: String(line.id),
+      amount: Number(line.egcs_fc_amount)
+    }
+  ]))
+  const paidRows = commitmentLines.length === 0
+    ? []
+    : await db
+        .selectFrom('Funding_Case_Agreement_Payment_Line')
+        .innerJoin(
+          'Funding_Case_Agreement_Payment',
+          'Funding_Case_Agreement_Payment.id',
+          'Funding_Case_Agreement_Payment_Line.egcs_fc_fundingagreementpayment'
+        )
+        .where('Funding_Case_Agreement_Payment_Line.egcs_fc_fundingagreementcommitmentline', 'in', commitmentLines.map(line => String(line.id)))
+        .where('Funding_Case_Agreement_Payment_Line._deleted', '=', false)
+        .where('Funding_Case_Agreement_Payment._deleted', '=', false)
+        .where('Funding_Case_Agreement_Payment.egcs_fc_status', '!=', 'denied')
+        .select([
+          'Funding_Case_Agreement_Payment_Line.egcs_fc_fundingagreementcommitmentline as commitment_line_id',
+          sql<number>`COALESCE(SUM(${sql.ref('Funding_Case_Agreement_Payment_Line.egcs_fc_amount')}), 0)`.as('paid_amount')
+        ])
+        .groupBy('Funding_Case_Agreement_Payment_Line.egcs_fc_fundingagreementcommitmentline')
+        .execute()
+  const paidAmountByCommitmentLineId = new Map(paidRows.map(row => [
+    String(row.commitment_line_id),
+    Number(row.paid_amount)
+  ]))
+  const paymentLineInputByCommitmentLineId = new Map<string, {
+    commitmentLineId: string
+    weightAmount: number
+    remainingAmount: number
+  }>()
+  const paymentLineIssues: AllocationValidationIssue[] = []
+
+  for (const [index, allocation] of paymentAllocations.entries()) {
+    const streamBudgetId = streamBudgetIdsByAgreementBudgetFiscalYearId.get(allocation.agreementBudgetFiscalYearId) ?? ''
+    const mapping = parsedConfig.mappings.find(candidate =>
+      candidate.commitmentType === commitmentType
+      && candidate.outcomeId === allocation.outcomeId
+      && candidate.streamBudgetId === streamBudgetId
+    )
+    const commitmentLine = mapping?.streamCommitmentId
+      ? commitmentLineByStreamCommitmentId.get(mapping.streamCommitmentId)
+      : undefined
+
+    if (!mapping || !commitmentLine) {
+      paymentLineIssues.push({
+        code: 'GCS_OUTCOME_COST_ALLOCATION_PAYMENT_COMMITMENT_LINE_MISSING',
+        path: `allocations.${index}`,
+        message: 'apiErrors.extensions.outcome_cost_allocation.payment_commitment_line_missing'
+      })
+      continue
+    }
+
+    const paidAmount = paidAmountByCommitmentLineId.get(commitmentLine.id) ?? 0
+    const existingInput = paymentLineInputByCommitmentLineId.get(commitmentLine.id)
+    paymentLineInputByCommitmentLineId.set(commitmentLine.id, {
+      commitmentLineId: commitmentLine.id,
+      weightAmount: toMoney((existingInput?.weightAmount ?? 0) + allocation.amount),
+      remainingAmount: toMoney(commitmentLine.amount - paidAmount)
+    })
+  }
+
+  const paymentLineInputs = Array.from(paymentLineInputByCommitmentLineId.values())
+  const remainingTotal = toMoney(paymentLineInputs.reduce((sum, line) => sum + line.remainingAmount, 0))
+  if (toMoney(paymentAmount) > toMoney(remainingTotal + 0.01)) {
+    paymentLineIssues.push({
+      code: 'GCS_OUTCOME_COST_ALLOCATION_PAYMENT_EXCEEDS_REMAINING',
+      path: 'paymentAmount',
+      message: 'apiErrors.extensions.outcome_cost_allocation.payment_exceeds_remaining'
+    })
+  }
+
+  if (totalIssues.length > 0 || mappingIssues.length > 0 || paymentLineIssues.length > 0) {
+    return {
+      status: 'handled' as const,
+      issues: [...totalIssues, ...mappingIssues, ...paymentLineIssues],
+      lines: []
+    }
+  }
+
+  const lines = allocatePaymentAmountToCommitmentLines(paymentLineInputs, Number(paymentAmount)).map(line => ({
+    commitmentLineId: line.commitmentLineId,
+    amount: line.paymentAmount
+  }))
+  const generatedTotal = toMoney(lines.reduce((sum, line) => sum + line.amount, 0))
+  if (Math.abs(generatedTotal - toMoney(paymentAmount)) > 0.01) {
+    return {
+      status: 'handled' as const,
+      issues: [{
+        code: 'GCS_OUTCOME_COST_ALLOCATION_PAYMENT_EXCEEDS_REMAINING',
+        path: 'paymentAmount',
+        message: 'apiErrors.extensions.outcome_cost_allocation.payment_exceeds_remaining'
+      }],
+      lines: []
+    }
+  }
+
+  return {
+    status: 'handled' as const,
+    issues: [],
+    lines
   }
 }

@@ -1,6 +1,7 @@
 /* eslint-disable jsdoc/require-jsdoc */
 import { describe, expect, it } from 'vitest'
 import {
+  allocatePaymentAmountToCommitmentLines,
   parseOutcomeCostAllocationConfig,
   resolveAllocationAmounts,
   validateGeneratedCommitmentLinePaymentCoverage,
@@ -219,5 +220,64 @@ describe('outcome cost allocation logic', () => {
       'GCS_OUTCOME_COST_ALLOCATION_PAYMENT_EXCEEDS_GENERATED_LINE',
       'GCS_OUTCOME_COST_ALLOCATION_PAYMENT_EXCEEDS_GENERATED_LINE'
     ])
+  })
+
+  it('allocates payment amounts across commitment lines using allocation weights and remaining balances', () => {
+    expect(allocatePaymentAmountToCommitmentLines([
+      {
+        commitmentLineId: 'line-1',
+        weightAmount: 75,
+        remainingAmount: 75
+      },
+      {
+        commitmentLineId: 'line-2',
+        weightAmount: 25,
+        remainingAmount: 10
+      }
+    ], 50)).toEqual([
+      {
+        commitmentLineId: 'line-1',
+        weightAmount: 75,
+        remainingAmount: 75,
+        paymentAmount: 40
+      },
+      {
+        commitmentLineId: 'line-2',
+        weightAmount: 25,
+        remainingAmount: 10,
+        paymentAmount: 10
+      }
+    ])
+
+    expect(allocatePaymentAmountToCommitmentLines([
+      {
+        commitmentLineId: 'line-1',
+        weightAmount: 75,
+        remainingAmount: 25
+      }
+    ], 50)).toEqual([])
+  })
+
+  it('rounds generated payment lines to cents while preserving the payment total', () => {
+    const lines = allocatePaymentAmountToCommitmentLines([
+      {
+        commitmentLineId: 'line-1',
+        weightAmount: 1,
+        remainingAmount: 100
+      },
+      {
+        commitmentLineId: 'line-2',
+        weightAmount: 1,
+        remainingAmount: 100
+      },
+      {
+        commitmentLineId: 'line-3',
+        weightAmount: 1,
+        remainingAmount: 100
+      }
+    ], 100)
+
+    expect(lines.map(line => line.paymentAmount)).toEqual([33.33, 33.33, 33.34])
+    expect(lines.reduce((sum, line) => sum + line.paymentAmount, 0)).toBe(100)
   })
 })

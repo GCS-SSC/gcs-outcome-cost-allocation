@@ -4,7 +4,10 @@ import {
   registerGcsExtensionCreateOperationHandler
 } from '@gcs-ssc/extensions/server'
 import { asOutcomeCostAllocationDb } from '../db'
-import { getGeneratedCommitmentLines } from '../allocation-data'
+import {
+  getGeneratedCommitmentLines,
+  getGeneratedPaymentLines
+} from '../allocation-data'
 import {
   getOutcomeCostAllocationErrorMessage,
   localizeAllocationIssues
@@ -96,5 +99,70 @@ export default defineNitroPlugin(nitroApp => {
       status: 'handled',
       response: commitment
     }
+  }, nitroApp as Parameters<typeof registerGcsExtensionCreateOperationHandler>[3])
+
+  registerGcsExtensionCreateOperationHandler(EXTENSION_KEY, 'agreement.payments.create', async context => {
+    if (!context.createdRecord) {
+      return { status: 'continue' }
+    }
+
+    const paymentId = String(context.createdRecord.id ?? '')
+    const commitmentId = String(
+      context.validatedBody.egcs_fc_fundingagreementcommitment
+      ?? context.createdRecord?.egcs_fc_fundingagreementcommitment
+      ?? ''
+    )
+    const agreementBudgetFiscalYearId = String(context.validatedBody.egcs_fc_fiscalyear ?? '')
+    const paymentAmount = Number(context.validatedBody.egcs_fc_paymentamount ?? 0)
+    if (!paymentId || !commitmentId || !agreementBudgetFiscalYearId || paymentAmount <= 0) {
+      return { status: 'continue' }
+    }
+
+    const db = asOutcomeCostAllocationDb(context.trx)
+    const generated = await getGeneratedPaymentLines(
+      db,
+      context.agreementId,
+      context.streamId,
+      commitmentId,
+      agreementBudgetFiscalYearId,
+      paymentAmount,
+      context.config
+    )
+
+    if (generated.status === 'continue') {
+      return { status: 'continue' }
+    }
+
+    if (generated.issues.length > 0) {
+      const code = generated.issues[0]?.code ?? 'GCS_OUTCOME_COST_ALLOCATION_INVALID'
+      throw createGcsExtensionUserError({
+        code,
+        message: getOutcomeCostAllocationErrorMessage(context.event as Parameters<typeof getOutcomeCostAllocationErrorMessage>[0], code),
+        details: localizeAllocationIssues(context.event as Parameters<typeof localizeAllocationIssues>[0], generated.issues)
+      })
+    }
+
+    if (generated.lines.length === 0) {
+      return { status: 'continue' }
+    }
+
+    await db
+      .insertInto('Funding_Case_Agreement_Payment_Line')
+      .values(generated.lines.map(line => ({
+        egcs_fc_fundingagreementpayment: paymentId,
+        egcs_fc_fundingagreementcommitmentline: line.commitmentLineId,
+        egcs_fc_amount: line.amount
+      })))
+      .execute()
+
+    await db
+      .updateTable('Funding_Case_Agreement_Payment')
+      .set({ egcs_fc_status: 'inprogress' })
+      .where('id', '=', paymentId)
+      .where('egcs_fc_status', '=', 'draft')
+      .where('_deleted', '=', false)
+      .execute()
+
+    return { status: 'continue' }
   }, nitroApp as Parameters<typeof registerGcsExtensionCreateOperationHandler>[3])
 })

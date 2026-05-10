@@ -55,6 +55,18 @@ const errorMessages: Record<string, { en: string, fr: string }> = {
   GCS_OUTCOME_COST_ALLOCATION_PAYMENT_EXCEEDS_GENERATED_LINE: {
     en: 'This cost allocation would create a commitment line below the amount already paid.',
     fr: 'Cette repartition des couts creerait une ligne d engagement inferieure au montant deja paye.'
+  },
+  GCS_OUTCOME_COST_ALLOCATION_PAYMENT_LINES_MISSING: {
+    en: 'The active cost allocation does not define payment lines for this payment.',
+    fr: 'La repartition des couts active ne definit pas de lignes de paiement pour ce paiement.'
+  },
+  GCS_OUTCOME_COST_ALLOCATION_PAYMENT_COMMITMENT_LINE_MISSING: {
+    en: 'The selected commitment is missing a commitment line required by the active cost allocation.',
+    fr: 'L engagement selectionne n a pas une ligne d engagement requise par la repartition des couts active.'
+  },
+  GCS_OUTCOME_COST_ALLOCATION_PAYMENT_EXCEEDS_REMAINING: {
+    en: 'This payment exceeds the remaining balance of the cost allocation commitment lines.',
+    fr: 'Ce paiement depasse le solde restant des lignes d engagement de la repartition des couts.'
   }
 }
 
