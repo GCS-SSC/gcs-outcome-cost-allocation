@@ -14,6 +14,7 @@ type AllocationVersionCompleteEvent = H3Event & {
     $db: unknown
     params?: Record<string, string | undefined>
     gcsExtension?: {
+      config?: unknown
       entity?: {
         streamId?: string
       }
@@ -28,10 +29,11 @@ export default async (event: AllocationVersionCompleteEvent) => {
   const agreementId = event.context.params?.agreementId ?? ''
   const allocationVersionId = event.context.params?.allocationVersionId ?? ''
   const streamId = event.context.gcsExtension?.entity?.streamId ?? ''
+  const config = event.context.gcsExtension?.config ?? {}
   const db = asOutcomeCostAllocationDb(event.context.$db)
 
   try {
-    const version = await completeAllocationVersion(db, agreementId, streamId, allocationVersionId)
+    const version = await completeAllocationVersion(db, agreementId, streamId, allocationVersionId, config)
     return {
       ok: true,
       version

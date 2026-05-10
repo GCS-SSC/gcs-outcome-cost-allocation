@@ -51,6 +51,10 @@ const errorMessages: Record<string, { en: string, fr: string }> = {
   GCS_OUTCOME_COST_ALLOCATION_STREAM_COMMITMENT_INACTIVE: {
     en: 'One configured stream commitment line is no longer active.',
     fr: 'Une ligne d engagement de volet configuree n est plus active.'
+  },
+  GCS_OUTCOME_COST_ALLOCATION_PAYMENT_EXCEEDS_GENERATED_LINE: {
+    en: 'This cost allocation would create a commitment line below the amount already paid.',
+    fr: 'Cette repartition des couts creerait une ligne d engagement inferieure au montant deja paye.'
   }
 }
 

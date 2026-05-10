@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   parseOutcomeCostAllocationConfig,
   resolveAllocationAmounts,
+  validateGeneratedCommitmentLinePaymentCoverage,
   validateAllocationTotals,
   validateCommitmentMappings
 } from '../../shared/allocation'
@@ -186,5 +187,37 @@ describe('outcome cost allocation logic', () => {
     ).map(issue => issue.code)
 
     expect(issues).toEqual(['GCS_OUTCOME_COST_ALLOCATION_STREAM_COMMITMENT_INACTIVE'])
+  })
+
+  it('rejects generated commitment lines below existing paid amounts', () => {
+    const issues = validateGeneratedCommitmentLinePaymentCoverage([
+      {
+        commitmentType: 'commitment',
+        agreementBudgetFiscalYearId: 'year-1',
+        outcomeId: 'outcome-1',
+        streamCommitmentId: 'stream-commitment-1',
+        amount: 75
+      }
+    ], [
+      {
+        commitmentType: 'commitment',
+        agreementBudgetFiscalYearId: 'year-1',
+        outcomeId: 'outcome-1',
+        streamCommitmentId: 'stream-commitment-1',
+        paidAmount: 80
+      },
+      {
+        commitmentType: 'paye',
+        agreementBudgetFiscalYearId: 'year-1',
+        outcomeId: 'outcome-1',
+        streamCommitmentId: 'stream-commitment-1',
+        paidAmount: 80
+      }
+    ])
+
+    expect(issues.map(issue => issue.code)).toEqual([
+      'GCS_OUTCOME_COST_ALLOCATION_PAYMENT_EXCEEDS_GENERATED_LINE',
+      'GCS_OUTCOME_COST_ALLOCATION_PAYMENT_EXCEEDS_GENERATED_LINE'
+    ])
   })
 })

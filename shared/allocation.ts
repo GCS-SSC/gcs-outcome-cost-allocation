@@ -56,6 +56,22 @@ export interface AllocationValidationIssue {
   message: string
 }
 
+export interface GeneratedCommitmentLineCoverage {
+  commitmentType: CommitmentType
+  agreementBudgetFiscalYearId: string
+  outcomeId: string
+  streamCommitmentId: string
+  amount: number
+}
+
+export interface PaidCommitmentLineCoverage {
+  commitmentType: CommitmentType
+  agreementBudgetFiscalYearId: string
+  outcomeId: string
+  streamCommitmentId: string
+  paidAmount: number
+}
+
 export const isCommitmentType = (value: unknown): value is CommitmentType =>
   typeof value === 'string' && COMMITMENT_TYPES.includes(value as CommitmentType)
 
@@ -229,4 +245,41 @@ export const validateCommitmentMappings = (
     })
 
   return issues
+}
+
+const commitmentLineCoverageKey = (coverage: {
+  commitmentType: CommitmentType
+  agreementBudgetFiscalYearId: string
+  outcomeId: string
+  streamCommitmentId: string
+}) => [
+  coverage.commitmentType,
+  coverage.agreementBudgetFiscalYearId,
+  coverage.outcomeId,
+  coverage.streamCommitmentId
+].join(':')
+
+export const validateGeneratedCommitmentLinePaymentCoverage = (
+  generatedLines: GeneratedCommitmentLineCoverage[],
+  paidLines: PaidCommitmentLineCoverage[]
+): AllocationValidationIssue[] => {
+  const generatedAmountByKey = new Map<string, number>()
+  for (const line of generatedLines) {
+    const key = commitmentLineCoverageKey(line)
+    const existingAmount = generatedAmountByKey.get(key) ?? 0
+    generatedAmountByKey.set(key, toMoney(existingAmount + line.amount))
+  }
+
+  return paidLines.flatMap((line, index) => {
+    const generatedAmount = generatedAmountByKey.get(commitmentLineCoverageKey(line)) ?? 0
+    if (toMoney(line.paidAmount) <= toMoney(generatedAmount + 0.01)) {
+      return []
+    }
+
+    return [{
+      code: 'GCS_OUTCOME_COST_ALLOCATION_PAYMENT_EXCEEDS_GENERATED_LINE',
+      path: `paidCommitmentLines.${index}`,
+      message: 'apiErrors.extensions.outcome_cost_allocation.payment_exceeds_generated_line'
+    }]
+  })
 }

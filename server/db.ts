@@ -80,6 +80,19 @@ export interface OutcomeCostAllocationHostDatabase {
     egcs_fc_amount: number
     _deleted?: boolean
   }
+  Funding_Case_Agreement_Payment: {
+    id: Generated<string>
+    egcs_fc_fundingagreementcommitment: string
+    egcs_fc_status: string
+    _deleted?: boolean
+  }
+  Funding_Case_Agreement_Payment_Line: {
+    id: Generated<string>
+    egcs_fc_fundingagreementpayment: string
+    egcs_fc_fundingagreementcommitmentline: string
+    egcs_fc_amount: number
+    _deleted?: boolean
+  }
   'extensions.gcs_outcome_cost_allocation_versions': {
     id: Generated<string>
     agreement_id: string
