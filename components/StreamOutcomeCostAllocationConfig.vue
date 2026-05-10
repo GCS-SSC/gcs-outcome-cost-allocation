@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { getClientRequestUrl } from '~/utils/client-request-url'
 import type { Ref } from 'vue'
 import type { GcsExtensionJsonConfig, GcsResolvedExtension } from '@gcs-ssc/extensions'
 import {
@@ -85,22 +86,32 @@ const expandedRows: Ref<Record<string, boolean>> = ref({})
 const selectedAssociation: Ref<AssociationDraft | null> = ref(null)
 const isAssociationModalOpen: Ref<boolean> = ref(false)
 
-const { data: outcomesResponse } = useFetch<ListResponse<OutcomeItem>>(
-  () => transferPaymentId ? `/api/transfer-payments/${transferPaymentId}/outcomes?page=1&limit=100` : '',
-  { watch: [() => transferPaymentId] }
-)
-const { data: budgetsResponse } = useFetch<ListResponse<StreamBudgetItem>>(
-  () => transferPaymentId ? `/api/transfer-payments/${transferPaymentId}/streams/${streamId}/budgets?page=1&limit=100` : '',
-  { watch: [() => transferPaymentId, () => streamId] }
-)
-const { data: commitmentsResponse } = useFetch<ListResponse<StreamCommitmentItem>>(
-  () => transferPaymentId ? `/api/transfer-payments/${transferPaymentId}/streams/${streamId}/commitments?page=1&limit=100` : '',
-  { watch: [() => transferPaymentId, () => streamId] }
-)
+const outcomesResponse: Ref<ListResponse<OutcomeItem> | null> = ref(null)
+const budgetsResponse: Ref<ListResponse<StreamBudgetItem> | null> = ref(null)
+const commitmentsResponse: Ref<ListResponse<StreamCommitmentItem> | null> = ref(null)
+const fetchList = async <T>(url: string) => {
+  const response = await fetch(getClientRequestUrl(url))
+  return response.ok ? await response.json() as ListResponse<T> : { items: [] } as ListResponse<T>
+}
+const refreshLookups = async () => {
+  if (!transferPaymentId) {
+    return
+  }
 
-const outcomes = computed(() => outcomesResponse.value?.items ?? [])
-const budgets = computed(() => budgetsResponse.value?.items ?? [])
-const commitments = computed(() => commitmentsResponse.value?.items ?? [])
+  const [outcomeItems, budgetItems, commitmentItems] = await Promise.all([
+    fetchList<OutcomeItem>(`/api/transfer-payments/${transferPaymentId}/outcomes?page=1&limit=100`),
+    fetchList<StreamBudgetItem>(`/api/transfer-payments/${transferPaymentId}/streams/${streamId}/budgets?page=1&limit=100`),
+    fetchList<StreamCommitmentItem>(`/api/transfer-payments/${transferPaymentId}/streams/${streamId}/commitments?page=1&limit=100`)
+  ])
+  outcomesResponse.value = outcomeItems
+  budgetsResponse.value = budgetItems
+  commitmentsResponse.value = commitmentItems
+}
+await refreshLookups()
+
+const outcomes = computed<OutcomeItem[]>(() => outcomesResponse.value?.items ?? [])
+const budgets = computed<StreamBudgetItem[]>(() => budgetsResponse.value?.items ?? [])
+const commitments = computed<StreamCommitmentItem[]>(() => commitmentsResponse.value?.items ?? [])
 const isFrench = computed(() => locale.value === 'fr')
 
 const commitmentTypeOptions = computed(() => COMMITMENT_TYPES.map(type => ({
@@ -108,12 +119,12 @@ const commitmentTypeOptions = computed(() => COMMITMENT_TYPES.map(type => ({
   value: type
 })))
 
-const outcomeOptions = computed(() => outcomes.value.map(outcome => ({
+const outcomeOptions = computed(() => outcomes.value.map((outcome: OutcomeItem) => ({
   label: outcomeLabel(outcome),
   value: String(outcome.id)
 })))
 
-const commitmentLineOptions = computed(() => commitments.value.map(commitment => ({
+const commitmentLineOptions = computed(() => commitments.value.map((commitment: StreamCommitmentItem) => ({
   label: getCommitmentLineLabel(commitment),
   value: String(commitment.id)
 })))
@@ -143,12 +154,12 @@ const outcomeLabel = (outcome: OutcomeItem) => isFrench.value
   : outcome.egcs_tp_name_en
 
 const getOutcomeName = (outcomeId: string) => {
-  const outcome = outcomes.value.find(item => String(item.id) === outcomeId)
+  const outcome = outcomes.value.find((item: OutcomeItem) => String(item.id) === outcomeId)
   return outcome ? outcomeLabel(outcome) : outcomeId
 }
 
 const getBudgetDisplay = (streamBudgetId: string) =>
-  budgets.value.find(budget => String(budget.id) === streamBudgetId)?.fiscal_year_display ?? streamBudgetId
+  budgets.value.find((budget: StreamBudgetItem) => String(budget.id) === streamBudgetId)?.fiscal_year_display ?? streamBudgetId
 
 const associationRows = computed<AssociationTableRow[]>(() => localConfig.value.mappings.map(mapping => {
   const commitment = findCommitment(mapping.streamCommitmentId)
@@ -261,7 +272,7 @@ const tableRows = computed<HierarchyTableRow[]>(() => {
 })
 
 const findCommitment = (streamCommitmentId: string) =>
-  commitments.value.find(commitment => String(commitment.id) === streamCommitmentId) ?? null
+  commitments.value.find((commitment: StreamCommitmentItem) => String(commitment.id) === streamCommitmentId) ?? null
 
 const syncEnabledCommitmentTypes = (mappings: StreamCommitmentMapping[]) =>
   COMMITMENT_TYPES.filter(type => mappings.some(mapping => mapping.commitmentType === type))

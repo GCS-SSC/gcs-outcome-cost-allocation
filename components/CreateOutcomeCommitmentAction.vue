@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { getClientRequestUrl } from '~/utils/client-request-url'
 import type { Ref } from 'vue'
 import type {
   GcsExtensionCreateOperation,
@@ -142,12 +143,14 @@ const createCommitment = async () => {
   try {
     isSaving.value = true
     errorMessage.value = ''
-    await $fetch(`/api/agreements/${agreementId}/commitments`, {
+    const response = await fetch(getClientRequestUrl(`/api/agreements/${agreementId}/commitments`), {
       method: 'POST',
-      body: {
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
         egcs_fc_type: selectedType.value
-      }
+      })
     })
+    if (!response.ok) throw new Error(response.statusText)
     isOpen.value = false
     toast.add({
       title: locale.value === 'fr' ? 'Succes' : 'Success',

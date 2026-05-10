@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { getClientRequestUrl } from '~/utils/client-request-url'
 import type { Ref } from 'vue'
 import type { GcsExtensionJsonConfig, GcsExtensionRbacRequirement } from '@gcs-ssc/extensions'
 import type { ExtensionEntityTabContext } from '@gcs-ssc/extensions/server'
@@ -37,6 +38,10 @@ interface AllocationResponse {
     gl_description: string
   }>
 }
+
+type AllocationOutcome = AllocationResponse['outcomes'][number]
+type AllocationBudgetYear = AllocationResponse['budgetYears'][number]
+type AllocationStreamCommitment = AllocationResponse['streamCommitments'][number]
 
 interface ConfiguredAssociationRow {
   id: string
@@ -90,26 +95,39 @@ const saveError: Ref<string> = ref('')
 const expandedRows: Ref<Record<string, boolean>> = ref({})
 
 const endpoint = computed(() => `/api/extensions/${extensionKey}/agreements/${context.agreementId}/allocations`)
-const { data, refresh, status } = useFetch<AllocationResponse>(() => endpoint.value)
+const data: Ref<AllocationResponse | null> = ref(null)
+const status: Ref<'idle' | 'pending' | 'success' | 'error'> = ref('idle')
+const refresh = async () => {
+  try {
+    status.value = 'pending'
+    const response = await fetch(getClientRequestUrl(endpoint.value))
+    data.value = response.ok ? await response.json() as AllocationResponse : null
+    status.value = response.ok ? 'success' : 'error'
+  } catch {
+    data.value = null
+    status.value = 'error'
+  }
+}
+await refresh()
 
 watch(() => data.value, value => {
-  allocations.value = value?.allocations.map(allocation => ({ ...allocation })) ?? []
+  allocations.value = value?.allocations.map((allocation: VersionedOutcomeAllocationInput) => ({ ...allocation })) ?? []
   const versions = value?.versions ?? []
-  if (!selectedVersionId.value || !versions.some(version => version.id === selectedVersionId.value)) {
-    selectedVersionId.value = versions.find(version => version.status === 'draft')?.id
-      ?? versions.find(version => version.status === 'active')?.id
+  if (!selectedVersionId.value || !versions.some((version: CostAllocationVersion) => version.id === selectedVersionId.value)) {
+    selectedVersionId.value = versions.find((version: CostAllocationVersion) => version.status === 'draft')?.id
+      ?? versions.find((version: CostAllocationVersion) => version.status === 'active')?.id
       ?? versions[0]?.id
       ?? ''
   }
 }, { immediate: true })
 
-const outcomes = computed(() => data.value?.outcomes ?? [])
-const budgetYears = computed(() => data.value?.budgetYears ?? [])
-const streamCommitments = computed(() => data.value?.streamCommitments ?? [])
-const versions = computed(() => data.value?.versions ?? [])
-const selectedVersion = computed(() => versions.value.find(version => version.id === selectedVersionId.value) ?? null)
+const outcomes = computed<AllocationOutcome[]>(() => data.value?.outcomes ?? [])
+const budgetYears = computed<AllocationBudgetYear[]>(() => data.value?.budgetYears ?? [])
+const streamCommitments = computed<AllocationStreamCommitment[]>(() => data.value?.streamCommitments ?? [])
+const versions = computed<CostAllocationVersion[]>(() => data.value?.versions ?? [])
+const selectedVersion = computed<CostAllocationVersion | null>(() => versions.value.find((version: CostAllocationVersion) => version.id === selectedVersionId.value) ?? null)
 const canEditSelectedVersion = computed(() => selectedVersion.value?.status === 'draft')
-const hasDraftVersion = computed(() => versions.value.some(version => version.status === 'draft'))
+const hasDraftVersion = computed(() => versions.value.some((version: CostAllocationVersion) => version.status === 'draft'))
 const isLoading = computed(() => status.value === 'pending')
 const streamConfig = computed(() => parseOutcomeCostAllocationConfig(config))
 
@@ -125,7 +143,7 @@ const methodOptions = computed(() => [
   { label: locale.value === 'fr' ? 'Pourcentage' : 'Percentage', value: 'percentage' }
 ])
 
-const getOutcomeLabel = (outcome: AllocationResponse['outcomes'][number]) => locale.value === 'fr'
+const getOutcomeLabel = (outcome: AllocationOutcome) => locale.value === 'fr'
   ? outcome.label_fr
   : outcome.label_en
 
@@ -201,21 +219,21 @@ const getCommitmentTypeLabel = (commitmentType: CommitmentType) =>
   locale.value === 'fr' ? commitmentTypeLabels[commitmentType].fr : commitmentTypeLabels[commitmentType].en
 
 const getOutcomeName = (outcomeId: string) => {
-  const outcome = outcomes.value.find(item => String(item.id) === outcomeId)
+  const outcome = outcomes.value.find((item: AllocationOutcome) => String(item.id) === outcomeId)
   return outcome ? getOutcomeLabel(outcome) : outcomeId
 }
 
 const getCommitmentLineLabel = (streamCommitmentId: string) => {
-  const commitment = streamCommitments.value.find(item => String(item.id) === streamCommitmentId)
+  const commitment = streamCommitments.value.find((item: AllocationStreamCommitment) => String(item.id) === streamCommitmentId)
   return commitment ? `GL ${commitment.gl} - ${commitment.gl_description}` : streamCommitmentId
 }
 
 const getYearForStreamBudget = (streamBudgetId: string) =>
-  budgetYears.value.find(year => String(year.stream_budget_id ?? '') === streamBudgetId) ?? null
+  budgetYears.value.find((year: AllocationBudgetYear) => String(year.stream_budget_id ?? '') === streamBudgetId) ?? null
 
 const configuredAssociationRows = computed<ConfiguredAssociationRow[]>(() => streamConfig.value.mappings.flatMap(mapping => {
   const year = getYearForStreamBudget(mapping.streamBudgetId)
-  const hasOutcome = outcomes.value.some(outcome => String(outcome.id) === mapping.outcomeId)
+  const hasOutcome = outcomes.value.some((outcome: AllocationOutcome) => String(outcome.id) === mapping.outcomeId)
   if (!year || !hasOutcome) {
     return []
   }
@@ -263,7 +281,7 @@ const allocationRows = computed<AllocationTableRow[]>(() => {
   const rows: AllocationTableRow[] = []
 
   for (const commitmentType of COMMITMENT_TYPES) {
-    const typeRows = configuredAssociationRows.value.filter(row => row.commitmentType === commitmentType)
+    const typeRows = configuredAssociationRows.value.filter((row: ConfiguredAssociationRow) => row.commitmentType === commitmentType)
     if (typeRows.length === 0) {
       continue
     }
@@ -289,9 +307,9 @@ const allocationRows = computed<AllocationTableRow[]>(() => {
       continue
     }
 
-    const yearIds = Array.from(new Set(typeRows.map(row => row.yearId)))
+    const yearIds = Array.from(new Set(typeRows.map((row: ConfiguredAssociationRow) => row.yearId)))
     for (const yearId of yearIds) {
-      const yearRows = typeRows.filter(row => row.yearId === yearId)
+      const yearRows = typeRows.filter((row: ConfiguredAssociationRow) => row.yearId === yearId)
       const firstYearRow = yearRows[0]
       if (!firstYearRow) {
         continue
@@ -381,12 +399,12 @@ const updateAllocationRowValue = (row: AllocationTableRow, value: string | numbe
   setAllocationValue(row.association.yearId, row.association.outcomeId, value)
 }
 
-const activeAllocations = computed(() => allocations.value.filter(allocation =>
+const activeAllocations = computed<VersionedOutcomeAllocationInput[]>(() => allocations.value.filter((allocation: VersionedOutcomeAllocationInput) =>
   allocation.allocationVersionId === selectedVersionId.value && allocation.allocationValue > 0
 ))
 
 const getProgramFunding = (yearId: string) =>
-  Number(budgetYears.value.find(year => String(year.id) === yearId)?.program_funding ?? 0)
+  Number(budgetYears.value.find((year: AllocationBudgetYear) => String(year.id) === yearId)?.program_funding ?? 0)
 
 const getAllocationInputAmount = (allocation: OutcomeAllocationInput) => allocation.allocationMethod === 'percentage'
   ? toMoney(getProgramFunding(allocation.agreementBudgetFiscalYearId) * allocation.allocationValue / 100)
@@ -397,12 +415,12 @@ const getAllocationAmount = (yearId: string, outcomeId: string) => {
   return getAllocationInputAmount(allocation)
 }
 
-const getVersionAllocations = (versionId: string) => allocations.value.filter(allocation =>
+const getVersionAllocations = (versionId: string) => allocations.value.filter((allocation: VersionedOutcomeAllocationInput) =>
   allocation.allocationVersionId === versionId && allocation.allocationValue > 0
 )
 
 const getVersionTotal = (versionId: string) => getVersionAllocations(versionId)
-  .reduce((sum, allocation) => toMoney(sum + getAllocationInputAmount(allocation)), 0)
+  .reduce((sum: number, allocation: VersionedOutcomeAllocationInput) => toMoney(sum + getAllocationInputAmount(allocation)), 0)
 
 const selectVersion = (versionId: string) => {
   selectedVersionId.value = versionId
@@ -410,11 +428,11 @@ const selectVersion = (versionId: string) => {
 
 const validationIssues = computed(() => validateAllocationTotals(
   activeAllocations.value,
-  budgetYears.value.map(year => ({
+  budgetYears.value.map((year: AllocationBudgetYear) => ({
     agreementBudgetFiscalYearId: String(year.id),
     programFunding: Number(year.program_funding)
   })),
-  new Set(outcomes.value.map(outcome => String(outcome.id)))
+  new Set(outcomes.value.map((outcome: AllocationOutcome) => String(outcome.id)))
 ))
 
 const validationMessage = computed(() => {
@@ -463,13 +481,13 @@ const validationMessage = computed(() => {
 })
 
 const getGroupAmountTotal = (rows: ConfiguredAssociationRow[]) => rows
-  .reduce((sum, row) => sum + getAllocationAmount(row.yearId, row.outcomeId), 0)
+  .reduce((sum: number, row: ConfiguredAssociationRow) => sum + getAllocationAmount(row.yearId, row.outcomeId), 0)
 
 const getCommitmentTypeAmountTotal = (commitmentType: CommitmentType) =>
-  getGroupAmountTotal(configuredAssociationRows.value.filter(row => row.commitmentType === commitmentType))
+  getGroupAmountTotal(configuredAssociationRows.value.filter((row: ConfiguredAssociationRow) => row.commitmentType === commitmentType))
 
 const getFiscalYearAmountTotal = (commitmentType: CommitmentType, yearId: string) =>
-  getGroupAmountTotal(configuredAssociationRows.value.filter(row =>
+  getGroupAmountTotal(configuredAssociationRows.value.filter((row: ConfiguredAssociationRow) =>
     row.commitmentType === commitmentType && row.yearId === yearId
   ))
 
@@ -493,13 +511,15 @@ const save = async () => {
   try {
     isSaving.value = true
     saveError.value = ''
-    await $fetch(endpoint.value, {
+    const response = await fetch(getClientRequestUrl(endpoint.value), {
       method: 'PUT',
-      body: {
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
         allocationVersionId: selectedVersionId.value,
         allocations: activeAllocations.value
-      }
+      })
     })
+    if (!response.ok) throw new Error(response.statusText)
     await refresh()
     toast.add({
       title: locale.value === 'fr' ? 'Succes' : 'Success',
@@ -527,9 +547,10 @@ const completeSelectedVersion = async () => {
     if (!saved) {
       return
     }
-    await $fetch(`${endpoint.value.replace('/allocations', '/allocation-versions')}/${selectedVersionId.value}/complete`, {
+    const response = await fetch(getClientRequestUrl(`${endpoint.value.replace('/allocations', '/allocation-versions')}/${selectedVersionId.value}/complete`), {
       method: 'POST'
     })
+    if (!response.ok) throw new Error(response.statusText)
     await refresh()
     toast.add({
       title: locale.value === 'fr' ? 'Succes' : 'Success',
@@ -551,9 +572,11 @@ const createDraftVersion = async () => {
   try {
     isCreatingDraft.value = true
     saveError.value = ''
-    const response = await $fetch<{ version?: CostAllocationVersion }>(endpoint.value.replace('/allocations', '/allocation-versions'), {
+    const fetchResponse = await fetch(getClientRequestUrl(endpoint.value.replace('/allocations', '/allocation-versions')), {
       method: 'POST'
     })
+    if (!fetchResponse.ok) throw new Error(fetchResponse.statusText)
+    const response = await fetchResponse.json() as { version?: CostAllocationVersion }
     await refresh()
     if (response.version?.id) {
       selectedVersionId.value = response.version.id
@@ -645,6 +668,7 @@ const text = {
 }
 
 const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr : text[key].en
+const asCostAllocationVersion = (value: unknown) => value as CostAllocationVersion
 </script>
 
 <template>
@@ -686,20 +710,20 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
           class="min-w-full">
           <template #version-cell="{ row }">
             <div class="text-sm font-semibold text-zinc-900 dark:text-white">
-              {{ tLocal('version') }} {{ row.original.versionNumber }}
+              {{ tLocal('version') }} {{ asCostAllocationVersion(row.original).versionNumber }}
             </div>
             <div class="text-xs text-zinc-500 dark:text-zinc-400">
-              {{ formatDate(row.original.completedAt ?? row.original.createdAt) }}
+              {{ formatDate(asCostAllocationVersion(row.original).completedAt ?? asCostAllocationVersion(row.original).createdAt) }}
             </div>
           </template>
           <template #status-cell="{ row }">
-            <UBadge :color="getStatusColor(row.original.status)" variant="subtle">
-              {{ getStatusLabel(row.original.status) }}
+            <UBadge :color="getStatusColor(asCostAllocationVersion(row.original).status)" variant="subtle">
+              {{ getStatusLabel(asCostAllocationVersion(row.original).status) }}
             </UBadge>
           </template>
           <template #total-cell="{ row }">
             <span class="text-sm font-medium text-zinc-700 dark:text-zinc-200">
-              {{ formatMoney(getVersionTotal(row.original.id)) }}
+              {{ formatMoney(getVersionTotal(asCostAllocationVersion(row.original).id)) }}
             </span>
           </template>
           <template #actions-cell="{ row }">
@@ -709,10 +733,10 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
                 variant="ghost"
                 size="sm"
                 class="cursor-default"
-                :icon="row.original.id === selectedVersionId ? 'i-lucide-check' : 'i-lucide-panel-top-open'"
-                :disabled="row.original.id === selectedVersionId"
-                @click="selectVersion(row.original.id)">
-                {{ row.original.id === selectedVersionId ? tLocal('selected') : tLocal('view') }}
+                :icon="asCostAllocationVersion(row.original).id === selectedVersionId ? 'i-lucide-check' : 'i-lucide-panel-top-open'"
+                :disabled="asCostAllocationVersion(row.original).id === selectedVersionId"
+                @click="selectVersion(asCostAllocationVersion(row.original).id)">
+                {{ asCostAllocationVersion(row.original).id === selectedVersionId ? tLocal('selected') : tLocal('view') }}
               </UButton>
             </div>
           </template>
