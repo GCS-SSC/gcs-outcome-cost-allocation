@@ -10,6 +10,8 @@ export const ALLOCATION_VERSION_STATUSES = ['draft', 'active', 'inactive'] as co
 export type AllocationVersionStatus = typeof ALLOCATION_VERSION_STATUSES[number]
 
 export interface OutcomeAllocationInput {
+  commitmentType?: CommitmentType
+  streamCommitmentId?: string
   agreementBudgetFiscalYearId: string
   outcomeId: string
   allocationMethod: AllocationMethod
@@ -179,6 +181,22 @@ export const validateAllocationTotals = (
   return issues
 }
 
+export const validateAllocationTotalsByCommitmentType = (
+  allocations: OutcomeAllocationInput[],
+  yearTotals: YearFundingTotal[],
+  activeOutcomeIds: Set<string>,
+  commitmentTypes: CommitmentType[]
+): AllocationValidationIssue[] => commitmentTypes.flatMap(commitmentType =>
+  validateAllocationTotals(
+    allocations.filter(allocation => allocation.commitmentType === commitmentType),
+    yearTotals,
+    activeOutcomeIds
+  ).map(issue => ({
+    ...issue,
+    path: `${commitmentType}.${issue.path}`
+  }))
+)
+
 export const resolveAllocationAmounts = (
   allocations: OutcomeAllocationInput[],
   yearTotals: YearFundingTotal[]
@@ -234,6 +252,7 @@ export const validateCommitmentMappings = (
         candidate.commitmentType === commitmentType
         && candidate.outcomeId === allocation.outcomeId
         && candidate.streamBudgetId === streamBudgetId
+        && (!allocation.streamCommitmentId || candidate.streamCommitmentId === allocation.streamCommitmentId)
       )
 
       if (!mapping || !mappingKeys.has(`${allocation.outcomeId}:${streamBudgetId}:${mapping.streamCommitmentId}`)) {

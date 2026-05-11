@@ -35,6 +35,8 @@ const budgetYears = [
 const allocations = [
   {
     allocation_version_id: 'version-1',
+    commitment_type: 'commitment',
+    stream_commitment_id: 'stream-commitment-1',
     agreement_budget_fiscal_year_id: 'budget-year-1',
     outcome_id: 'outcome-1',
     allocation_method: 'amount',
@@ -42,6 +44,8 @@ const allocations = [
   },
   {
     allocation_version_id: 'version-1',
+    commitment_type: 'commitment',
+    stream_commitment_id: 'stream-commitment-2',
     agreement_budget_fiscal_year_id: 'budget-year-1',
     outcome_id: 'outcome-2',
     allocation_method: 'amount',

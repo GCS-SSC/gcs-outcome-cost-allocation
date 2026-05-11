@@ -6,6 +6,8 @@ import { asOutcomeCostAllocationDb } from '../db'
 import { saveAllocations } from '../allocation-data'
 
 const AllocationSchema = z.object({
+  commitmentType: z.enum(['commitment', 'paye', 'paye2', 'pyp']),
+  streamCommitmentId: z.string().min(1),
   agreementBudgetFiscalYearId: z.string().min(1),
   outcomeId: z.string().min(1),
   allocationMethod: z.enum(['amount', 'percentage']),

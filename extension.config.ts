@@ -57,6 +57,9 @@ export default defineGcsExtension({
     },
     {
       path: './server/migrations/0002_versioned_allocations.ts'
+    },
+    {
+      path: './server/migrations/0003_scoped_allocations.ts'
     }
   ],
   serverHandlers: [
@@ -103,6 +106,19 @@ export default defineGcsExtension({
       route: '/agreements/[agreementId]/allocation-versions/[allocationVersionId]/complete',
       method: 'post',
       path: './server/api/allocation-version-complete.post.ts',
+      rbac: {
+        subject: 'agreement',
+        action: 'update',
+        entity: {
+          target: 'agreement',
+          param: 'agreementId'
+        }
+      }
+    },
+    {
+      route: '/agreements/[agreementId]/allocation-versions/[allocationVersionId]',
+      method: 'delete',
+      path: './server/api/allocation-version.delete.ts',
       rbac: {
         subject: 'agreement',
         action: 'update',

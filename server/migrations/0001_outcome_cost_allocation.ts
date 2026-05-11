@@ -36,11 +36,17 @@ export default defineGcsExtensionMigration({
       .addColumn('id', 'bigserial', col => col.primaryKey())
       .addColumn('allocation_version_id', 'bigint', col => col.notNull().references('extensions.gcs_outcome_cost_allocation_versions.id').onDelete('restrict'))
       .addColumn('agreement_id', 'bigint', col => col.notNull().references('Funding_Case_Agreement_Profile.id').onDelete('restrict'))
+      .addColumn('commitment_type', 'varchar(20)', col => col.notNull())
+      .addColumn('stream_commitment_id', 'bigint', col => col.notNull().references('Transfer_Payment_Stream_Commitment.id').onDelete('restrict'))
       .addColumn('agreement_budget_fiscal_year_id', 'bigint', col => col.notNull().references('Funding_Case_Agreement_Budget_Fiscal_Year.id').onDelete('restrict'))
       .addColumn('outcome_id', 'bigint', col => col.notNull().references('Transfer_Payment_Outcome.id').onDelete('restrict'))
       .addColumn('allocation_method', 'varchar(20)', col => col.notNull())
       .addColumn('allocation_value', 'numeric(19, 4)', col => col.notNull())
       .addColumn('_deleted', 'boolean', col => col.defaultTo(false).notNull())
+      .addCheckConstraint(
+        'gcs_outcome_cost_allocation_commitment_type',
+        sql`commitment_type IN ('commitment', 'paye', 'paye2', 'pyp')`
+      )
       .addCheckConstraint(
         'gcs_outcome_cost_allocation_method',
         sql`allocation_method IN ('amount', 'percentage')`
@@ -51,6 +57,8 @@ export default defineGcsExtensionMigration({
       CREATE UNIQUE INDEX gcs_outcome_cost_allocation_version_allocation
       ON extensions.gcs_outcome_cost_allocation_allocations (
         allocation_version_id,
+        commitment_type,
+        stream_commitment_id,
         agreement_budget_fiscal_year_id,
         outcome_id
       )

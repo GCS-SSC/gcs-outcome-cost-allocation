@@ -17,6 +17,7 @@ import {
   toMoney,
   validateGeneratedCommitmentLinePaymentCoverage,
   validateAllocationTotals,
+  validateAllocationTotalsByCommitmentType,
   validateCommitmentMappings
 } from '../shared/allocation'
 import type { OutcomeCostAllocationDb } from './db'
@@ -247,6 +248,41 @@ export const ensureDraftAllocationVersion = async (
   return existingDraft ? mapAllocationVersion(existingDraft) : await createDraftAllocationVersion(db, agreementId)
 }
 
+export const deleteDraftAllocationVersion = async (
+  db: OutcomeCostAllocationDb,
+  agreementId: string,
+  allocationVersionId: string
+) => await db.transaction().execute(async trx => {
+  const version = await trx
+    .selectFrom('extensions.gcs_outcome_cost_allocation_versions')
+    .where('id', '=', allocationVersionId)
+    .where('agreement_id', '=', agreementId)
+    .where('_deleted', '=', false)
+    .select(['id', 'status'])
+    .executeTakeFirst()
+
+  if (!version || version.status !== 'draft') {
+    throw new Error('Only draft cost allocations can be deleted.')
+  }
+
+  await trx
+    .updateTable('extensions.gcs_outcome_cost_allocation_allocations')
+    .set({ _deleted: true })
+    .where('agreement_id', '=', agreementId)
+    .where('allocation_version_id', '=', allocationVersionId)
+    .where('_deleted', '=', false)
+    .execute()
+
+  await trx
+    .updateTable('extensions.gcs_outcome_cost_allocation_versions')
+    .set({ _deleted: true })
+    .where('id', '=', allocationVersionId)
+    .where('agreement_id', '=', agreementId)
+    .where('status', '=', 'draft')
+    .where('_deleted', '=', false)
+    .execute()
+})
+
 export const getAllocationVersion = async (
   db: OutcomeCostAllocationDb,
   agreementId: string,
@@ -309,6 +345,8 @@ export const getSavedAllocations = async (
   const rows = await query
     .select([
       'allocation_version_id',
+      'commitment_type',
+      'stream_commitment_id',
       'agreement_budget_fiscal_year_id',
       'outcome_id',
       'allocation_method',
@@ -319,6 +357,8 @@ export const getSavedAllocations = async (
 
   return rows.map(row => ({
     allocationVersionId: String(row.allocation_version_id),
+    commitmentType: isCommitmentType(row.commitment_type) ? row.commitment_type : 'commitment',
+    streamCommitmentId: String(row.stream_commitment_id ?? ''),
     agreementBudgetFiscalYearId: String(row.agreement_budget_fiscal_year_id),
     outcomeId: String(row.outcome_id),
     allocationMethod: row.allocation_method,
@@ -395,6 +435,8 @@ export const saveAllocations = async (
         .values(allocations.map(allocation => ({
           allocation_version_id: allocationVersionId,
           agreement_id: agreementId,
+          commitment_type: allocation.commitmentType ?? 'commitment',
+          stream_commitment_id: allocation.streamCommitmentId ?? null,
           agreement_budget_fiscal_year_id: allocation.agreementBudgetFiscalYearId,
           outcome_id: allocation.outcomeId,
           allocation_method: allocation.allocationMethod,
@@ -409,21 +451,26 @@ export const validateAgreementAllocations = async (
   db: OutcomeCostAllocationDb,
   agreementId: string,
   streamId: string,
-  allocations: OutcomeAllocationInput[]
+  allocations: OutcomeAllocationInput[],
+  config?: unknown
 ) => {
   const [outcomes, budgetYears] = await Promise.all([
     getAgreementOutcomes(db, agreementId),
     getAgreementBudgetYears(db, agreementId, streamId)
   ])
 
-  return validateAllocationTotals(
-    allocations,
-    budgetYears.map(year => ({
-      agreementBudgetFiscalYearId: String(year.id),
-      programFunding: Number(year.program_funding)
-    })),
-    new Set(outcomes.map(outcome => String(outcome.id)))
-  )
+  const yearTotals = budgetYears.map(year => ({
+    agreementBudgetFiscalYearId: String(year.id),
+    programFunding: Number(year.program_funding)
+  }))
+  const activeOutcomeIds = new Set(outcomes.map(outcome => String(outcome.id)))
+  const configuredTypes = config
+    ? Array.from(new Set(parseOutcomeCostAllocationConfig(config).mappings.map(mapping => mapping.commitmentType)))
+    : []
+
+  return configuredTypes.length > 0
+    ? validateAllocationTotalsByCommitmentType(allocations, yearTotals, activeOutcomeIds, configuredTypes)
+    : validateAllocationTotals(allocations, yearTotals, activeOutcomeIds)
 }
 
 const buildGeneratedCommitmentLineCoverage = (
@@ -433,13 +480,14 @@ const buildGeneratedCommitmentLineCoverage = (
   streamBudgetIdsByAgreementBudgetFiscalYearId: Map<string, string>
 ): GeneratedCommitmentLineCoverage[] => commitmentTypes.flatMap(commitmentType =>
   allocations
-    .filter(allocation => allocation.amount > 0)
+    .filter(allocation => allocation.commitmentType === commitmentType && allocation.amount > 0)
     .flatMap(allocation => {
       const streamBudgetId = streamBudgetIdsByAgreementBudgetFiscalYearId.get(allocation.agreementBudgetFiscalYearId) ?? ''
       const mapping = config.mappings.find(candidate =>
         candidate.commitmentType === commitmentType
         && candidate.outcomeId === allocation.outcomeId
         && candidate.streamBudgetId === streamBudgetId
+        && (!allocation.streamCommitmentId || candidate.streamCommitmentId === allocation.streamCommitmentId)
       )
 
       if (!mapping) {
@@ -525,6 +573,9 @@ export const validateAllocationPaymentCoverage = async (
   const commitmentTypes = commitmentTypeFilter
     ? parsedConfig.enabledCommitmentTypes.filter(type => type === commitmentTypeFilter)
     : parsedConfig.enabledCommitmentTypes
+  const scopedAllocations = commitmentTypeFilter
+    ? allocations.filter(allocation => allocation.commitmentType === commitmentTypeFilter)
+    : allocations.filter(allocation => isCommitmentType(allocation.commitmentType) && commitmentTypes.includes(allocation.commitmentType))
 
   if (commitmentTypes.length === 0) {
     return []
@@ -535,7 +586,7 @@ export const validateAllocationPaymentCoverage = async (
     agreementBudgetFiscalYearId: String(year.id),
     programFunding: Number(year.program_funding)
   }))
-  const resolvedAllocations = resolveAllocationAmounts(allocations, yearTotals)
+  const resolvedAllocations = resolveAllocationAmounts(scopedAllocations, yearTotals)
   const streamBudgetIdsByAgreementBudgetFiscalYearId = new Map(budgetYears.map(year => [
     String(year.id),
     String(year.stream_budget_id ?? '')
@@ -564,7 +615,7 @@ export const completeAllocationVersion = async (
   }
 
   const allocations = await getSavedAllocations(trx as OutcomeCostAllocationDb, agreementId, allocationVersionId)
-  const issues = await validateAgreementAllocations(trx as OutcomeCostAllocationDb, agreementId, streamId, allocations)
+  const issues = await validateAgreementAllocations(trx as OutcomeCostAllocationDb, agreementId, streamId, allocations, config)
   if (issues.length > 0) {
     const error = new Error('Cost allocation validation failed.') as Error & { issues?: AllocationValidationIssue[] }
     error.issues = issues
@@ -676,12 +727,13 @@ export const getGeneratedCommitmentLines = async (
     agreementBudgetFiscalYearId: String(year.id),
     programFunding: Number(year.program_funding)
   }))
+  const scopedAllocations = allocations.filter(allocation => allocation.commitmentType === commitmentType)
   const totalIssues = validateAllocationTotals(
-    allocations,
+    scopedAllocations,
     yearTotals,
     new Set(outcomes.map(outcome => String(outcome.id)))
   )
-  const resolvedAllocations = resolveAllocationAmounts(allocations, yearTotals)
+  const resolvedAllocations = resolveAllocationAmounts(scopedAllocations, yearTotals)
   const streamBudgetIdsByAgreementBudgetFiscalYearId = new Map(budgetYears.map(year => [
     String(year.id),
     String(year.stream_budget_id ?? '')
@@ -701,6 +753,7 @@ export const getGeneratedCommitmentLines = async (
         candidate.commitmentType === commitmentType
         && candidate.outcomeId === allocation.outcomeId
         && candidate.streamBudgetId === streamBudgetId
+        && (!allocation.streamCommitmentId || candidate.streamCommitmentId === allocation.streamCommitmentId)
       )
 
       return {
@@ -785,12 +838,13 @@ export const getGeneratedPaymentLines = async (
     agreementBudgetFiscalYearId: String(year.id),
     programFunding: Number(year.program_funding)
   }))
+  const scopedAllocations = allocations.filter(allocation => allocation.commitmentType === commitmentType)
   const totalIssues = validateAllocationTotals(
-    allocations,
+    scopedAllocations,
     yearTotals,
     new Set(outcomes.map(outcome => String(outcome.id)))
   )
-  const resolvedAllocations = resolveAllocationAmounts(allocations, yearTotals)
+  const resolvedAllocations = resolveAllocationAmounts(scopedAllocations, yearTotals)
   const streamBudgetIdsByAgreementBudgetFiscalYearId = new Map(budgetYears.map(year => [
     String(year.id),
     String(year.stream_budget_id ?? '')
@@ -813,6 +867,7 @@ export const getGeneratedPaymentLines = async (
       candidate.commitmentType === commitmentType
       && candidate.outcomeId === allocation.outcomeId
       && candidate.streamBudgetId === streamBudgetId
+      && (!allocation.streamCommitmentId || candidate.streamCommitmentId === allocation.streamCommitmentId)
     )
 
     return mapping?.streamCommitmentId ? [mapping.streamCommitmentId] : []
@@ -889,6 +944,7 @@ export const getGeneratedPaymentLines = async (
       candidate.commitmentType === commitmentType
       && candidate.outcomeId === allocation.outcomeId
       && candidate.streamBudgetId === streamBudgetId
+      && (!allocation.streamCommitmentId || candidate.streamCommitmentId === allocation.streamCommitmentId)
     )
     const commitmentLine = mapping?.streamCommitmentId
       ? commitmentLineByStreamCommitmentId.get(mapping.streamCommitmentId)

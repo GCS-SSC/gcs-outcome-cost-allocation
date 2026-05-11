@@ -106,6 +106,8 @@ export interface OutcomeCostAllocationHostDatabase {
     id: Generated<string>
     allocation_version_id: string
     agreement_id: string
+    commitment_type: 'commitment' | 'paye' | 'paye2' | 'pyp'
+    stream_commitment_id: string | null
     agreement_budget_fiscal_year_id: string
     outcome_id: string
     allocation_method: 'amount' | 'percentage'

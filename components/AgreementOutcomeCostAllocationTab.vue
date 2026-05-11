@@ -13,7 +13,7 @@ import {
   type VersionedOutcomeAllocationInput,
   parseOutcomeCostAllocationConfig,
   toMoney,
-  validateAllocationTotals
+  validateAllocationTotalsByCommitmentType
 } from '../shared/allocation'
 
 interface AllocationResponse {
@@ -91,6 +91,7 @@ const selectedVersionId: Ref<string> = ref('')
 const isSaving: Ref<boolean> = ref(false)
 const isCompleting: Ref<boolean> = ref(false)
 const isCreatingDraft: Ref<boolean> = ref(false)
+const deletingVersionId: Ref<string> = ref('')
 const saveError: Ref<string> = ref('')
 const expandedRows: Ref<Record<string, boolean>> = ref({})
 
@@ -130,13 +131,6 @@ const canEditSelectedVersion = computed(() => selectedVersion.value?.status === 
 const hasDraftVersion = computed(() => versions.value.some((version: CostAllocationVersion) => version.status === 'draft'))
 const isLoading = computed(() => status.value === 'pending')
 const streamConfig = computed(() => parseOutcomeCostAllocationConfig(config))
-
-const versionColumns = computed(() => [
-  { id: 'version', accessorKey: 'versionNumber', header: tLocal('version') },
-  { id: 'status', accessorKey: 'status', header: tLocal('status') },
-  { id: 'total', header: tLocal('amount') },
-  { id: 'actions', header: tLocal('actions') }
-])
 
 const methodOptions = computed(() => [
   { label: locale.value === 'fr' ? 'Montant' : 'Amount', value: 'amount' },
@@ -356,11 +350,13 @@ const allocationRows = computed<AllocationTableRow[]>(() => {
   return rows
 })
 
-const getAllocation = (yearId: string, outcomeId: string): OutcomeAllocationInput => {
+const getAllocation = (association: ConfiguredAssociationRow): OutcomeAllocationInput => {
   const existing = allocations.value.find(allocation =>
     allocation.allocationVersionId === selectedVersionId.value
-    && allocation.agreementBudgetFiscalYearId === yearId
-    && allocation.outcomeId === outcomeId
+    && allocation.commitmentType === association.commitmentType
+    && allocation.streamCommitmentId === association.streamCommitmentId
+    && allocation.agreementBudgetFiscalYearId === association.yearId
+    && allocation.outcomeId === association.outcomeId
   )
   if (existing) {
     return existing
@@ -368,8 +364,10 @@ const getAllocation = (yearId: string, outcomeId: string): OutcomeAllocationInpu
 
   const created: VersionedOutcomeAllocationInput = {
     allocationVersionId: selectedVersionId.value,
-    agreementBudgetFiscalYearId: yearId,
-    outcomeId,
+    commitmentType: association.commitmentType,
+    streamCommitmentId: association.streamCommitmentId,
+    agreementBudgetFiscalYearId: association.yearId,
+    outcomeId: association.outcomeId,
     allocationMethod: 'amount',
     allocationValue: 0
   }
@@ -377,18 +375,18 @@ const getAllocation = (yearId: string, outcomeId: string): OutcomeAllocationInpu
   return created
 }
 
-const setAllocationMethod = (yearId: string, outcomeId: string, allocationMethod: AllocationMethod) => {
-  const allocation = getAllocation(yearId, outcomeId)
+const setAllocationMethod = (association: ConfiguredAssociationRow, allocationMethod: AllocationMethod) => {
+  const allocation = getAllocation(association)
   allocation.allocationMethod = allocationMethod
 }
 
-const setAllocationValue = (yearId: string, outcomeId: string, value: string | number) => {
-  const allocation = getAllocation(yearId, outcomeId)
+const setAllocationValue = (association: ConfiguredAssociationRow, value: string | number) => {
+  const allocation = getAllocation(association)
   allocation.allocationValue = Number(value || 0)
 }
 
-const updateAllocationMethod = (yearId: string, outcomeId: string, value: string | number) => {
-  setAllocationMethod(yearId, outcomeId, String(value) as AllocationMethod)
+const updateAllocationMethod = (association: ConfiguredAssociationRow, value: string | number) => {
+  setAllocationMethod(association, String(value) as AllocationMethod)
 }
 
 const updateAllocationRowValue = (row: AllocationTableRow, value: string | number) => {
@@ -396,7 +394,7 @@ const updateAllocationRowValue = (row: AllocationTableRow, value: string | numbe
     return
   }
 
-  setAllocationValue(row.association.yearId, row.association.outcomeId, value)
+  setAllocationValue(row.association, value)
 }
 
 const activeAllocations = computed<VersionedOutcomeAllocationInput[]>(() => allocations.value.filter((allocation: VersionedOutcomeAllocationInput) =>
@@ -410,8 +408,8 @@ const getAllocationInputAmount = (allocation: OutcomeAllocationInput) => allocat
   ? toMoney(getProgramFunding(allocation.agreementBudgetFiscalYearId) * allocation.allocationValue / 100)
   : toMoney(allocation.allocationValue)
 
-const getAllocationAmount = (yearId: string, outcomeId: string) => {
-  const allocation = getAllocation(yearId, outcomeId)
+const getAllocationAmount = (association: ConfiguredAssociationRow) => {
+  const allocation = getAllocation(association)
   return getAllocationInputAmount(allocation)
 }
 
@@ -426,13 +424,14 @@ const selectVersion = (versionId: string) => {
   selectedVersionId.value = versionId
 }
 
-const validationIssues = computed(() => validateAllocationTotals(
+const validationIssues = computed(() => validateAllocationTotalsByCommitmentType(
   activeAllocations.value,
   budgetYears.value.map((year: AllocationBudgetYear) => ({
     agreementBudgetFiscalYearId: String(year.id),
     programFunding: Number(year.program_funding)
   })),
-  new Set(outcomes.value.map((outcome: AllocationOutcome) => String(outcome.id)))
+  new Set(outcomes.value.map((outcome: AllocationOutcome) => String(outcome.id))),
+  Array.from(new Set(configuredAssociationRows.value.map(row => row.commitmentType)))
 ))
 
 const validationMessage = computed(() => {
@@ -481,7 +480,7 @@ const validationMessage = computed(() => {
 })
 
 const getGroupAmountTotal = (rows: ConfiguredAssociationRow[]) => rows
-  .reduce((sum: number, row: ConfiguredAssociationRow) => sum + getAllocationAmount(row.yearId, row.outcomeId), 0)
+  .reduce((sum: number, row: ConfiguredAssociationRow) => sum + getAllocationAmount(row), 0)
 
 const getCommitmentTypeAmountTotal = (commitmentType: CommitmentType) =>
   getGroupAmountTotal(configuredAssociationRows.value.filter((row: ConfiguredAssociationRow) => row.commitmentType === commitmentType))
@@ -500,7 +499,7 @@ const getAmountForRow = (row: AllocationTableRow) => {
     return getFiscalYearAmountTotal(row.commitmentType, row.yearId)
   }
 
-  return row.association ? getAllocationAmount(row.association.yearId, row.association.outcomeId) : 0
+  return row.association ? getAllocationAmount(row.association) : 0
 }
 
 const save = async () => {
@@ -536,7 +535,16 @@ const save = async () => {
 }
 
 const completeSelectedVersion = async () => {
-  if (isCompleting.value || !canEditSelectedVersion.value || validationIssues.value.length > 0 || !selectedVersionId.value) {
+  if (isCompleting.value || !canEditSelectedVersion.value || !selectedVersionId.value) {
+    return
+  }
+
+  if (validationIssues.value.length > 0) {
+    toast.add({
+      title: locale.value === 'fr' ? 'Erreur' : 'Error',
+      description: validationMessage.value,
+      color: 'error'
+    })
     return
   }
 
@@ -559,6 +567,11 @@ const completeSelectedVersion = async () => {
     })
   } catch (error: unknown) {
     saveError.value = error instanceof Error ? error.message : String(error)
+    toast.add({
+      title: locale.value === 'fr' ? 'Erreur' : 'Error',
+      description: saveError.value,
+      color: 'error'
+    })
   } finally {
     isCompleting.value = false
   }
@@ -587,6 +600,36 @@ const createDraftVersion = async () => {
     isCreatingDraft.value = false
   }
 }
+
+const deleteDraftVersion = async (versionId: string) => {
+  if (deletingVersionId.value) {
+    return
+  }
+
+  try {
+    deletingVersionId.value = versionId
+    saveError.value = ''
+    const response = await fetch(getClientRequestUrl(`${endpoint.value.replace('/allocations', '/allocation-versions')}/${versionId}`), {
+      method: 'DELETE'
+    })
+    if (!response.ok) throw new Error(response.statusText)
+    if (selectedVersionId.value === versionId) {
+      selectedVersionId.value = ''
+    }
+    await refresh()
+    toast.add({
+      title: locale.value === 'fr' ? 'Succes' : 'Success',
+      description: locale.value === 'fr' ? 'Brouillon supprime.' : 'Draft allocation deleted.',
+      color: 'success'
+    })
+  } catch (error: unknown) {
+    saveError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    deletingVersionId.value = ''
+  }
+}
+
+const canDeleteVersion = (version: CostAllocationVersion) => version.status === 'draft' && deletingVersionId.value !== version.id
 
 const text = {
   title: {
@@ -649,6 +692,10 @@ const text = {
     en: 'View',
     fr: 'Voir'
   },
+  delete: {
+    en: 'Delete',
+    fr: 'Supprimer'
+  },
   selected: {
     en: 'Selected',
     fr: 'Selectionnee'
@@ -668,7 +715,6 @@ const text = {
 }
 
 const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr : text[key].en
-const asCostAllocationVersion = (value: unknown) => value as CostAllocationVersion
 </script>
 
 <template>
@@ -680,8 +726,7 @@ const asCostAllocationVersion = (value: unknown) => value as CostAllocationVersi
       <UButton
         icon="i-lucide-plus"
         :label="tLocal('newDraft')"
-        color="neutral"
-        variant="outline"
+        color="primary"
         class="cursor-default"
         :loading="isCreatingDraft"
         :disabled="isCreatingDraft || isLoading || hasDraftVersion"
@@ -692,9 +737,6 @@ const asCostAllocationVersion = (value: unknown) => value as CostAllocationVersi
       {{ tLocal('empty') }}
     </p>
 
-    <p v-if="validationIssues.length > 0" class="text-sm text-error">
-      {{ validationMessage }}
-    </p>
     <p v-if="saveError" class="text-sm text-error">
       {{ saveError }}
     </p>
@@ -703,44 +745,96 @@ const asCostAllocationVersion = (value: unknown) => value as CostAllocationVersi
       <h3 class="text-base font-semibold text-zinc-900 dark:text-white">
         {{ tLocal('allocationVersions') }}
       </h3>
-      <div class="overflow-hidden rounded-md border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
-        <UTable
-          :data="versions"
-          :columns="versionColumns"
-          class="min-w-full">
-          <template #version-cell="{ row }">
-            <div class="text-sm font-semibold text-zinc-900 dark:text-white">
-              {{ tLocal('version') }} {{ asCostAllocationVersion(row.original).versionNumber }}
-            </div>
-            <div class="text-xs text-zinc-500 dark:text-zinc-400">
-              {{ formatDate(asCostAllocationVersion(row.original).completedAt ?? asCostAllocationVersion(row.original).createdAt) }}
-            </div>
-          </template>
-          <template #status-cell="{ row }">
-            <UBadge :color="getStatusColor(asCostAllocationVersion(row.original).status)" variant="subtle">
-              {{ getStatusLabel(asCostAllocationVersion(row.original).status) }}
-            </UBadge>
-          </template>
-          <template #total-cell="{ row }">
-            <span class="text-sm font-medium text-zinc-700 dark:text-zinc-200">
-              {{ formatMoney(getVersionTotal(asCostAllocationVersion(row.original).id)) }}
-            </span>
-          </template>
-          <template #actions-cell="{ row }">
-            <div class="flex justify-end">
-              <UButton
-                color="neutral"
-                variant="ghost"
-                size="sm"
-                class="cursor-default"
-                :icon="asCostAllocationVersion(row.original).id === selectedVersionId ? 'i-lucide-check' : 'i-lucide-panel-top-open'"
-                :disabled="asCostAllocationVersion(row.original).id === selectedVersionId"
-                @click="selectVersion(asCostAllocationVersion(row.original).id)">
-                {{ asCostAllocationVersion(row.original).id === selectedVersionId ? tLocal('selected') : tLocal('view') }}
-              </UButton>
-            </div>
-          </template>
-        </UTable>
+      <div class="overflow-x-auto rounded-sm border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
+        <table class="min-w-full divide-y divide-zinc-200 text-sm dark:divide-zinc-800">
+          <caption class="sr-only">
+            {{ tLocal('allocationVersions') }}
+          </caption>
+          <thead>
+            <tr class="bg-zinc-100 text-left text-xs font-semibold tracking-wide text-zinc-500 uppercase dark:bg-zinc-900 dark:text-zinc-400">
+              <th scope="col" class="min-w-56 px-4 py-4">
+                {{ tLocal('version') }}
+              </th>
+              <th scope="col" class="min-w-48 px-4 py-4">
+                {{ tLocal('status') }}
+              </th>
+              <th scope="col" class="min-w-48 px-4 py-4">
+                {{ tLocal('amount') }}
+              </th>
+              <th scope="col" class="w-40 px-4 py-4 text-right">
+                {{ tLocal('actions') }}
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="(version, versionIndex) in versions"
+              :key="version.id"
+              :aria-current="version.id === selectedVersionId ? 'true' : undefined"
+              tabindex="0"
+              role="button"
+              :class="[
+                versionIndex > 0 && version.id !== selectedVersionId && versions[versionIndex - 1]?.id !== selectedVersionId ? 'border-t border-zinc-200 dark:border-zinc-800' : '',
+                version.id === selectedVersionId ? 'border-l-4 border-primary bg-blue-50/60 dark:bg-blue-950/20' : 'border-l-4 border-transparent',
+                'cursor-default focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-primary hover:bg-zinc-50 dark:hover:bg-zinc-900/60'
+              ]"
+              @click="selectVersion(version.id)"
+              @keydown.enter.prevent="selectVersion(version.id)"
+              @keydown.space.prevent="selectVersion(version.id)">
+              <th scope="row" class="px-4 py-4 text-left">
+                <div class="flex min-w-0 items-center gap-3">
+                  <UIcon
+                    v-if="version.id === selectedVersionId"
+                    name="i-lucide-check-circle-2"
+                    class="size-4 shrink-0 text-primary"
+                    aria-hidden="true" />
+                  <div class="min-w-0">
+                    <div class="font-semibold text-zinc-900 dark:text-white">
+                      {{ tLocal('version') }} {{ version.versionNumber }}
+                    </div>
+                    <div class="text-xs text-zinc-500 dark:text-zinc-400">
+                      {{ formatDate(version.completedAt ?? version.createdAt) }}
+                    </div>
+                  </div>
+                </div>
+              </th>
+              <td class="px-4 py-4">
+                <CommonStatusBadge enum-name="statuses" :status="version.status" />
+              </td>
+              <td class="px-4 py-4 font-semibold">
+                <span>
+                  {{ formatMoney(getVersionTotal(version.id)) }}
+                </span>
+              </td>
+              <td class="px-4 py-4">
+                <div class="flex justify-end gap-2" @click.stop>
+                  <UButton
+                    color="neutral"
+                    variant="ghost"
+                    size="sm"
+                    class="cursor-default"
+                    :icon="version.id === selectedVersionId ? 'i-lucide-check' : 'i-lucide-panel-top-open'"
+                    :disabled="version.id === selectedVersionId"
+                    @click="selectVersion(version.id)">
+                    {{ version.id === selectedVersionId ? tLocal('selected') : tLocal('view') }}
+                  </UButton>
+                  <UButton
+                    v-if="version.status === 'draft'"
+                    color="error"
+                    variant="ghost"
+                    size="sm"
+                    icon="i-lucide-trash-2"
+                    class="cursor-default"
+                    :loading="deletingVersionId === version.id"
+                    :disabled="!canDeleteVersion(version)"
+                    @click="deleteDraftVersion(version.id)">
+                    {{ tLocal('delete') }}
+                  </UButton>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
       </div>
     </div>
 
@@ -772,7 +866,7 @@ const asCostAllocationVersion = (value: unknown) => value as CostAllocationVersi
           color="primary"
           class="cursor-default"
           :loading="isCompleting"
-          :disabled="isSaving || isCompleting || validationIssues.length > 0 || isLoading"
+          :disabled="isSaving || isCompleting || isLoading"
           @click="completeSelectedVersion" />
       </div>
     </div>
@@ -826,19 +920,19 @@ const asCostAllocationVersion = (value: unknown) => value as CostAllocationVersi
         <template #method-cell="{ row }">
           <div v-if="row.original.rowType === 'association' && row.original.association">
             <USelect
-              :model-value="getAllocation(row.original.association.yearId, row.original.association.outcomeId).allocationMethod"
+              :model-value="getAllocation(row.original.association).allocationMethod"
               value-key="value"
               :items="methodOptions"
               class="w-full min-w-36"
               :disabled="!canEditSelectedVersion"
-              @update:model-value="updateAllocationMethod(row.original.association.yearId, row.original.association.outcomeId, $event)" />
+              @update:model-value="updateAllocationMethod(row.original.association, $event)" />
           </div>
         </template>
 
         <template #value-cell="{ row }">
           <div v-if="row.original.rowType === 'association' && row.original.association">
             <UInput
-              :model-value="getAllocation(row.original.association.yearId, row.original.association.outcomeId).allocationValue"
+              :model-value="getAllocation(row.original.association).allocationValue"
               type="number"
               min="0"
               step="0.01"
