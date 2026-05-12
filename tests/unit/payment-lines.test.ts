@@ -20,6 +20,15 @@ interface FakeDbState {
     amount: number
     paymentStatus: string
   }>
+  allocations: Array<{
+    allocation_version_id: string
+    commitment_type: string
+    stream_commitment_id: string
+    agreement_budget_fiscal_year_id: string
+    outcome_id: string
+    allocation_method: string
+    allocation_value: number
+  }>
 }
 
 const budgetYears = [
@@ -114,7 +123,7 @@ class FakeQuery {
     }
 
     if (this.table === 'extensions.gcs_outcome_cost_allocation_allocations') {
-      return allocations
+      return this.state.allocations
     }
 
     if (this.table === 'Funding_Case_Agreement_Budget_Fiscal_Year') {
@@ -233,7 +242,8 @@ const createState = (): FakeDbState => ({
       amount: 40
     }
   ],
-  paidLines: []
+  paidLines: [],
+  allocations
 })
 
 describe('outcome cost allocation payment generation', () => {
@@ -286,6 +296,59 @@ describe('outcome cost allocation payment generation', () => {
       lines: [
         { commitmentLineId: 'line-1', amount: 10 },
         { commitmentLineId: 'line-2', amount: 10 }
+      ]
+    })
+  })
+
+  it('does not require the selected commitment type to carry the full agreement allocation', async () => {
+    const state = createState()
+    state.allocations = [
+      {
+        allocation_version_id: 'version-1',
+        commitment_type: 'commitment',
+        stream_commitment_id: 'stream-commitment-1',
+        agreement_budget_fiscal_year_id: 'budget-year-1',
+        outcome_id: 'outcome-1',
+        allocation_method: 'amount',
+        allocation_value: 60
+      },
+      {
+        allocation_version_id: 'version-1',
+        commitment_type: 'paye',
+        stream_commitment_id: 'stream-commitment-2',
+        agreement_budget_fiscal_year_id: 'budget-year-1',
+        outcome_id: 'outcome-2',
+        allocation_method: 'amount',
+        allocation_value: 40
+      }
+    ]
+    state.commitmentLines = [
+      {
+        id: 'line-1',
+        commitmentId: 'commitment-1',
+        streamCommitmentId: 'stream-commitment-1',
+        amount: 60
+      }
+    ]
+
+    const result = await getGeneratedPaymentLines(
+      createFakeDb(state) as never,
+      'agreement-1',
+      'stream-1',
+      'commitment-1',
+      'budget-year-1',
+      30,
+      {
+        enabledCommitmentTypes: ['commitment', 'paye'],
+        mappings: config.mappings
+      }
+    )
+
+    expect(result).toEqual({
+      status: 'handled',
+      issues: [],
+      lines: [
+        { commitmentLineId: 'line-1', amount: 30 }
       ]
     })
   })

@@ -5,6 +5,7 @@ import {
   parseOutcomeCostAllocationConfig,
   resolveAllocationAmounts,
   validateGeneratedCommitmentLinePaymentCoverage,
+  validateAllocationReferences,
   validateAllocationTotals,
   validateCommitmentMappings
 } from '../../shared/allocation'
@@ -106,6 +107,37 @@ describe('outcome cost allocation logic', () => {
         outcomeId: 'outcome-1',
         allocationMethod: 'amount',
         allocationValue: 1333.33
+      }
+    ], years, activeOutcomes)).toEqual([])
+  })
+
+  it('validates the agreement total across all commitment types combined', () => {
+    expect(validateAllocationTotals([
+      {
+        commitmentType: 'commitment',
+        agreementBudgetFiscalYearId: 'year-1',
+        outcomeId: 'outcome-1',
+        allocationMethod: 'amount',
+        allocationValue: 1000
+      },
+      {
+        commitmentType: 'paye',
+        agreementBudgetFiscalYearId: 'year-2',
+        outcomeId: 'outcome-2',
+        allocationMethod: 'amount',
+        allocationValue: 333.33
+      }
+    ], years, activeOutcomes)).toEqual([])
+  })
+
+  it('validates scoped allocation references without requiring each commitment type to equal the agreement total', () => {
+    expect(validateAllocationReferences([
+      {
+        commitmentType: 'commitment',
+        agreementBudgetFiscalYearId: 'year-1',
+        outcomeId: 'outcome-1',
+        allocationMethod: 'amount',
+        allocationValue: 1000
       }
     ], years, activeOutcomes)).toEqual([])
   })

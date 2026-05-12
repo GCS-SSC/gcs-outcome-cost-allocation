@@ -16,8 +16,8 @@ import {
   resolveAllocationAmounts,
   toMoney,
   validateGeneratedCommitmentLinePaymentCoverage,
+  validateAllocationReferences,
   validateAllocationTotals,
-  validateAllocationTotalsByCommitmentType,
   validateCommitmentMappings
 } from '../shared/allocation'
 import type { OutcomeCostAllocationDb } from './db'
@@ -451,8 +451,7 @@ export const validateAgreementAllocations = async (
   db: OutcomeCostAllocationDb,
   agreementId: string,
   streamId: string,
-  allocations: OutcomeAllocationInput[],
-  config?: unknown
+  allocations: OutcomeAllocationInput[]
 ) => {
   const [outcomes, budgetYears] = await Promise.all([
     getAgreementOutcomes(db, agreementId),
@@ -464,13 +463,8 @@ export const validateAgreementAllocations = async (
     programFunding: Number(year.program_funding)
   }))
   const activeOutcomeIds = new Set(outcomes.map(outcome => String(outcome.id)))
-  const configuredTypes = config
-    ? Array.from(new Set(parseOutcomeCostAllocationConfig(config).mappings.map(mapping => mapping.commitmentType)))
-    : []
 
-  return configuredTypes.length > 0
-    ? validateAllocationTotalsByCommitmentType(allocations, yearTotals, activeOutcomeIds, configuredTypes)
-    : validateAllocationTotals(allocations, yearTotals, activeOutcomeIds)
+  return validateAllocationTotals(allocations, yearTotals, activeOutcomeIds)
 }
 
 const buildGeneratedCommitmentLineCoverage = (
@@ -615,7 +609,7 @@ export const completeAllocationVersion = async (
   }
 
   const allocations = await getSavedAllocations(trx as OutcomeCostAllocationDb, agreementId, allocationVersionId)
-  const issues = await validateAgreementAllocations(trx as OutcomeCostAllocationDb, agreementId, streamId, allocations, config)
+  const issues = await validateAgreementAllocations(trx as OutcomeCostAllocationDb, agreementId, streamId, allocations)
   if (issues.length > 0) {
     const error = new Error('Cost allocation validation failed.') as Error & { issues?: AllocationValidationIssue[] }
     error.issues = issues
@@ -728,7 +722,7 @@ export const getGeneratedCommitmentLines = async (
     programFunding: Number(year.program_funding)
   }))
   const scopedAllocations = allocations.filter(allocation => allocation.commitmentType === commitmentType)
-  const totalIssues = validateAllocationTotals(
+  const referenceIssues = validateAllocationReferences(
     scopedAllocations,
     yearTotals,
     new Set(outcomes.map(outcome => String(outcome.id)))
@@ -773,7 +767,7 @@ export const getGeneratedCommitmentLines = async (
 
   return {
     status: 'handled' as const,
-    issues: [...totalIssues, ...mappingIssues, ...paymentCoverageIssues],
+    issues: [...referenceIssues, ...mappingIssues, ...paymentCoverageIssues],
     lines: generatedLines
   }
 }
@@ -839,7 +833,7 @@ export const getGeneratedPaymentLines = async (
     programFunding: Number(year.program_funding)
   }))
   const scopedAllocations = allocations.filter(allocation => allocation.commitmentType === commitmentType)
-  const totalIssues = validateAllocationTotals(
+  const referenceIssues = validateAllocationReferences(
     scopedAllocations,
     yearTotals,
     new Set(outcomes.map(outcome => String(outcome.id)))
@@ -877,7 +871,7 @@ export const getGeneratedPaymentLines = async (
     return {
       status: 'handled' as const,
       issues: [
-        ...totalIssues,
+        ...referenceIssues,
         ...mappingIssues,
         {
           code: 'GCS_OUTCOME_COST_ALLOCATION_PAYMENT_LINES_MISSING',
@@ -978,10 +972,10 @@ export const getGeneratedPaymentLines = async (
     })
   }
 
-  if (totalIssues.length > 0 || mappingIssues.length > 0 || paymentLineIssues.length > 0) {
+  if (referenceIssues.length > 0 || mappingIssues.length > 0 || paymentLineIssues.length > 0) {
     return {
       status: 'handled' as const,
-      issues: [...totalIssues, ...mappingIssues, ...paymentLineIssues],
+      issues: [...referenceIssues, ...mappingIssues, ...paymentLineIssues],
       lines: []
     }
   }

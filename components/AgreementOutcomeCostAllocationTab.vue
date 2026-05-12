@@ -13,7 +13,7 @@ import {
   type VersionedOutcomeAllocationInput,
   parseOutcomeCostAllocationConfig,
   toMoney,
-  validateAllocationTotalsByCommitmentType
+  validateAllocationTotals
 } from '../shared/allocation'
 
 interface AllocationResponse {
@@ -424,14 +424,13 @@ const selectVersion = (versionId: string) => {
   selectedVersionId.value = versionId
 }
 
-const validationIssues = computed(() => validateAllocationTotalsByCommitmentType(
+const validationIssues = computed(() => validateAllocationTotals(
   activeAllocations.value,
   budgetYears.value.map((year: AllocationBudgetYear) => ({
     agreementBudgetFiscalYearId: String(year.id),
     programFunding: Number(year.program_funding)
   })),
-  new Set(outcomes.value.map((outcome: AllocationOutcome) => String(outcome.id))),
-  Array.from(new Set(configuredAssociationRows.value.map(row => row.commitmentType)))
+  new Set(outcomes.value.map((outcome: AllocationOutcome) => String(outcome.id)))
 ))
 
 const validationMessage = computed(() => {

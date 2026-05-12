@@ -135,14 +135,13 @@ export const parseOutcomeCostAllocationConfig = (value: unknown): OutcomeCostAll
   }
 }
 
-export const validateAllocationTotals = (
+export const validateAllocationReferences = (
   allocations: OutcomeAllocationInput[],
   yearTotals: YearFundingTotal[],
   activeOutcomeIds: Set<string>
 ): AllocationValidationIssue[] => {
   const issues: AllocationValidationIssue[] = []
   const totalsByYearId = new Map(yearTotals.map(total => [total.agreementBudgetFiscalYearId, total.programFunding]))
-  let allocatedTotal = 0
 
   for (const [index, allocation] of allocations.entries()) {
     if (!activeOutcomeIds.has(allocation.outcomeId)) {
@@ -160,7 +159,21 @@ export const validateAllocationTotals = (
         message: 'apiErrors.extensions.outcome_cost_allocation.stale_budget_year'
       })
     }
+  }
 
+  return issues
+}
+
+export const validateAllocationTotals = (
+  allocations: OutcomeAllocationInput[],
+  yearTotals: YearFundingTotal[],
+  activeOutcomeIds: Set<string>
+): AllocationValidationIssue[] => {
+  const issues: AllocationValidationIssue[] = validateAllocationReferences(allocations, yearTotals, activeOutcomeIds)
+  const totalsByYearId = new Map(yearTotals.map(total => [total.agreementBudgetFiscalYearId, total.programFunding]))
+  let allocatedTotal = 0
+
+  for (const allocation of allocations) {
     const yearTotal = totalsByYearId.get(allocation.agreementBudgetFiscalYearId) ?? 0
     if (allocation.allocationMethod === 'percentage') {
       allocatedTotal = toMoney(allocatedTotal + yearTotal * allocation.allocationValue / 100)
@@ -180,22 +193,6 @@ export const validateAllocationTotals = (
 
   return issues
 }
-
-export const validateAllocationTotalsByCommitmentType = (
-  allocations: OutcomeAllocationInput[],
-  yearTotals: YearFundingTotal[],
-  activeOutcomeIds: Set<string>,
-  commitmentTypes: CommitmentType[]
-): AllocationValidationIssue[] => commitmentTypes.flatMap(commitmentType =>
-  validateAllocationTotals(
-    allocations.filter(allocation => allocation.commitmentType === commitmentType),
-    yearTotals,
-    activeOutcomeIds
-  ).map(issue => ({
-    ...issue,
-    path: `${commitmentType}.${issue.path}`
-  }))
-)
 
 export const resolveAllocationAmounts = (
   allocations: OutcomeAllocationInput[],
