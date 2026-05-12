@@ -1,6 +1,8 @@
 /* eslint-disable jsdoc/require-jsdoc */
 import { describe, expect, it } from 'vitest'
-import { getGeneratedPaymentLines } from '../../server/allocation-data'
+import { getGeneratedPaymentLines, validateAllocationPaymentCoverage } from '../../server/allocation-data'
+
+const paymentCoverageExcludedStatuses = new Set(['denied', 'cancelled', 'withdrawn'])
 
 interface FakeDbState {
   forUpdateCount: number
@@ -19,6 +21,7 @@ interface FakeDbState {
     commitmentLineId: string
     amount: number
     paymentStatus: string
+    agreementBudgetFiscalYearId?: string
   }>
   allocations: Array<{
     allocation_version_id: string
@@ -168,11 +171,54 @@ class FakeQuery {
     }
 
     if (this.table === 'Funding_Case_Agreement_Payment_Line') {
+      if (this.selectedColumns.some(column => String(column).includes('stream_commitment_id'))) {
+        const agreementId = this.findWhereValue('Funding_Case_Agreement_Commitment.egcs_fc_fundingagreement')
+        const commitmentTypes = this.findWhereValue('Funding_Case_Agreement_Commitment.egcs_fc_type') as string[]
+        const paidAmountByKey = new Map<string, {
+          commitment_type: string
+          agreement_budget_fiscal_year_id: string
+          stream_commitment_id: string
+          paid_amount: number
+        }>()
+
+        for (const paidLine of this.state.paidLines) {
+          if (paymentCoverageExcludedStatuses.has(paidLine.paymentStatus)) {
+            continue
+          }
+
+          const commitmentLine = this.state.commitmentLines.find(line => line.id === paidLine.commitmentLineId)
+          const commitment = this.state.commitments.find(candidate => candidate.id === commitmentLine?.commitmentId)
+          if (!commitmentLine || !commitment || commitment.agreementId !== agreementId || !commitmentTypes.includes(commitment.type)) {
+            continue
+          }
+
+          const agreementBudgetFiscalYearId = paidLine.agreementBudgetFiscalYearId ?? 'budget-year-1'
+          const key = [
+            commitment.type,
+            agreementBudgetFiscalYearId,
+            commitmentLine.streamCommitmentId
+          ].join(':')
+          const existing = paidAmountByKey.get(key) ?? {
+            commitment_type: commitment.type,
+            agreement_budget_fiscal_year_id: agreementBudgetFiscalYearId,
+            stream_commitment_id: commitmentLine.streamCommitmentId,
+            paid_amount: 0
+          }
+
+          paidAmountByKey.set(key, {
+            ...existing,
+            paid_amount: existing.paid_amount + paidLine.amount
+          })
+        }
+
+        return Array.from(paidAmountByKey.values())
+      }
+
       const commitmentLineIds = this.findWhereValue('Funding_Case_Agreement_Payment_Line.egcs_fc_fundingagreementcommitmentline') as string[]
       return commitmentLineIds.flatMap(commitmentLineId => {
         const paidAmount = this.state.paidLines
           .filter(line => line.commitmentLineId === commitmentLineId)
-          .filter(line => line.paymentStatus !== 'denied')
+          .filter(line => !paymentCoverageExcludedStatuses.has(line.paymentStatus))
           .reduce((sum, line) => sum + line.amount, 0)
 
         return paidAmount > 0
@@ -351,6 +397,48 @@ describe('outcome cost allocation payment generation', () => {
         { commitmentLineId: 'line-1', amount: 30 }
       ]
     })
+  })
+
+  it('rejects cost allocations that would underfund existing payment lines on another stream commitment', async () => {
+    const state = createState()
+    state.paidLines = [
+      {
+        commitmentLineId: 'line-2',
+        amount: 10,
+        paymentStatus: 'inprogress',
+        agreementBudgetFiscalYearId: 'budget-year-1'
+      }
+    ]
+    state.allocations = [
+      {
+        allocation_version_id: 'version-1',
+        commitment_type: 'commitment',
+        stream_commitment_id: 'stream-commitment-1',
+        agreement_budget_fiscal_year_id: 'budget-year-1',
+        outcome_id: 'outcome-1',
+        allocation_method: 'amount',
+        allocation_value: 100
+      }
+    ]
+
+    const issues = await validateAllocationPaymentCoverage(
+      createFakeDb(state) as never,
+      'agreement-1',
+      'stream-1',
+      config,
+      state.allocations.map(allocation => ({
+        commitmentType: allocation.commitment_type,
+        streamCommitmentId: allocation.stream_commitment_id,
+        agreementBudgetFiscalYearId: allocation.agreement_budget_fiscal_year_id,
+        outcomeId: allocation.outcome_id,
+        allocationMethod: allocation.allocation_method,
+        allocationValue: allocation.allocation_value
+      })) as never
+    )
+
+    expect(issues.map(issue => issue.code)).toEqual([
+      'GCS_OUTCOME_COST_ALLOCATION_PAYMENT_EXCEEDS_GENERATED_LINE'
+    ])
   })
 
   it('continues to host manual creation when the commitment type is not configured', async () => {

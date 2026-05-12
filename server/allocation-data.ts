@@ -55,6 +55,8 @@ type GeneratedPaymentLine = {
   amount: number
 }
 
+const PAYMENT_COVERAGE_EXCLUDED_STATUSES = ['denied', 'cancelled', 'withdrawn']
+
 const mapAllocationVersion = (row: {
   id: string
   agreement_id: string
@@ -498,7 +500,7 @@ const buildGeneratedCommitmentLineCoverage = (
     })
 )
 
-const getPaidGeneratedCommitmentLineCoverage = async (
+const getPaidCommitmentLineCoverage = async (
   db: OutcomeCostAllocationDb,
   agreementId: string,
   commitmentTypes: CommitmentType[]
@@ -508,48 +510,45 @@ const getPaidGeneratedCommitmentLineCoverage = async (
   }
 
   const rows = await db
-    .selectFrom('extensions.gcs_outcome_cost_allocation_commitment_lines')
-    .innerJoin(
-      'Funding_Case_Agreement_Commitment',
-      'Funding_Case_Agreement_Commitment.id',
-      'extensions.gcs_outcome_cost_allocation_commitment_lines.generated_commitment_id'
-    )
-    .innerJoin(
-      'Funding_Case_Agreement_Payment_Line',
-      'Funding_Case_Agreement_Payment_Line.egcs_fc_fundingagreementcommitmentline',
-      'extensions.gcs_outcome_cost_allocation_commitment_lines.commitment_line_id'
-    )
+    .selectFrom('Funding_Case_Agreement_Payment_Line')
     .innerJoin(
       'Funding_Case_Agreement_Payment',
       'Funding_Case_Agreement_Payment.id',
       'Funding_Case_Agreement_Payment_Line.egcs_fc_fundingagreementpayment'
     )
-    .where('extensions.gcs_outcome_cost_allocation_commitment_lines.agreement_id', '=', agreementId)
+    .innerJoin(
+      'Funding_Case_Agreement_Commitment_Line',
+      'Funding_Case_Agreement_Commitment_Line.id',
+      'Funding_Case_Agreement_Payment_Line.egcs_fc_fundingagreementcommitmentline'
+    )
+    .innerJoin(
+      'Funding_Case_Agreement_Commitment',
+      'Funding_Case_Agreement_Commitment.id',
+      'Funding_Case_Agreement_Commitment_Line.egcs_fc_commitment'
+    )
+    .where('Funding_Case_Agreement_Commitment.egcs_fc_fundingagreement', '=', agreementId)
     .where('Funding_Case_Agreement_Commitment.egcs_fc_type', 'in', commitmentTypes)
-    .where('extensions.gcs_outcome_cost_allocation_commitment_lines._deleted', '=', false)
     .where('Funding_Case_Agreement_Commitment._deleted', '=', false)
+    .where('Funding_Case_Agreement_Commitment_Line._deleted', '=', false)
     .where('Funding_Case_Agreement_Payment_Line._deleted', '=', false)
     .where('Funding_Case_Agreement_Payment._deleted', '=', false)
-    .where('Funding_Case_Agreement_Payment.egcs_fc_status', '!=', 'denied')
+    .where('Funding_Case_Agreement_Payment.egcs_fc_status', 'not in', PAYMENT_COVERAGE_EXCLUDED_STATUSES)
     .select([
       'Funding_Case_Agreement_Commitment.egcs_fc_type as commitment_type',
-      'extensions.gcs_outcome_cost_allocation_commitment_lines.agreement_budget_fiscal_year_id as agreement_budget_fiscal_year_id',
-      'extensions.gcs_outcome_cost_allocation_commitment_lines.outcome_id as outcome_id',
-      'extensions.gcs_outcome_cost_allocation_commitment_lines.stream_commitment_id as stream_commitment_id',
+      'Funding_Case_Agreement_Payment.egcs_fc_fiscalyear as agreement_budget_fiscal_year_id',
+      'Funding_Case_Agreement_Commitment_Line.egcs_fc_transferpaymentstreamcommitment as stream_commitment_id',
       sql<number>`COALESCE(SUM(${sql.ref('Funding_Case_Agreement_Payment_Line.egcs_fc_amount')}), 0)`.as('paid_amount')
     ])
     .groupBy([
       'Funding_Case_Agreement_Commitment.egcs_fc_type',
-      'extensions.gcs_outcome_cost_allocation_commitment_lines.agreement_budget_fiscal_year_id',
-      'extensions.gcs_outcome_cost_allocation_commitment_lines.outcome_id',
-      'extensions.gcs_outcome_cost_allocation_commitment_lines.stream_commitment_id'
+      'Funding_Case_Agreement_Payment.egcs_fc_fiscalyear',
+      'Funding_Case_Agreement_Commitment_Line.egcs_fc_transferpaymentstreamcommitment'
     ])
     .execute()
 
   return rows.map(row => ({
     commitmentType: row.commitment_type,
     agreementBudgetFiscalYearId: String(row.agreement_budget_fiscal_year_id),
-    outcomeId: String(row.outcome_id),
     streamCommitmentId: String(row.stream_commitment_id),
     paidAmount: Number(row.paid_amount)
   }))
@@ -591,7 +590,7 @@ export const validateAllocationPaymentCoverage = async (
     parsedConfig,
     streamBudgetIdsByAgreementBudgetFiscalYearId
   )
-  const paidLines = await getPaidGeneratedCommitmentLineCoverage(db, agreementId, commitmentTypes)
+  const paidLines = await getPaidCommitmentLineCoverage(db, agreementId, commitmentTypes)
 
   return validateGeneratedCommitmentLinePaymentCoverage(generatedLines, paidLines)
 }
@@ -914,7 +913,7 @@ export const getGeneratedPaymentLines = async (
         .where('Funding_Case_Agreement_Payment_Line.egcs_fc_fundingagreementcommitmentline', 'in', commitmentLines.map(line => String(line.id)))
         .where('Funding_Case_Agreement_Payment_Line._deleted', '=', false)
         .where('Funding_Case_Agreement_Payment._deleted', '=', false)
-        .where('Funding_Case_Agreement_Payment.egcs_fc_status', '!=', 'denied')
+        .where('Funding_Case_Agreement_Payment.egcs_fc_status', 'not in', PAYMENT_COVERAGE_EXCLUDED_STATUSES)
         .select([
           'Funding_Case_Agreement_Payment_Line.egcs_fc_fundingagreementcommitmentline as commitment_line_id',
           sql<number>`COALESCE(SUM(${sql.ref('Funding_Case_Agreement_Payment_Line.egcs_fc_amount')}), 0)`.as('paid_amount')

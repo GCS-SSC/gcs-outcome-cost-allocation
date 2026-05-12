@@ -69,7 +69,6 @@ export interface GeneratedCommitmentLineCoverage {
 export interface PaidCommitmentLineCoverage {
   commitmentType: CommitmentType
   agreementBudgetFiscalYearId: string
-  outcomeId: string
   streamCommitmentId: string
   paidAmount: number
 }
@@ -276,12 +275,10 @@ export const validateCommitmentMappings = (
 const commitmentLineCoverageKey = (coverage: {
   commitmentType: CommitmentType
   agreementBudgetFiscalYearId: string
-  outcomeId: string
   streamCommitmentId: string
 }) => [
   coverage.commitmentType,
   coverage.agreementBudgetFiscalYearId,
-  coverage.outcomeId,
   coverage.streamCommitmentId
 ].join(':')
 

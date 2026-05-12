@@ -235,14 +235,12 @@ describe('outcome cost allocation logic', () => {
       {
         commitmentType: 'commitment',
         agreementBudgetFiscalYearId: 'year-1',
-        outcomeId: 'outcome-1',
         streamCommitmentId: 'stream-commitment-1',
         paidAmount: 80
       },
       {
         commitmentType: 'paye',
         agreementBudgetFiscalYearId: 'year-1',
-        outcomeId: 'outcome-1',
         streamCommitmentId: 'stream-commitment-1',
         paidAmount: 80
       }
@@ -250,6 +248,60 @@ describe('outcome cost allocation logic', () => {
 
     expect(issues.map(issue => issue.code)).toEqual([
       'GCS_OUTCOME_COST_ALLOCATION_PAYMENT_EXCEEDS_GENERATED_LINE',
+      'GCS_OUTCOME_COST_ALLOCATION_PAYMENT_EXCEEDS_GENERATED_LINE'
+    ])
+  })
+
+  it('validates paid coverage by commitment type, budget year, and stream commitment', () => {
+    const issues = validateGeneratedCommitmentLinePaymentCoverage([
+      {
+        commitmentType: 'commitment',
+        agreementBudgetFiscalYearId: 'year-1',
+        outcomeId: 'outcome-1',
+        streamCommitmentId: 'stream-commitment-1',
+        amount: 40
+      },
+      {
+        commitmentType: 'commitment',
+        agreementBudgetFiscalYearId: 'year-1',
+        outcomeId: 'outcome-2',
+        streamCommitmentId: 'stream-commitment-1',
+        amount: 35
+      }
+    ], [
+      {
+        commitmentType: 'commitment',
+        agreementBudgetFiscalYearId: 'year-1',
+        streamCommitmentId: 'stream-commitment-1',
+        paidAmount: 70
+      }
+    ])
+
+    expect(issues).toEqual([])
+
+    expect(validateGeneratedCommitmentLinePaymentCoverage([
+      {
+        commitmentType: 'commitment',
+        agreementBudgetFiscalYearId: 'year-1',
+        outcomeId: 'outcome-1',
+        streamCommitmentId: 'stream-commitment-1',
+        amount: 40
+      },
+      {
+        commitmentType: 'commitment',
+        agreementBudgetFiscalYearId: 'year-1',
+        outcomeId: 'outcome-2',
+        streamCommitmentId: 'stream-commitment-1',
+        amount: 35
+      }
+    ], [
+      {
+        commitmentType: 'commitment',
+        agreementBudgetFiscalYearId: 'year-1',
+        streamCommitmentId: 'stream-commitment-1',
+        paidAmount: 80
+      }
+    ]).map(issue => issue.code)).toEqual([
       'GCS_OUTCOME_COST_ALLOCATION_PAYMENT_EXCEEDS_GENERATED_LINE'
     ])
   })

@@ -83,6 +83,7 @@ export interface OutcomeCostAllocationHostDatabase {
   Funding_Case_Agreement_Payment: {
     id: Generated<string>
     egcs_fc_fundingagreementcommitment: string
+    egcs_fc_fiscalyear: string
     egcs_fc_status: string
     _deleted?: boolean
   }
