@@ -55,7 +55,7 @@ type GeneratedPaymentLine = {
   amount: number
 }
 
-const PAYMENT_COVERAGE_EXCLUDED_STATUSES = ['denied', 'cancelled', 'withdrawn']
+const PAYMENT_COVERAGE_EXCLUDED_STATUSES = ['denied']
 
 const mapAllocationVersion = (row: {
   id: string
@@ -534,19 +534,16 @@ const getPaidCommitmentLineCoverage = async (
     .where('Funding_Case_Agreement_Payment._deleted', '=', false)
     .where('Funding_Case_Agreement_Payment.egcs_fc_status', 'not in', PAYMENT_COVERAGE_EXCLUDED_STATUSES)
     .select([
+      'Funding_Case_Agreement_Commitment_Line.id as commitment_line_id',
       'Funding_Case_Agreement_Commitment.egcs_fc_type as commitment_type',
       'Funding_Case_Agreement_Payment.egcs_fc_fiscalyear as agreement_budget_fiscal_year_id',
       'Funding_Case_Agreement_Commitment_Line.egcs_fc_transferpaymentstreamcommitment as stream_commitment_id',
-      sql<number>`COALESCE(SUM(${sql.ref('Funding_Case_Agreement_Payment_Line.egcs_fc_amount')}), 0)`.as('paid_amount')
-    ])
-    .groupBy([
-      'Funding_Case_Agreement_Commitment.egcs_fc_type',
-      'Funding_Case_Agreement_Payment.egcs_fc_fiscalyear',
-      'Funding_Case_Agreement_Commitment_Line.egcs_fc_transferpaymentstreamcommitment'
+      'Funding_Case_Agreement_Payment_Line.egcs_fc_amount as paid_amount'
     ])
     .execute()
 
   return rows.map(row => ({
+    commitmentLineId: String(row.commitment_line_id),
     commitmentType: row.commitment_type,
     agreementBudgetFiscalYearId: String(row.agreement_budget_fiscal_year_id),
     streamCommitmentId: String(row.stream_commitment_id),

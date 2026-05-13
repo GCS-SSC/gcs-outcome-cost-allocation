@@ -233,12 +233,14 @@ describe('outcome cost allocation logic', () => {
       }
     ], [
       {
+        commitmentLineId: 'line-1',
         commitmentType: 'commitment',
         agreementBudgetFiscalYearId: 'year-1',
         streamCommitmentId: 'stream-commitment-1',
         paidAmount: 80
       },
       {
+        commitmentLineId: 'line-2',
         commitmentType: 'paye',
         agreementBudgetFiscalYearId: 'year-1',
         streamCommitmentId: 'stream-commitment-1',
@@ -270,6 +272,7 @@ describe('outcome cost allocation logic', () => {
       }
     ], [
       {
+        commitmentLineId: 'line-1',
         commitmentType: 'commitment',
         agreementBudgetFiscalYearId: 'year-1',
         streamCommitmentId: 'stream-commitment-1',
@@ -296,12 +299,44 @@ describe('outcome cost allocation logic', () => {
       }
     ], [
       {
+        commitmentLineId: 'line-1',
         commitmentType: 'commitment',
         agreementBudgetFiscalYearId: 'year-1',
         streamCommitmentId: 'stream-commitment-1',
         paidAmount: 80
       }
     ]).map(issue => issue.code)).toEqual([
+      'GCS_OUTCOME_COST_ALLOCATION_PAYMENT_EXCEEDS_GENERATED_LINE'
+    ])
+  })
+
+  it('sums multiple paid lines against the same referenced commitment line', () => {
+    const issues = validateGeneratedCommitmentLinePaymentCoverage([
+      {
+        commitmentType: 'commitment',
+        agreementBudgetFiscalYearId: 'year-1',
+        outcomeId: 'outcome-1',
+        streamCommitmentId: 'stream-commitment-1',
+        amount: 75
+      }
+    ], [
+      {
+        commitmentLineId: 'line-1',
+        commitmentType: 'commitment',
+        agreementBudgetFiscalYearId: 'year-1',
+        streamCommitmentId: 'stream-commitment-1',
+        paidAmount: 40
+      },
+      {
+        commitmentLineId: 'line-1',
+        commitmentType: 'commitment',
+        agreementBudgetFiscalYearId: 'year-1',
+        streamCommitmentId: 'stream-commitment-1',
+        paidAmount: 40
+      }
+    ])
+
+    expect(issues.map(issue => issue.code)).toEqual([
       'GCS_OUTCOME_COST_ALLOCATION_PAYMENT_EXCEEDS_GENERATED_LINE'
     ])
   })

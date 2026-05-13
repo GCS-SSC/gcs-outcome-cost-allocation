@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest'
 import { getGeneratedPaymentLines, validateAllocationPaymentCoverage } from '../../server/allocation-data'
 
-const paymentCoverageExcludedStatuses = new Set(['denied', 'cancelled', 'withdrawn'])
+const paymentCoverageExcludedStatuses = new Set(['denied'])
 
 interface FakeDbState {
   forUpdateCount: number
@@ -174,44 +174,27 @@ class FakeQuery {
       if (this.selectedColumns.some(column => String(column).includes('stream_commitment_id'))) {
         const agreementId = this.findWhereValue('Funding_Case_Agreement_Commitment.egcs_fc_fundingagreement')
         const commitmentTypes = this.findWhereValue('Funding_Case_Agreement_Commitment.egcs_fc_type') as string[]
-        const paidAmountByKey = new Map<string, {
-          commitment_type: string
-          agreement_budget_fiscal_year_id: string
-          stream_commitment_id: string
-          paid_amount: number
-        }>()
-
-        for (const paidLine of this.state.paidLines) {
-          if (paymentCoverageExcludedStatuses.has(paidLine.paymentStatus)) {
-            continue
-          }
-
+        return this.state.paidLines.flatMap(paidLine => {
           const commitmentLine = this.state.commitmentLines.find(line => line.id === paidLine.commitmentLineId)
           const commitment = this.state.commitments.find(candidate => candidate.id === commitmentLine?.commitmentId)
-          if (!commitmentLine || !commitment || commitment.agreementId !== agreementId || !commitmentTypes.includes(commitment.type)) {
-            continue
+          if (
+            paymentCoverageExcludedStatuses.has(paidLine.paymentStatus)
+            || !commitmentLine
+            || !commitment
+            || commitment.agreementId !== agreementId
+            || !commitmentTypes.includes(commitment.type)
+          ) {
+            return []
           }
 
-          const agreementBudgetFiscalYearId = paidLine.agreementBudgetFiscalYearId ?? 'budget-year-1'
-          const key = [
-            commitment.type,
-            agreementBudgetFiscalYearId,
-            commitmentLine.streamCommitmentId
-          ].join(':')
-          const existing = paidAmountByKey.get(key) ?? {
+          return [{
+            commitment_line_id: commitmentLine.id,
             commitment_type: commitment.type,
-            agreement_budget_fiscal_year_id: agreementBudgetFiscalYearId,
+            agreement_budget_fiscal_year_id: paidLine.agreementBudgetFiscalYearId ?? 'budget-year-1',
             stream_commitment_id: commitmentLine.streamCommitmentId,
-            paid_amount: 0
-          }
-
-          paidAmountByKey.set(key, {
-            ...existing,
-            paid_amount: existing.paid_amount + paidLine.amount
-          })
-        }
-
-        return Array.from(paidAmountByKey.values())
+            paid_amount: paidLine.amount
+          }]
+        })
       }
 
       const commitmentLineIds = this.findWhereValue('Funding_Case_Agreement_Payment_Line.egcs_fc_fundingagreementcommitmentline') as string[]

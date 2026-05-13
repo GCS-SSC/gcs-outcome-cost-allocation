@@ -67,6 +67,7 @@ export interface GeneratedCommitmentLineCoverage {
 }
 
 export interface PaidCommitmentLineCoverage {
+  commitmentLineId: string
   commitmentType: CommitmentType
   agreementBudgetFiscalYearId: string
   streamCommitmentId: string
@@ -293,15 +294,25 @@ export const validateGeneratedCommitmentLinePaymentCoverage = (
     generatedAmountByKey.set(key, toMoney(existingAmount + line.amount))
   }
 
-  return paidLines.flatMap((line, index) => {
-    const generatedAmount = generatedAmountByKey.get(commitmentLineCoverageKey(line)) ?? 0
-    if (toMoney(line.paidAmount) <= toMoney(generatedAmount + 0.01)) {
+  const paidAmountByKey = new Map<string, { index: number, paidAmount: number }>()
+  for (const [index, line] of paidLines.entries()) {
+    const key = commitmentLineCoverageKey(line)
+    const existing = paidAmountByKey.get(key) ?? { index, paidAmount: 0 }
+    paidAmountByKey.set(key, {
+      ...existing,
+      paidAmount: toMoney(existing.paidAmount + line.paidAmount)
+    })
+  }
+
+  return Array.from(paidAmountByKey.entries()).flatMap(([key, paidLine]) => {
+    const generatedAmount = generatedAmountByKey.get(key) ?? 0
+    if (toMoney(paidLine.paidAmount) <= toMoney(generatedAmount + 0.01)) {
       return []
     }
 
     return [{
       code: 'GCS_OUTCOME_COST_ALLOCATION_PAYMENT_EXCEEDS_GENERATED_LINE',
-      path: `paidCommitmentLines.${index}`,
+      path: `paidCommitmentLines.${paidLine.index}`,
       message: 'apiErrors.extensions.outcome_cost_allocation.payment_exceeds_generated_line'
     }]
   })

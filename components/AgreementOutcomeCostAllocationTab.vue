@@ -73,6 +73,17 @@ interface AllocationTableRow {
   association?: ConfiguredAssociationRow
 }
 
+interface ApiErrorResponse {
+  message?: string
+  statusMessage?: string
+  data?: {
+    message?: string
+    details?: Array<{
+      message?: string
+    }>
+  }
+}
+
 const {
   extensionKey,
   context,
@@ -501,6 +512,19 @@ const getAmountForRow = (row: AllocationTableRow) => {
   return row.association ? getAllocationAmount(row.association) : 0
 }
 
+const getResponseErrorMessage = async (response: Response) => {
+  try {
+    const body = await response.json() as ApiErrorResponse
+    return body.data?.message
+      ?? body.data?.details?.[0]?.message
+      ?? body.message
+      ?? body.statusMessage
+      ?? response.statusText
+  } catch {
+    return response.statusText
+  }
+}
+
 const save = async () => {
   if (isSaving.value || !canEditSelectedVersion.value || !selectedVersionId.value) {
     return false
@@ -517,7 +541,7 @@ const save = async () => {
         allocations: activeAllocations.value
       })
     })
-    if (!response.ok) throw new Error(response.statusText)
+    if (!response.ok) throw new Error(await getResponseErrorMessage(response))
     await refresh()
     toast.add({
       title: locale.value === 'fr' ? 'Succes' : 'Success',
@@ -557,7 +581,7 @@ const completeSelectedVersion = async () => {
     const response = await fetch(getClientRequestUrl(`${endpoint.value.replace('/allocations', '/allocation-versions')}/${selectedVersionId.value}/complete`), {
       method: 'POST'
     })
-    if (!response.ok) throw new Error(response.statusText)
+    if (!response.ok) throw new Error(await getResponseErrorMessage(response))
     await refresh()
     toast.add({
       title: locale.value === 'fr' ? 'Succes' : 'Success',
@@ -587,7 +611,7 @@ const createDraftVersion = async () => {
     const fetchResponse = await fetch(getClientRequestUrl(endpoint.value.replace('/allocations', '/allocation-versions')), {
       method: 'POST'
     })
-    if (!fetchResponse.ok) throw new Error(fetchResponse.statusText)
+    if (!fetchResponse.ok) throw new Error(await getResponseErrorMessage(fetchResponse))
     const response = await fetchResponse.json() as { version?: CostAllocationVersion }
     await refresh()
     if (response.version?.id) {
@@ -611,7 +635,7 @@ const deleteDraftVersion = async (versionId: string) => {
     const response = await fetch(getClientRequestUrl(`${endpoint.value.replace('/allocations', '/allocation-versions')}/${versionId}`), {
       method: 'DELETE'
     })
-    if (!response.ok) throw new Error(response.statusText)
+    if (!response.ok) throw new Error(await getResponseErrorMessage(response))
     if (selectedVersionId.value === versionId) {
       selectedVersionId.value = ''
     }
