@@ -105,6 +105,10 @@ const isCreatingDraft: Ref<boolean> = ref(false)
 const deletingVersionId: Ref<string> = ref('')
 const saveError: Ref<string> = ref('')
 const expandedRows: Ref<Record<string, boolean>> = ref({})
+const isGenerateModalOpen: Ref<boolean> = ref(false)
+const generationCommitmentType: Ref<CommitmentType> = ref('commitment')
+const generationYearIds: Ref<string[]> = ref([])
+const confirm = useConfirmDialog()
 
 const endpoint = computed(() => `/api/extensions/${extensionKey}/agreements/${context.agreementId}/allocations`)
 const data: Ref<AllocationResponse | null> = ref(null)
@@ -147,6 +151,18 @@ const methodOptions = computed(() => [
   { label: locale.value === 'fr' ? 'Montant' : 'Amount', value: 'amount' },
   { label: locale.value === 'fr' ? 'Pourcentage' : 'Percentage', value: 'percentage' }
 ])
+
+const commitmentTypeOptions = computed(() => streamConfig.value.enabledCommitmentTypes.map(commitmentType => ({
+  label: getCommitmentTypeLabel(commitmentType),
+  value: commitmentType
+})))
+
+const fundedBudgetYears = computed(() => budgetYears.value.filter((year: AllocationBudgetYear) => Number(year.program_funding) > 0))
+
+const generationYearOptions = computed(() => fundedBudgetYears.value.map((year: AllocationBudgetYear) => ({
+  label: year.fiscal_year_display,
+  value: String(year.id)
+})))
 
 const getOutcomeLabel = (outcome: AllocationOutcome) => locale.value === 'fr'
   ? outcome.label_fr
@@ -239,7 +255,7 @@ const getYearForStreamBudget = (streamBudgetId: string) =>
 const configuredAssociationRows = computed<ConfiguredAssociationRow[]>(() => streamConfig.value.mappings.flatMap(mapping => {
   const year = getYearForStreamBudget(mapping.streamBudgetId)
   const hasOutcome = outcomes.value.some((outcome: AllocationOutcome) => String(outcome.id) === mapping.outcomeId)
-  if (!year || !hasOutcome) {
+  if (!year || Number(year.program_funding) <= 0 || !hasOutcome) {
     return []
   }
 
@@ -274,6 +290,39 @@ const configuredAssociationRows = computed<ConfiguredAssociationRow[]>(() => str
 
 const getCommitmentTypeGroupId = (commitmentType: CommitmentType) => `type:${commitmentType}`
 const getFiscalYearGroupId = (commitmentType: CommitmentType, yearId: string) => `year:${commitmentType}:${yearId}`
+const getAllocationKey = (allocation: {
+  commitmentType?: CommitmentType
+  streamCommitmentId?: string
+  agreementBudgetFiscalYearId: string
+  outcomeId: string
+}) => [
+  allocation.commitmentType ?? 'commitment',
+  allocation.agreementBudgetFiscalYearId,
+  allocation.streamCommitmentId ?? '',
+  allocation.outcomeId
+].join(':')
+
+const getAssociationKey = (association: ConfiguredAssociationRow) => getAllocationKey({
+  commitmentType: association.commitmentType,
+  streamCommitmentId: association.streamCommitmentId,
+  agreementBudgetFiscalYearId: association.yearId,
+  outcomeId: association.outcomeId
+})
+
+const configuredAssociationByKey = computed(() => new Map(configuredAssociationRows.value.map((association: ConfiguredAssociationRow) => [
+  getAssociationKey(association),
+  association
+])))
+
+const selectedVersionAllocations = computed<VersionedOutcomeAllocationInput[]>(() => allocations.value.filter((allocation: VersionedOutcomeAllocationInput) =>
+  allocation.allocationVersionId === selectedVersionId.value
+))
+
+const displayedAssociationRows = computed<ConfiguredAssociationRow[]>(() => selectedVersionAllocations.value.flatMap((allocation: VersionedOutcomeAllocationInput) => {
+  const association = configuredAssociationByKey.value.get(getAllocationKey(allocation))
+  return association ? [association] : []
+}))
+
 const isExpanded = (groupId: string) => expandedRows.value[groupId] !== false
 const toggleGroup = (groupId: string) => {
   expandedRows.value = {
@@ -286,7 +335,7 @@ const allocationRows = computed<AllocationTableRow[]>(() => {
   const rows: AllocationTableRow[] = []
 
   for (const commitmentType of COMMITMENT_TYPES) {
-    const typeRows = configuredAssociationRows.value.filter((row: ConfiguredAssociationRow) => row.commitmentType === commitmentType)
+    const typeRows = displayedAssociationRows.value.filter((row: ConfiguredAssociationRow) => row.commitmentType === commitmentType)
     if (typeRows.length === 0) {
       continue
     }
@@ -361,19 +410,15 @@ const allocationRows = computed<AllocationTableRow[]>(() => {
   return rows
 })
 
-const getAllocation = (association: ConfiguredAssociationRow): OutcomeAllocationInput => {
-  const existing = allocations.value.find(allocation =>
+const getAllocation = (association: ConfiguredAssociationRow): VersionedOutcomeAllocationInput | null => allocations.value.find(allocation =>
     allocation.allocationVersionId === selectedVersionId.value
     && allocation.commitmentType === association.commitmentType
     && allocation.streamCommitmentId === association.streamCommitmentId
     && allocation.agreementBudgetFiscalYearId === association.yearId
     && allocation.outcomeId === association.outcomeId
-  )
-  if (existing) {
-    return existing
-  }
+) ?? null
 
-  const created: VersionedOutcomeAllocationInput = {
+const createAllocation = (association: ConfiguredAssociationRow): VersionedOutcomeAllocationInput => ({
     allocationVersionId: selectedVersionId.value,
     commitmentType: association.commitmentType,
     streamCommitmentId: association.streamCommitmentId,
@@ -381,18 +426,26 @@ const getAllocation = (association: ConfiguredAssociationRow): OutcomeAllocation
     outcomeId: association.outcomeId,
     allocationMethod: 'amount',
     allocationValue: 0
+})
+
+const ensureAllocation = (association: ConfiguredAssociationRow) => {
+  const existing = getAllocation(association)
+  if (existing) {
+    return existing
   }
+
+  const created = createAllocation(association)
   allocations.value = [...allocations.value, created]
   return created
 }
 
 const setAllocationMethod = (association: ConfiguredAssociationRow, allocationMethod: AllocationMethod) => {
-  const allocation = getAllocation(association)
+  const allocation = ensureAllocation(association)
   allocation.allocationMethod = allocationMethod
 }
 
 const setAllocationValue = (association: ConfiguredAssociationRow, value: string | number) => {
-  const allocation = getAllocation(association)
+  const allocation = ensureAllocation(association)
   allocation.allocationValue = Number(value || 0)
 }
 
@@ -408,9 +461,13 @@ const updateAllocationRowValue = (row: AllocationTableRow, value: string | numbe
   setAllocationValue(row.association, value)
 }
 
-const activeAllocations = computed<VersionedOutcomeAllocationInput[]>(() => allocations.value.filter((allocation: VersionedOutcomeAllocationInput) =>
-  allocation.allocationVersionId === selectedVersionId.value && allocation.allocationValue > 0
-))
+const updateGenerationYearIds = (value: unknown) => {
+  generationYearIds.value = Array.isArray(value)
+    ? value.map(item => String(item))
+    : []
+}
+
+const activeAllocations = computed<VersionedOutcomeAllocationInput[]>(() => selectedVersionAllocations.value)
 
 const getProgramFunding = (yearId: string) =>
   Number(budgetYears.value.find((year: AllocationBudgetYear) => String(year.id) === yearId)?.program_funding ?? 0)
@@ -421,11 +478,11 @@ const getAllocationInputAmount = (allocation: OutcomeAllocationInput) => allocat
 
 const getAllocationAmount = (association: ConfiguredAssociationRow) => {
   const allocation = getAllocation(association)
-  return getAllocationInputAmount(allocation)
+  return allocation ? getAllocationInputAmount(allocation) : 0
 }
 
 const getVersionAllocations = (versionId: string) => allocations.value.filter((allocation: VersionedOutcomeAllocationInput) =>
-  allocation.allocationVersionId === versionId && allocation.allocationValue > 0
+  allocation.allocationVersionId === versionId
 )
 
 const getVersionTotal = (versionId: string) => getVersionAllocations(versionId)
@@ -493,10 +550,10 @@ const getGroupAmountTotal = (rows: ConfiguredAssociationRow[]) => rows
   .reduce((sum: number, row: ConfiguredAssociationRow) => sum + getAllocationAmount(row), 0)
 
 const getCommitmentTypeAmountTotal = (commitmentType: CommitmentType) =>
-  getGroupAmountTotal(configuredAssociationRows.value.filter((row: ConfiguredAssociationRow) => row.commitmentType === commitmentType))
+  getGroupAmountTotal(displayedAssociationRows.value.filter((row: ConfiguredAssociationRow) => row.commitmentType === commitmentType))
 
 const getFiscalYearAmountTotal = (commitmentType: CommitmentType, yearId: string) =>
-  getGroupAmountTotal(configuredAssociationRows.value.filter((row: ConfiguredAssociationRow) =>
+  getGroupAmountTotal(displayedAssociationRows.value.filter((row: ConfiguredAssociationRow) =>
     row.commitmentType === commitmentType && row.yearId === yearId
   ))
 
@@ -510,6 +567,56 @@ const getAmountForRow = (row: AllocationTableRow) => {
   }
 
   return row.association ? getAllocationAmount(row.association) : 0
+}
+
+const getGenerationCandidates = () => {
+  const selectedYearIds = new Set(generationYearIds.value)
+  return configuredAssociationRows.value.filter((association: ConfiguredAssociationRow) =>
+    association.commitmentType === generationCommitmentType.value
+    && selectedYearIds.has(association.yearId)
+  )
+}
+
+const openGenerateRows = () => {
+  generationCommitmentType.value = streamConfig.value.enabledCommitmentTypes[0] ?? 'commitment'
+  generationYearIds.value = fundedBudgetYears.value.map((year: AllocationBudgetYear) => String(year.id))
+  isGenerateModalOpen.value = true
+}
+
+const applyGeneratedRows = async () => {
+  const candidates = getGenerationCandidates()
+  const candidateKeys = new Set(candidates.map(getAssociationKey))
+  const existingKeys = new Set(selectedVersionAllocations.value.map(getAllocationKey))
+  const additions = candidates
+    .filter((association: ConfiguredAssociationRow) => !existingKeys.has(getAssociationKey(association)))
+    .map(createAllocation)
+  const selectedYearIds = new Set(generationYearIds.value)
+  const deletions = selectedVersionAllocations.value.filter((allocation: VersionedOutcomeAllocationInput) =>
+    allocation.commitmentType === generationCommitmentType.value
+    && selectedYearIds.has(allocation.agreementBudgetFiscalYearId)
+    && !candidateKeys.has(getAllocationKey(allocation))
+  )
+
+  if (deletions.length > 0) {
+    const confirmed = await confirm({
+      title: tLocal('removeRowsTitle'),
+      description: tLocal('removeRowsDescription'),
+      confirmLabel: tLocal('generateRows'),
+      confirmColor: 'warning'
+    })
+    if (!confirmed) {
+      return
+    }
+  }
+
+  const deletionKeys = new Set(deletions.map(getAllocationKey))
+  allocations.value = [
+    ...allocations.value.filter((allocation: VersionedOutcomeAllocationInput) =>
+      allocation.allocationVersionId !== selectedVersionId.value || !deletionKeys.has(getAllocationKey(allocation))
+    ),
+    ...additions
+  ]
+  isGenerateModalOpen.value = false
 }
 
 const getResponseErrorMessage = async (response: Response) => {
@@ -703,6 +810,34 @@ const text = {
     en: 'Selected allocation',
     fr: 'Repartition selectionnee'
   },
+  generateRows: {
+    en: 'Generate rows',
+    fr: 'Generer les lignes'
+  },
+  generateRowsTitle: {
+    en: 'Generate allocation rows',
+    fr: 'Generer des lignes de repartition'
+  },
+  commitmentType: {
+    en: 'Commitment type',
+    fr: 'Type d engagement'
+  },
+  fiscalYears: {
+    en: 'Fiscal years',
+    fr: 'Exercices'
+  },
+  removeRowsTitle: {
+    en: 'Remove stale allocation rows?',
+    fr: 'Supprimer les lignes de repartition obsoletes?'
+  },
+  removeRowsDescription: {
+    en: 'Generating will remove rows that no longer match the selected commitment type, fiscal years, and agreement outcomes.',
+    fr: 'La generation supprimera les lignes qui ne correspondent plus au type d engagement, aux exercices et aux resultats de l entente selectionnes.'
+  },
+  noRows: {
+    en: 'No allocation rows have been added to this draft.',
+    fr: 'Aucune ligne de repartition n a ete ajoutee a ce brouillon.'
+  },
   newDraft: {
     en: 'New draft',
     fr: 'Nouveau brouillon'
@@ -876,6 +1011,15 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
         </p>
       </div>
       <div class="flex flex-wrap gap-2">
+        <UButton
+          v-if="canEditSelectedVersion"
+          icon="i-lucide-plus"
+          :label="tLocal('generateRows')"
+          color="neutral"
+          variant="outline"
+          class="cursor-default"
+          :disabled="isSaving || isCompleting || isLoading"
+          @click="openGenerateRows" />
         <CommonSaveButton
           v-if="canEditSelectedVersion"
           :label="tLocal('save')"
@@ -943,7 +1087,7 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
         <template #method-cell="{ row }">
           <div v-if="row.original.rowType === 'association' && row.original.association">
             <USelect
-              :model-value="getAllocation(row.original.association).allocationMethod"
+              :model-value="getAllocation(row.original.association)?.allocationMethod ?? 'amount'"
               value-key="value"
               :items="methodOptions"
               class="w-full min-w-36"
@@ -955,7 +1099,7 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
         <template #value-cell="{ row }">
           <div v-if="row.original.rowType === 'association' && row.original.association">
             <UInput
-              :model-value="getAllocation(row.original.association).allocationValue"
+              :model-value="getAllocation(row.original.association)?.allocationValue ?? 0"
               type="number"
               min="0"
               step="0.01"
@@ -972,8 +1116,55 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
         </template>
       </UTable>
       <div class="border-t border-zinc-200 px-4 py-3 text-xs font-bold tracking-widest text-zinc-400 uppercase dark:border-zinc-800">
-        {{ configuredAssociationRows.length }} {{ tLocal('records') }}
+        <span v-if="displayedAssociationRows.length > 0">
+          {{ displayedAssociationRows.length }} {{ tLocal('records') }}
+        </span>
+        <span v-else>
+          {{ tLocal('noRows') }}
+        </span>
       </div>
     </div>
+
+    <UModal v-model:open="isGenerateModalOpen" :title="tLocal('generateRowsTitle')">
+      <template #body>
+        <div class="space-y-4">
+          <UFormField :label="tLocal('commitmentType')">
+            <USelect
+              v-model="generationCommitmentType"
+              value-key="value"
+              :items="commitmentTypeOptions"
+              class="w-full" />
+          </UFormField>
+
+          <UFormField :label="tLocal('fiscalYears')">
+            <USelectMenu
+              :model-value="generationYearIds as never"
+              multiple
+              value-key="value"
+              label-key="label"
+              :items="generationYearOptions"
+              class="w-full"
+              @update:model-value="updateGenerationYearIds" />
+          </UFormField>
+        </div>
+      </template>
+
+      <template #footer>
+        <div class="flex w-full justify-end gap-2">
+          <UButton
+            :label="locale === 'fr' ? 'Annuler' : 'Cancel'"
+            color="neutral"
+            variant="ghost"
+            class="cursor-default"
+            @click="isGenerateModalOpen = false" />
+          <UButton
+            :label="tLocal('generateRows')"
+            color="primary"
+            class="cursor-default"
+            :disabled="generationYearIds.length === 0"
+            @click="applyGeneratedRows" />
+        </div>
+      </template>
+    </UModal>
   </div>
 </template>
