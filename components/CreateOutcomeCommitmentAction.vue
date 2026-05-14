@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { getClientRequestUrl } from '~/utils/client-request-url'
+import { computed, ref } from 'vue'
 import type { Ref } from 'vue'
 import type {
   GcsExtensionCreateOperation,
@@ -135,6 +136,16 @@ const resolveErrorMessage = (error: unknown): string => {
   return err.message ?? String(error)
 }
 
+const parseErrorResponse = async (response: Response): Promise<unknown> => {
+  try {
+    return await response.json()
+  } catch {
+    return {
+      message: response.statusText
+    }
+  }
+}
+
 const createCommitment = async () => {
   if (isSaving.value) {
     return
@@ -150,7 +161,9 @@ const createCommitment = async () => {
         egcs_fc_type: selectedType.value
       })
     })
-    if (!response.ok) throw new Error(response.statusText)
+    if (!response.ok) {
+      throw await parseErrorResponse(response)
+    }
     isOpen.value = false
     toast.add({
       title: locale.value === 'fr' ? 'Succes' : 'Success',

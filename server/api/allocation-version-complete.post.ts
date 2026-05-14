@@ -4,8 +4,8 @@ import { createGcsExtensionUserError } from '@gcs-ssc/extensions/server'
 import { asOutcomeCostAllocationDb } from '../db'
 import { completeAllocationVersion } from '../allocation-data'
 import {
-  getOutcomeCostAllocationErrorMessage,
-  localizeAllocationIssues
+  bilingualAllocationIssues,
+  getOutcomeCostAllocationErrorMessages
 } from '../errors'
 import type { AllocationValidationIssue } from '../../shared/allocation'
 
@@ -46,8 +46,8 @@ export default async (event: AllocationVersionCompleteEvent) => {
     const code = error.issues[0]?.code ?? 'GCS_OUTCOME_COST_ALLOCATION_INVALID'
     throw createGcsExtensionUserError({
       code,
-      message: getOutcomeCostAllocationErrorMessage(event, code),
-      details: localizeAllocationIssues(event, error.issues)
+      message: getOutcomeCostAllocationErrorMessages(code),
+      details: bilingualAllocationIssues(error.issues)
     })
   }
 }

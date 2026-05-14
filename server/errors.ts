@@ -79,10 +79,14 @@ export const getOutcomeCostAllocationErrorMessage = (
   event: H3Event,
   code: string | undefined
 ) => {
-  const message = errorMessages[code ?? 'GCS_OUTCOME_COST_ALLOCATION_INVALID']
-    ?? errorMessages.GCS_OUTCOME_COST_ALLOCATION_INVALID
+  const message = getOutcomeCostAllocationErrorMessages(code)
   return message[getLocale(event)]
 }
+
+export const getOutcomeCostAllocationErrorMessages = (
+  code: string | undefined
+) => errorMessages[code ?? 'GCS_OUTCOME_COST_ALLOCATION_INVALID']
+    ?? errorMessages.GCS_OUTCOME_COST_ALLOCATION_INVALID
 
 export const localizeAllocationIssues = (
   event: H3Event,
@@ -90,5 +94,13 @@ export const localizeAllocationIssues = (
 ) => issues.map(issue => ({
   path: issue.path,
   message: getOutcomeCostAllocationErrorMessage(event, issue.code),
+  code: issue.code
+}))
+
+export const bilingualAllocationIssues = (
+  issues: AllocationValidationIssue[]
+) => issues.map(issue => ({
+  path: issue.path,
+  message: getOutcomeCostAllocationErrorMessages(issue.code),
   code: issue.code
 }))

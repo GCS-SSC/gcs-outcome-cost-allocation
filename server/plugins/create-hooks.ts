@@ -9,8 +9,8 @@ import {
   getGeneratedPaymentLines
 } from '../allocation-data'
 import {
-  getOutcomeCostAllocationErrorMessage,
-  localizeAllocationIssues
+  bilingualAllocationIssues,
+  getOutcomeCostAllocationErrorMessages
 } from '../errors'
 import {
   EXTENSION_KEY,
@@ -45,8 +45,8 @@ export default defineNitroPlugin(nitroApp => {
       const code = generated.issues[0]?.code ?? 'GCS_OUTCOME_COST_ALLOCATION_INVALID'
       throw createGcsExtensionUserError({
         code,
-        message: getOutcomeCostAllocationErrorMessage(context.event as Parameters<typeof getOutcomeCostAllocationErrorMessage>[0], code),
-        details: localizeAllocationIssues(context.event as Parameters<typeof localizeAllocationIssues>[0], generated.issues)
+        message: getOutcomeCostAllocationErrorMessages(code),
+        details: bilingualAllocationIssues(generated.issues)
       })
     }
 
@@ -137,8 +137,8 @@ export default defineNitroPlugin(nitroApp => {
       const code = generated.issues[0]?.code ?? 'GCS_OUTCOME_COST_ALLOCATION_INVALID'
       throw createGcsExtensionUserError({
         code,
-        message: getOutcomeCostAllocationErrorMessage(context.event as Parameters<typeof getOutcomeCostAllocationErrorMessage>[0], code),
-        details: localizeAllocationIssues(context.event as Parameters<typeof localizeAllocationIssues>[0], generated.issues)
+        message: getOutcomeCostAllocationErrorMessages(code),
+        details: bilingualAllocationIssues(generated.issues)
       })
     }
 
