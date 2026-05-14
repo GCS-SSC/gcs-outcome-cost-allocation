@@ -197,6 +197,10 @@ const allocationColumns = computed(() => [
   {
     id: 'amount',
     header: tLocal('amount')
+  },
+  {
+    id: 'unallocated',
+    header: tLocal('unallocated')
   }
 ])
 
@@ -472,6 +476,10 @@ const activeAllocations = computed<VersionedOutcomeAllocationInput[]>(() => sele
 const getProgramFunding = (yearId: string) =>
   Number(budgetYears.value.find((year: AllocationBudgetYear) => String(year.id) === yearId)?.program_funding ?? 0)
 
+const agreementProgramFundingTotal = computed(() => budgetYears.value
+  .reduce((sum: number, year: AllocationBudgetYear) => toMoney(sum + Number(year.program_funding)), 0)
+)
+
 const getAllocationInputAmount = (allocation: OutcomeAllocationInput) => allocation.allocationMethod === 'percentage'
   ? toMoney(getProgramFunding(allocation.agreementBudgetFiscalYearId) * allocation.allocationValue / 100)
   : toMoney(allocation.allocationValue)
@@ -487,6 +495,9 @@ const getVersionAllocations = (versionId: string) => allocations.value.filter((a
 
 const getVersionTotal = (versionId: string) => getVersionAllocations(versionId)
   .reduce((sum: number, allocation: VersionedOutcomeAllocationInput) => toMoney(sum + getAllocationInputAmount(allocation)), 0)
+
+const getVersionUnallocated = (versionId: string) =>
+  toMoney(agreementProgramFundingTotal.value - getVersionTotal(versionId))
 
 const selectVersion = (versionId: string) => {
   selectedVersionId.value = versionId
@@ -557,6 +568,12 @@ const getFiscalYearAmountTotal = (commitmentType: CommitmentType, yearId: string
     row.commitmentType === commitmentType && row.yearId === yearId
   ))
 
+const getCommitmentTypeUnallocated = (commitmentType: CommitmentType) =>
+  toMoney(agreementProgramFundingTotal.value - getCommitmentTypeAmountTotal(commitmentType))
+
+const getFiscalYearUnallocated = (commitmentType: CommitmentType, yearId: string) =>
+  toMoney(getProgramFunding(yearId) - getFiscalYearAmountTotal(commitmentType, yearId))
+
 const getAmountForRow = (row: AllocationTableRow) => {
   if (row.rowType === 'commitmentType' && row.commitmentType) {
     return getCommitmentTypeAmountTotal(row.commitmentType)
@@ -568,6 +585,25 @@ const getAmountForRow = (row: AllocationTableRow) => {
 
   return row.association ? getAllocationAmount(row.association) : 0
 }
+
+const getUnallocatedForRow = (row: AllocationTableRow): number | null => {
+  if (row.rowType === 'commitmentType' && row.commitmentType) {
+    return getCommitmentTypeUnallocated(row.commitmentType)
+  }
+
+  if (row.rowType === 'fiscalYear' && row.commitmentType) {
+    return getFiscalYearUnallocated(row.commitmentType, row.yearId)
+  }
+
+  return null
+}
+
+const isOverAllocated = (value: number | null) => value !== null && value < -0.01
+
+const getUnallocatedClass = (value: number | null) => [
+  'text-sm font-medium',
+  isOverAllocated(value) ? 'text-error' : 'text-zinc-700 dark:text-zinc-200'
+]
 
 const getGenerationCandidates = () => {
   const selectedYearIds = new Set(generationYearIds.value)
@@ -790,6 +826,10 @@ const text = {
     en: 'Amount',
     fr: 'Montant'
   },
+  unallocated: {
+    en: 'Unallocated',
+    fr: 'Non reparti'
+  },
   version: {
     en: 'Version',
     fr: 'Version'
@@ -876,7 +916,7 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
 </script>
 
 <template>
-  <div class="space-y-6">
+  <div class="w-full min-w-0 max-w-full space-y-6 overflow-hidden">
     <div class="flex items-center justify-between gap-3">
       <h2 class="text-lg font-semibold text-zinc-900 dark:text-white">
         {{ tLocal('title') }}
@@ -903,23 +943,26 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
       <h3 class="text-base font-semibold text-zinc-900 dark:text-white">
         {{ tLocal('allocationVersions') }}
       </h3>
-      <div class="overflow-x-auto rounded-sm border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
-        <table class="min-w-full divide-y divide-zinc-200 text-sm dark:divide-zinc-800">
+      <div class="w-full min-w-0 overflow-x-auto rounded-sm border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
+        <table class="w-full min-w-0 table-fixed divide-y divide-zinc-200 text-sm dark:divide-zinc-800">
           <caption class="sr-only">
             {{ tLocal('allocationVersions') }}
           </caption>
           <thead>
             <tr class="bg-zinc-100 text-left text-xs font-semibold tracking-wide text-zinc-500 uppercase dark:bg-zinc-900 dark:text-zinc-400">
-              <th scope="col" class="min-w-56 px-4 py-4">
+              <th scope="col" class="w-[28%] px-4 py-4">
                 {{ tLocal('version') }}
               </th>
-              <th scope="col" class="min-w-48 px-4 py-4">
+              <th scope="col" class="w-[18%] px-4 py-4">
                 {{ tLocal('status') }}
               </th>
-              <th scope="col" class="min-w-48 px-4 py-4">
+              <th scope="col" class="w-[20%] px-4 py-4">
                 {{ tLocal('amount') }}
               </th>
-              <th scope="col" class="w-40 px-4 py-4 text-right">
+              <th scope="col" class="w-[20%] px-4 py-4">
+                {{ tLocal('unallocated') }}
+              </th>
+              <th scope="col" class="w-[14%] px-4 py-4 text-right">
                 {{ tLocal('actions') }}
               </th>
             </tr>
@@ -962,6 +1005,11 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
               <td class="px-4 py-4 font-semibold">
                 <span>
                   {{ formatMoney(getVersionTotal(version.id)) }}
+                </span>
+              </td>
+              <td class="px-4 py-4 font-semibold">
+                <span :class="getUnallocatedClass(getVersionUnallocated(version.id))">
+                  {{ formatMoney(getVersionUnallocated(version.id)) }}
                 </span>
               </td>
               <td class="px-4 py-4">
@@ -1038,11 +1086,12 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
       </div>
     </div>
 
-    <div class="overflow-hidden rounded-md border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
-      <UTable
-        :data="allocationRows"
-        :columns="allocationColumns"
-        class="min-w-full">
+    <div class="outcome-cost-allocation-table w-full min-w-0 max-w-full overflow-hidden rounded-md border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
+      <div class="w-full min-w-0 overflow-hidden">
+        <UTable
+          :data="allocationRows"
+          :columns="allocationColumns"
+          class="w-full max-w-full table-fixed">
         <template #commitmentLine-cell="{ row }">
           <div v-if="row.original.rowType === 'commitmentType'" class="flex w-full items-center gap-3 py-1">
             <button type="button" class="group flex min-w-0 items-center gap-3 text-left" @click="toggleGroup(row.original.id)">
@@ -1090,7 +1139,7 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
               :model-value="getAllocation(row.original.association)?.allocationMethod ?? 'amount'"
               value-key="value"
               :items="methodOptions"
-              class="w-full min-w-36"
+              class="w-full min-w-0"
               :disabled="!canEditSelectedVersion"
               @update:model-value="updateAllocationMethod(row.original.association, $event)" />
           </div>
@@ -1103,7 +1152,7 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
               type="number"
               min="0"
               step="0.01"
-              class="w-full min-w-40"
+              class="w-full min-w-0"
               :disabled="!canEditSelectedVersion"
               @update:model-value="(value: string | number) => updateAllocationRowValue(row.original, value)" />
           </div>
@@ -1114,7 +1163,16 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
             {{ formatMoney(getAmountForRow(row.original)) }}
           </span>
         </template>
-      </UTable>
+
+        <template #unallocated-cell="{ row }">
+          <span
+            v-if="getUnallocatedForRow(row.original) !== null"
+            :class="getUnallocatedClass(getUnallocatedForRow(row.original))">
+            {{ formatMoney(getUnallocatedForRow(row.original) ?? 0) }}
+          </span>
+        </template>
+        </UTable>
+      </div>
       <div class="border-t border-zinc-200 px-4 py-3 text-xs font-bold tracking-widest text-zinc-400 uppercase dark:border-zinc-800">
         <span v-if="displayedAssociationRows.length > 0">
           {{ displayedAssociationRows.length }} {{ tLocal('records') }}
@@ -1168,3 +1226,42 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
     </UModal>
   </div>
 </template>
+
+<style scoped>
+:deep(.outcome-cost-allocation-table table) {
+  table-layout: fixed;
+  min-width: 0;
+  width: 100%;
+}
+
+:deep(.outcome-cost-allocation-table th),
+:deep(.outcome-cost-allocation-table td) {
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+:deep(.outcome-cost-allocation-table th:nth-child(1)) {
+  width: 28%;
+}
+
+:deep(.outcome-cost-allocation-table th:nth-child(2)) {
+  width: 18%;
+}
+
+:deep(.outcome-cost-allocation-table th:nth-child(3)) {
+  width: 14%;
+}
+
+:deep(.outcome-cost-allocation-table th:nth-child(4)) {
+  width: 14%;
+}
+
+:deep(.outcome-cost-allocation-table th:nth-child(5)) {
+  width: 13%;
+}
+
+:deep(.outcome-cost-allocation-table th:nth-child(6)) {
+  width: 13%;
+}
+</style>
