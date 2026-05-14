@@ -21,6 +21,7 @@ import {
   validateCommitmentMappings
 } from '../shared/allocation'
 import type { OutcomeCostAllocationDb } from './db'
+import { createOutcomeCostAllocationUserError } from './errors'
 
 export interface AgreementOutcome {
   id: string
@@ -264,7 +265,7 @@ export const deleteDraftAllocationVersion = async (
     .executeTakeFirst()
 
   if (!version || version.status !== 'draft') {
-    throw new Error('Only draft cost allocations can be deleted.')
+    throw createOutcomeCostAllocationUserError('GCS_OUTCOME_COST_ALLOCATION_DRAFT_DELETE_REQUIRED', 'allocationVersionId')
   }
 
   await trx
@@ -420,7 +421,7 @@ export const saveAllocations = async (
       .executeTakeFirst()
 
     if (!version || version.status !== 'draft') {
-      throw new Error('Only draft cost allocations can be edited.')
+      throw createOutcomeCostAllocationUserError('GCS_OUTCOME_COST_ALLOCATION_DRAFT_EDIT_REQUIRED', 'allocationVersionId')
     }
 
     await trx
@@ -601,7 +602,7 @@ export const completeAllocationVersion = async (
 ): Promise<CostAllocationVersion> => await db.transaction().execute(async trx => {
   const version = await getAllocationVersion(trx as OutcomeCostAllocationDb, agreementId, allocationVersionId)
   if (!version || version.status !== 'draft') {
-    throw new Error('Only draft cost allocations can be completed.')
+    throw createOutcomeCostAllocationUserError('GCS_OUTCOME_COST_ALLOCATION_DRAFT_COMPLETE_REQUIRED', 'allocationVersionId')
   }
 
   const allocations = await getSavedAllocations(trx as OutcomeCostAllocationDb, agreementId, allocationVersionId)

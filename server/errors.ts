@@ -1,9 +1,15 @@
 /* eslint-disable jsdoc/require-jsdoc */
 import type { H3Event } from 'h3'
 import { getHeader } from 'h3'
+import {
+  createGcsExtensionUserError,
+  type GcsExtensionLocalizedMessage,
+  type GcsExtensionUserErrorDetail,
+  type GcsExtensionUserErrorOptions
+} from '@gcs-ssc/extensions/server'
 import type { AllocationValidationIssue } from '../shared/allocation'
 
-const errorMessages: Record<string, { en: string, fr: string }> = {
+const errorMessages: Record<string, GcsExtensionLocalizedMessage> = {
   GCS_OUTCOME_COST_ALLOCATION_INVALID: {
     en: 'Outcome cost allocations are invalid.',
     fr: 'Les repartitions des couts par resultat sont invalides.'
@@ -67,7 +73,35 @@ const errorMessages: Record<string, { en: string, fr: string }> = {
   GCS_OUTCOME_COST_ALLOCATION_PAYMENT_EXCEEDS_REMAINING: {
     en: 'This payment exceeds the remaining balance of the cost allocation commitment lines.',
     fr: 'Ce paiement depasse le solde restant des lignes d engagement de la repartition des couts.'
+  },
+  GCS_OUTCOME_COST_ALLOCATION_DRAFT_DELETE_REQUIRED: {
+    en: 'Only draft cost allocations can be deleted.',
+    fr: 'Seules les repartitions des couts en ebauche peuvent etre supprimees.'
+  },
+  GCS_OUTCOME_COST_ALLOCATION_DRAFT_EDIT_REQUIRED: {
+    en: 'Only draft cost allocations can be edited.',
+    fr: 'Seules les repartitions des couts en ebauche peuvent etre modifiees.'
+  },
+  GCS_OUTCOME_COST_ALLOCATION_DRAFT_COMPLETE_REQUIRED: {
+    en: 'Only draft cost allocations can be completed.',
+    fr: 'Seules les repartitions des couts en ebauche peuvent etre terminees.'
   }
+}
+
+const defaultLocalizedMessage = (message: GcsExtensionLocalizedMessage): string =>
+  typeof message === 'string' ? message : message.en
+
+const createLocalizedUserError = (options: GcsExtensionUserErrorOptions) => {
+  const error = createGcsExtensionUserError({
+    ...options,
+    message: defaultLocalizedMessage(options.message),
+    details: options.details as GcsExtensionUserErrorDetail[] | undefined
+  })
+
+  return Object.assign(error, {
+    localizedMessage: options.message,
+    details: options.details
+  })
 }
 
 const getLocale = (event: H3Event) => {
@@ -87,6 +121,21 @@ export const getOutcomeCostAllocationErrorMessages = (
   code: string | undefined
 ) => errorMessages[code ?? 'GCS_OUTCOME_COST_ALLOCATION_INVALID']
     ?? errorMessages.GCS_OUTCOME_COST_ALLOCATION_INVALID
+
+export const createOutcomeCostAllocationUserError = (
+  code: string,
+  path?: string
+) => createLocalizedUserError({
+  code,
+  message: getOutcomeCostAllocationErrorMessages(code),
+  details: path
+    ? [{
+        path,
+        code,
+        message: getOutcomeCostAllocationErrorMessages(code)
+      }]
+    : undefined
+})
 
 export const localizeAllocationIssues = (
   event: H3Event,
