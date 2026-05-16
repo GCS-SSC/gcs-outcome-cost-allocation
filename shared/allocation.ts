@@ -84,6 +84,8 @@ export interface PaymentLineAllocationResolved extends PaymentLineAllocationInpu
   paymentAmount: number
 }
 
+type PaymentLineAllocationCandidate = PaymentLineAllocationInput
+
 export const isCommitmentType = (value: unknown): value is CommitmentType =>
   typeof value === 'string' && COMMITMENT_TYPES.includes(value as CommitmentType)
 
@@ -318,21 +320,91 @@ export const validateGeneratedCommitmentLinePaymentCoverage = (
   })
 }
 
+const normalizePaymentLineAllocationCandidates = (
+  lines: PaymentLineAllocationInput[]
+): PaymentLineAllocationCandidate[] => lines
+  .map(line => ({
+    ...line,
+    weightAmount: toMoney(line.weightAmount),
+    remainingAmount: toMoney(line.remainingAmount)
+  }))
+  .filter(line => line.weightAmount > 0 && line.remainingAmount > 0)
+
+const canAllocatePaymentAmount = (
+  candidates: PaymentLineAllocationCandidate[],
+  amountToAllocate: number
+) => {
+  const totalRemaining = toMoney(candidates.reduce((sum, line) => sum + line.remainingAmount, 0))
+  return amountToAllocate > 0
+    && totalRemaining > 0
+    && amountToAllocate <= toMoney(totalRemaining + 0.01)
+}
+
+const recordPaymentLineAllocation = (
+  allocatedByLineId: Map<string, PaymentLineAllocationResolved>,
+  line: PaymentLineAllocationCandidate,
+  paymentLineAmount: number
+) => {
+  const existing = allocatedByLineId.get(line.commitmentLineId)
+  allocatedByLineId.set(line.commitmentLineId, {
+    ...(existing ?? line),
+    paymentAmount: toMoney((existing?.paymentAmount ?? 0) + paymentLineAmount)
+  })
+}
+
+const allocatePaymentRound = (
+  candidates: PaymentLineAllocationCandidate[],
+  remainingPaymentAmount: number,
+  allocatedByLineId: Map<string, PaymentLineAllocationResolved>
+) => {
+  const totalWeight = toMoney(candidates.reduce((sum, line) => sum + line.weightAmount, 0))
+  if (totalWeight <= 0) {
+    return {
+      roundAllocated: 0,
+      roundRemainingAmount: remainingPaymentAmount,
+      nextCandidates: []
+    }
+  }
+
+  const roundStartAmount = remainingPaymentAmount
+  let roundRemainingAmount = remainingPaymentAmount
+  const nextCandidates: PaymentLineAllocationCandidate[] = []
+  for (const [index, line] of candidates.entries()) {
+    const isLastLine = index === candidates.length - 1
+    const targetAmount = isLastLine
+      ? roundRemainingAmount
+      : toMoney(roundStartAmount * line.weightAmount / totalWeight)
+    const paymentLineAmount = toMoney(Math.min(targetAmount, line.remainingAmount, roundRemainingAmount))
+    if (paymentLineAmount <= 0) {
+      nextCandidates.push(line)
+      continue
+    }
+
+    recordPaymentLineAllocation(allocatedByLineId, line, paymentLineAmount)
+    roundRemainingAmount = toMoney(roundRemainingAmount - paymentLineAmount)
+    const nextRemaining = toMoney(line.remainingAmount - paymentLineAmount)
+    if (nextRemaining > 0) {
+      nextCandidates.push({
+        ...line,
+        remainingAmount: nextRemaining
+      })
+    }
+  }
+
+  return {
+    roundAllocated: toMoney(roundStartAmount - roundRemainingAmount),
+    roundRemainingAmount,
+    nextCandidates
+  }
+}
+
 export const allocatePaymentAmountToCommitmentLines = (
   lines: PaymentLineAllocationInput[],
   paymentAmount: number
 ): PaymentLineAllocationResolved[] => {
-  let candidates = lines
-    .map(line => ({
-      ...line,
-      weightAmount: toMoney(line.weightAmount),
-      remainingAmount: toMoney(line.remainingAmount)
-    }))
-    .filter(line => line.weightAmount > 0 && line.remainingAmount > 0)
-
-  const totalRemaining = toMoney(candidates.reduce((sum, line) => sum + line.remainingAmount, 0))
+  let candidates = normalizePaymentLineAllocationCandidates(lines)
   const amountToAllocate = toMoney(paymentAmount)
-  if (amountToAllocate <= 0 || totalRemaining <= 0 || amountToAllocate > toMoney(totalRemaining + 0.01)) {
+  if (!canAllocatePaymentAmount(candidates, amountToAllocate)) {
     return []
   }
 
@@ -340,47 +412,13 @@ export const allocatePaymentAmountToCommitmentLines = (
   const allocatedByLineId = new Map<string, PaymentLineAllocationResolved>()
 
   while (remainingPaymentAmount > 0.009 && candidates.length > 0) {
-    const totalWeight = toMoney(candidates.reduce((sum, line) => sum + line.weightAmount, 0))
-    if (totalWeight <= 0) {
+    const round = allocatePaymentRound(candidates, remainingPaymentAmount, allocatedByLineId)
+    if (round.roundAllocated <= 0) {
       break
     }
 
-    const roundStartAmount = remainingPaymentAmount
-    let roundRemainingAmount = remainingPaymentAmount
-    const nextCandidates: typeof candidates = []
-    for (const [index, line] of candidates.entries()) {
-      const isLastLine = index === candidates.length - 1
-      const targetAmount = isLastLine
-        ? roundRemainingAmount
-        : toMoney(roundStartAmount * line.weightAmount / totalWeight)
-      const paymentLineAmount = toMoney(Math.min(targetAmount, line.remainingAmount, roundRemainingAmount))
-      if (paymentLineAmount <= 0) {
-        nextCandidates.push(line)
-        continue
-      }
-
-      const existing = allocatedByLineId.get(line.commitmentLineId)
-      allocatedByLineId.set(line.commitmentLineId, {
-        ...(existing ?? line),
-        paymentAmount: toMoney((existing?.paymentAmount ?? 0) + paymentLineAmount)
-      })
-      roundRemainingAmount = toMoney(roundRemainingAmount - paymentLineAmount)
-      const nextRemaining = toMoney(line.remainingAmount - paymentLineAmount)
-      if (nextRemaining > 0) {
-        nextCandidates.push({
-          ...line,
-          remainingAmount: nextRemaining
-        })
-      }
-    }
-
-    const roundAllocated = toMoney(roundStartAmount - roundRemainingAmount)
-    if (roundAllocated <= 0) {
-      break
-    }
-
-    remainingPaymentAmount = roundRemainingAmount
-    candidates = nextCandidates
+    remainingPaymentAmount = round.roundRemainingAmount
+    candidates = round.nextCandidates
   }
 
   return Array.from(allocatedByLineId.values())

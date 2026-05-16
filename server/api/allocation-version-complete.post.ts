@@ -25,12 +25,35 @@ type AllocationVersionCompleteEvent = H3Event & {
 const hasAllocationIssues = (error: unknown): error is Error & { issues: AllocationValidationIssue[] } =>
   error instanceof Error && Array.isArray((error as Error & { issues?: unknown }).issues)
 
+const resolveCompletionContext = (event: AllocationVersionCompleteEvent) => ({
+  agreementId: event.context.params?.agreementId ?? '',
+  allocationVersionId: event.context.params?.allocationVersionId ?? '',
+  streamId: event.context.gcsExtension?.entity?.streamId ?? '',
+  config: event.context.gcsExtension?.config ?? {},
+  db: asOutcomeCostAllocationDb(event.context.$db)
+})
+
+const throwCompletionError = (error: unknown): never => {
+  if (!hasAllocationIssues(error)) {
+    throw error
+  }
+
+  const code = error.issues[0]?.code ?? 'GCS_OUTCOME_COST_ALLOCATION_INVALID'
+  throw createGcsExtensionUserError({
+    code,
+    message: getOutcomeCostAllocationErrorMessages(code),
+    details: bilingualAllocationIssues(error.issues)
+  })
+}
+
 export default async (event: AllocationVersionCompleteEvent) => {
-  const agreementId = event.context.params?.agreementId ?? ''
-  const allocationVersionId = event.context.params?.allocationVersionId ?? ''
-  const streamId = event.context.gcsExtension?.entity?.streamId ?? ''
-  const config = event.context.gcsExtension?.config ?? {}
-  const db = asOutcomeCostAllocationDb(event.context.$db)
+  const {
+    agreementId,
+    allocationVersionId,
+    streamId,
+    config,
+    db
+  } = resolveCompletionContext(event)
 
   try {
     const version = await completeAllocationVersion(db, agreementId, streamId, allocationVersionId, config)
@@ -39,15 +62,6 @@ export default async (event: AllocationVersionCompleteEvent) => {
       version
     }
   } catch (error: unknown) {
-    if (!hasAllocationIssues(error)) {
-      throw error
-    }
-
-    const code = error.issues[0]?.code ?? 'GCS_OUTCOME_COST_ALLOCATION_INVALID'
-    throw createGcsExtensionUserError({
-      code,
-      message: getOutcomeCostAllocationErrorMessages(code),
-      details: bilingualAllocationIssues(error.issues)
-    })
+    throwCompletionError(error)
   }
 }

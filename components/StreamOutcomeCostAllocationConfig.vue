@@ -9,6 +9,11 @@ import {
   type StreamCommitmentMapping,
   parseOutcomeCostAllocationConfig
 } from '../shared/allocation'
+import {
+  buildStreamOutcomeAllocationTableRows,
+  type StreamOutcomeAssociationTableRow,
+  type StreamOutcomeHierarchyTableRow
+} from '../shared/stream-outcome-cost-allocation-config'
 
 interface ListResponse<T> {
   items: T[]
@@ -31,31 +36,6 @@ interface StreamCommitmentItem {
   egcs_tp_gl: number
   egcs_tp_gldescription: string
   fiscal_year_display: string
-}
-
-interface AssociationTableRow {
-  id: string
-  commitmentType: CommitmentType
-  commitmentTypeGroup: string
-  fiscalYearGroup: string
-  streamBudgetId: string
-  streamCommitmentId: string
-  outcomeId: string
-  lineLabel: string
-  outcomeLabel: string
-}
-
-interface HierarchyTableRow {
-  id: string
-  rowType: 'commitmentType' | 'fiscalYear' | 'association'
-  commitmentType?: CommitmentType
-  commitmentTypeGroup: string
-  fiscalYearGroup: string
-  streamBudgetId: string
-  lineLabel: string
-  outcomeLabel: string
-  associationCount: number
-  association?: AssociationTableRow
 }
 
 interface AssociationDraft {
@@ -161,7 +141,7 @@ const getOutcomeName = (outcomeId: string) => {
 const getBudgetDisplay = (streamBudgetId: string) =>
   budgets.value.find((budget: StreamBudgetItem) => String(budget.id) === streamBudgetId)?.fiscal_year_display ?? streamBudgetId
 
-const associationRows = computed<AssociationTableRow[]>(() => localConfig.value.mappings.map(mapping => {
+const associationRows = computed<StreamOutcomeAssociationTableRow[]>(() => localConfig.value.mappings.map(mapping => {
   const commitment = findCommitment(mapping.streamCommitmentId)
   const commitmentTypeLabel = isFrench.value
     ? commitmentTypeLabels[mapping.commitmentType].fr
@@ -194,8 +174,6 @@ const associationRows = computed<AssociationTableRow[]>(() => localConfig.value.
   return a.outcomeLabel.localeCompare(b.outcomeLabel)
 }))
 
-const getCommitmentTypeGroupId = (commitmentType: CommitmentType) => `type:${commitmentType}`
-const getFiscalYearGroupId = (commitmentType: CommitmentType, fiscalYearGroup: string) => `year:${commitmentType}:${fiscalYearGroup}`
 const isExpanded = (groupId: string) => expandedRows.value[groupId] === true
 const toggleGroup = (groupId: string) => {
   expandedRows.value = {
@@ -204,72 +182,10 @@ const toggleGroup = (groupId: string) => {
   }
 }
 
-const tableRows = computed<HierarchyTableRow[]>(() => {
-  const rows: HierarchyTableRow[] = []
-
-  for (const commitmentType of COMMITMENT_TYPES) {
-    const typeRows = associationRows.value.filter(row => row.commitmentType === commitmentType)
-    if (typeRows.length === 0) {
-      continue
-    }
-
-    const commitmentTypeGroup = isFrench.value
-      ? commitmentTypeLabels[commitmentType].fr
-      : commitmentTypeLabels[commitmentType].en
-    const typeGroupId = getCommitmentTypeGroupId(commitmentType)
-    rows.push({
-      id: typeGroupId,
-      rowType: 'commitmentType',
-      commitmentType,
-      commitmentTypeGroup,
-      fiscalYearGroup: '',
-      streamBudgetId: '',
-      lineLabel: commitmentTypeGroup,
-      outcomeLabel: `${typeRows.length} ${tLocal('records')}`,
-      associationCount: typeRows.length
-    })
-
-    if (!isExpanded(typeGroupId)) {
-      continue
-    }
-
-    const fiscalYears = Array.from(new Set(typeRows.map(row => row.fiscalYearGroup))).sort()
-    for (const fiscalYearGroup of fiscalYears) {
-      const yearRows = typeRows.filter(row => row.fiscalYearGroup === fiscalYearGroup)
-      const yearGroupId = getFiscalYearGroupId(commitmentType, fiscalYearGroup)
-      rows.push({
-        id: yearGroupId,
-        rowType: 'fiscalYear',
-        commitmentType,
-        commitmentTypeGroup,
-        fiscalYearGroup,
-        streamBudgetId: '',
-        lineLabel: fiscalYearGroup,
-        outcomeLabel: `${yearRows.length} ${tLocal('records')}`,
-        associationCount: yearRows.length
-      })
-
-      if (!isExpanded(yearGroupId)) {
-        continue
-      }
-
-      rows.push(...yearRows.map(row => ({
-        id: row.id,
-        rowType: 'association' as const,
-        commitmentType,
-        commitmentTypeGroup,
-        fiscalYearGroup,
-        streamBudgetId: row.streamBudgetId,
-        lineLabel: row.lineLabel,
-        outcomeLabel: row.outcomeLabel,
-        associationCount: 1,
-        association: row
-      })))
-    }
-  }
-
-  return rows
-})
+const tableRows = computed<StreamOutcomeHierarchyTableRow[]>(() => buildStreamOutcomeAllocationTableRows(associationRows.value, {
+  isExpanded,
+  recordsLabel: tLocal('records')
+}))
 
 const findCommitment = (streamCommitmentId: string) =>
   commitments.value.find((commitment: StreamCommitmentItem) => String(commitment.id) === streamCommitmentId) ?? null

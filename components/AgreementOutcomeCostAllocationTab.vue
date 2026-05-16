@@ -15,6 +15,22 @@ import {
   toMoney,
   validateAllocationTotals
 } from '../shared/allocation'
+import {
+  buildOutcomeAllocationRows,
+  completeOutcomeAllocationSelectedVersion,
+  completeOutcomeAllocationVersionRequest,
+  deleteOutcomeAllocationDraftVersionRequest,
+  type AllocationTableRow,
+  type ConfiguredAssociationRow,
+  getOutcomeAllocationVersionEndpoint,
+  getOutcomeAllocationVersionsEndpoint,
+  getOutcomeAllocationResponseErrorMessage,
+  getOutcomeAllocationToastText,
+  resolveCreatedDraftVersionId,
+  resolveDeletedDraftVersionId,
+  resolveSelectedOutcomeAllocationVersionId,
+  saveOutcomeAllocationsRequest
+} from '../shared/agreement-outcome-cost-allocation-tab'
 
 interface AllocationResponse {
   outcomes: Array<{
@@ -42,47 +58,6 @@ interface AllocationResponse {
 type AllocationOutcome = AllocationResponse['outcomes'][number]
 type AllocationBudgetYear = AllocationResponse['budgetYears'][number]
 type AllocationStreamCommitment = AllocationResponse['streamCommitments'][number]
-
-interface ConfiguredAssociationRow {
-  id: string
-  commitmentType: CommitmentType
-  commitmentTypeLabel: string
-  yearId: string
-  yearLabel: string
-  programFunding: number
-  streamBudgetId: string
-  streamCommitmentId: string
-  commitmentLineLabel: string
-  outcomeId: string
-  outcomeLabel: string
-}
-
-interface AllocationTableRow {
-  id: string
-  rowType: 'commitmentType' | 'fiscalYear' | 'association'
-  commitmentType?: CommitmentType
-  commitmentTypeLabel: string
-  yearId: string
-  yearLabel: string
-  streamBudgetId: string
-  commitmentLineLabel: string
-  outcomeId: string
-  outcomeLabel: string
-  associationCount: number
-  programFunding: number
-  association?: ConfiguredAssociationRow
-}
-
-interface ApiErrorResponse {
-  message?: string
-  statusMessage?: string
-  data?: {
-    message?: string
-    details?: Array<{
-      message?: string
-    }>
-  }
-}
 
 const {
   extensionKey,
@@ -126,15 +101,14 @@ const refresh = async () => {
 }
 await refresh()
 
-watch(() => data.value, value => {
+const syncAllocationResponse = (value: AllocationResponse | null) => {
   allocations.value = value?.allocations.map((allocation: VersionedOutcomeAllocationInput) => ({ ...allocation })) ?? []
   const versions = value?.versions ?? []
-  if (!selectedVersionId.value || !versions.some((version: CostAllocationVersion) => version.id === selectedVersionId.value)) {
-    selectedVersionId.value = versions.find((version: CostAllocationVersion) => version.status === 'draft')?.id
-      ?? versions.find((version: CostAllocationVersion) => version.status === 'active')?.id
-      ?? versions[0]?.id
-      ?? ''
-  }
+  selectedVersionId.value = resolveSelectedOutcomeAllocationVersionId(selectedVersionId.value, versions)
+}
+
+watch(() => data.value, value => {
+  syncAllocationResponse(value)
 }, { immediate: true })
 
 const outcomes = computed<AllocationOutcome[]>(() => data.value?.outcomes ?? [])
@@ -292,8 +266,6 @@ const configuredAssociationRows = computed<ConfiguredAssociationRow[]>(() => str
   return a.outcomeLabel.localeCompare(b.outcomeLabel)
 }))
 
-const getCommitmentTypeGroupId = (commitmentType: CommitmentType) => `type:${commitmentType}`
-const getFiscalYearGroupId = (commitmentType: CommitmentType, yearId: string) => `year:${commitmentType}:${yearId}`
 const getAllocationKey = (allocation: {
   commitmentType?: CommitmentType
   streamCommitmentId?: string
@@ -335,84 +307,10 @@ const toggleGroup = (groupId: string) => {
   }
 }
 
-const allocationRows = computed<AllocationTableRow[]>(() => {
-  const rows: AllocationTableRow[] = []
-
-  for (const commitmentType of COMMITMENT_TYPES) {
-    const typeRows = displayedAssociationRows.value.filter((row: ConfiguredAssociationRow) => row.commitmentType === commitmentType)
-    if (typeRows.length === 0) {
-      continue
-    }
-
-    const commitmentTypeLabel = getCommitmentTypeLabel(commitmentType)
-    const typeGroupId = getCommitmentTypeGroupId(commitmentType)
-    rows.push({
-      id: typeGroupId,
-      rowType: 'commitmentType',
-      commitmentType,
-      commitmentTypeLabel,
-      yearId: '',
-      yearLabel: '',
-      streamBudgetId: '',
-      commitmentLineLabel: commitmentTypeLabel,
-      outcomeId: '',
-      outcomeLabel: `${typeRows.length} ${tLocal('records')}`,
-      associationCount: typeRows.length,
-      programFunding: 0
-    })
-
-    if (!isExpanded(typeGroupId)) {
-      continue
-    }
-
-    const yearIds = Array.from(new Set(typeRows.map((row: ConfiguredAssociationRow) => row.yearId)))
-    for (const yearId of yearIds) {
-      const yearRows = typeRows.filter((row: ConfiguredAssociationRow) => row.yearId === yearId)
-      const firstYearRow = yearRows[0]
-      if (!firstYearRow) {
-        continue
-      }
-
-      const yearGroupId = getFiscalYearGroupId(commitmentType, yearId)
-      rows.push({
-        id: yearGroupId,
-        rowType: 'fiscalYear',
-        commitmentType,
-        commitmentTypeLabel,
-        yearId,
-        yearLabel: firstYearRow.yearLabel,
-        streamBudgetId: firstYearRow.streamBudgetId,
-        commitmentLineLabel: firstYearRow.yearLabel,
-        outcomeId: '',
-        outcomeLabel: `${yearRows.length} ${tLocal('records')}`,
-        associationCount: yearRows.length,
-        programFunding: firstYearRow.programFunding
-      })
-
-      if (!isExpanded(yearGroupId)) {
-        continue
-      }
-
-      rows.push(...yearRows.map(row => ({
-        id: row.id,
-        rowType: 'association' as const,
-        commitmentType,
-        commitmentTypeLabel,
-        yearId: row.yearId,
-        yearLabel: row.yearLabel,
-        streamBudgetId: row.streamBudgetId,
-        commitmentLineLabel: row.commitmentLineLabel,
-        outcomeId: row.outcomeId,
-        outcomeLabel: row.outcomeLabel,
-        associationCount: 1,
-        programFunding: row.programFunding,
-        association: row
-      })))
-    }
-  }
-
-  return rows
-})
+const allocationRows = computed<AllocationTableRow[]>(() => buildOutcomeAllocationRows(displayedAssociationRows.value, {
+  isExpanded,
+  recordsLabel: tLocal('records')
+}))
 
 const getAllocation = (association: ConfiguredAssociationRow): VersionedOutcomeAllocationInput | null => allocations.value.find(allocation =>
     allocation.allocationVersionId === selectedVersionId.value
@@ -655,19 +553,6 @@ const applyGeneratedRows = async () => {
   isGenerateModalOpen.value = false
 }
 
-const getResponseErrorMessage = async (response: Response) => {
-  try {
-    const body = await response.json() as ApiErrorResponse
-    return body.data?.message
-      ?? body.data?.details?.[0]?.message
-      ?? body.message
-      ?? body.statusMessage
-      ?? response.statusText
-  } catch {
-    return response.statusText
-  }
-}
-
 const save = async () => {
   if (isSaving.value || !canEditSelectedVersion.value || !selectedVersionId.value) {
     return false
@@ -676,21 +561,13 @@ const save = async () => {
   try {
     isSaving.value = true
     saveError.value = ''
-    const response = await fetch(getClientRequestUrl(endpoint.value), {
-      method: 'PUT',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        allocationVersionId: selectedVersionId.value,
-        allocations: activeAllocations.value
-      })
-    })
-    if (!response.ok) throw new Error(await getResponseErrorMessage(response))
+    await saveOutcomeAllocationsRequest(
+      getClientRequestUrl(endpoint.value),
+      selectedVersionId.value,
+      activeAllocations.value
+    )
     await refresh()
-    toast.add({
-      title: locale.value === 'fr' ? 'Succes' : 'Success',
-      description: locale.value === 'fr' ? 'Repartition enregistree.' : 'Allocation saved.',
-      color: 'success'
-    })
+    toast.add({ ...getOutcomeAllocationToastText(locale.value, 'saved'), color: 'success' })
     return true
   } catch (error: unknown) {
     saveError.value = error instanceof Error ? error.message : String(error)
@@ -700,48 +577,20 @@ const save = async () => {
   }
 }
 
-const completeSelectedVersion = async () => {
-  if (isCompleting.value || !canEditSelectedVersion.value || !selectedVersionId.value) {
-    return
-  }
-
-  if (validationIssues.value.length > 0) {
-    toast.add({
-      title: locale.value === 'fr' ? 'Erreur' : 'Error',
-      description: validationMessage.value,
-      color: 'error'
-    })
-    return
-  }
-
-  try {
-    isCompleting.value = true
-    saveError.value = ''
-    const saved = await save()
-    if (!saved) {
-      return
-    }
-    const response = await fetch(getClientRequestUrl(`${endpoint.value.replace('/allocations', '/allocation-versions')}/${selectedVersionId.value}/complete`), {
-      method: 'POST'
-    })
-    if (!response.ok) throw new Error(await getResponseErrorMessage(response))
-    await refresh()
-    toast.add({
-      title: locale.value === 'fr' ? 'Succes' : 'Success',
-      description: locale.value === 'fr' ? 'Repartition activee.' : 'Cost allocation activated.',
-      color: 'success'
-    })
-  } catch (error: unknown) {
-    saveError.value = error instanceof Error ? error.message : String(error)
-    toast.add({
-      title: locale.value === 'fr' ? 'Erreur' : 'Error',
-      description: saveError.value,
-      color: 'error'
-    })
-  } finally {
-    isCompleting.value = false
-  }
-}
+const completeSelectedVersion = async () => completeOutcomeAllocationSelectedVersion({
+  isCompleting,
+  canEditSelectedVersion: canEditSelectedVersion.value,
+  selectedVersionId: selectedVersionId.value,
+  validationIssueCount: validationIssues.value.length,
+  validationMessage: validationMessage.value,
+  locale: locale.value,
+  saveError,
+  save,
+  refresh,
+  buildCompleteRequestUrl: versionId => getClientRequestUrl(`${getOutcomeAllocationVersionEndpoint(endpoint.value, versionId)}/complete`),
+  toast,
+  completeRequest: completeOutcomeAllocationVersionRequest
+})
 
 const createDraftVersion = async () => {
   if (isCreatingDraft.value) {
@@ -751,15 +600,13 @@ const createDraftVersion = async () => {
   try {
     isCreatingDraft.value = true
     saveError.value = ''
-    const fetchResponse = await fetch(getClientRequestUrl(endpoint.value.replace('/allocations', '/allocation-versions')), {
+    const fetchResponse = await fetch(getClientRequestUrl(getOutcomeAllocationVersionsEndpoint(endpoint.value)), {
       method: 'POST'
     })
-    if (!fetchResponse.ok) throw new Error(await getResponseErrorMessage(fetchResponse))
+    if (!fetchResponse.ok) throw new Error(await getOutcomeAllocationResponseErrorMessage(fetchResponse))
     const response = await fetchResponse.json() as { version?: CostAllocationVersion }
     await refresh()
-    if (response.version?.id) {
-      selectedVersionId.value = response.version.id
-    }
+    selectedVersionId.value = resolveCreatedDraftVersionId(selectedVersionId.value, response)
   } catch (error: unknown) {
     saveError.value = error instanceof Error ? error.message : String(error)
   } finally {
@@ -775,19 +622,12 @@ const deleteDraftVersion = async (versionId: string) => {
   try {
     deletingVersionId.value = versionId
     saveError.value = ''
-    const response = await fetch(getClientRequestUrl(`${endpoint.value.replace('/allocations', '/allocation-versions')}/${versionId}`), {
-      method: 'DELETE'
-    })
-    if (!response.ok) throw new Error(await getResponseErrorMessage(response))
-    if (selectedVersionId.value === versionId) {
-      selectedVersionId.value = ''
-    }
+    await deleteOutcomeAllocationDraftVersionRequest(
+      getClientRequestUrl(getOutcomeAllocationVersionEndpoint(endpoint.value, versionId))
+    )
+    selectedVersionId.value = resolveDeletedDraftVersionId(selectedVersionId.value, versionId)
     await refresh()
-    toast.add({
-      title: locale.value === 'fr' ? 'Succes' : 'Success',
-      description: locale.value === 'fr' ? 'Brouillon supprime.' : 'Draft allocation deleted.',
-      color: 'success'
-    })
+    toast.add({ ...getOutcomeAllocationToastText(locale.value, 'deleted'), color: 'success' })
   } catch (error: unknown) {
     saveError.value = error instanceof Error ? error.message : String(error)
   } finally {

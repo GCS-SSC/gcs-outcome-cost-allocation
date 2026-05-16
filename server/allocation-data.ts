@@ -56,6 +56,17 @@ type GeneratedPaymentLine = {
   amount: number
 }
 
+type PaymentLineInput = {
+  commitmentLineId: string
+  weightAmount: number
+  remainingAmount: number
+}
+
+type CommitmentLinePaymentCoverage = {
+  id: string
+  amount: number
+}
+
 const PAYMENT_COVERAGE_EXCLUDED_STATUSES = ['denied']
 
 const mapAllocationVersion = (row: {
@@ -769,6 +780,187 @@ export const getGeneratedCommitmentLines = async (
   }
 }
 
+const getMappedStreamCommitmentId = (
+  parsedConfig: ReturnType<typeof parseOutcomeCostAllocationConfig>,
+  commitmentType: CommitmentType,
+  allocation: OutcomeAllocationResolved,
+  streamBudgetIdsByAgreementBudgetFiscalYearId: Map<string, string>
+): string => {
+  const streamBudgetId = streamBudgetIdsByAgreementBudgetFiscalYearId.get(allocation.agreementBudgetFiscalYearId) ?? ''
+  const mapping = parsedConfig.mappings.find(candidate =>
+    candidate.commitmentType === commitmentType
+    && candidate.outcomeId === allocation.outcomeId
+    && candidate.streamBudgetId === streamBudgetId
+    && (!allocation.streamCommitmentId || candidate.streamCommitmentId === allocation.streamCommitmentId)
+  )
+
+  return mapping?.streamCommitmentId ?? ''
+}
+
+const getPaymentContext = async (
+  db: OutcomeCostAllocationDb,
+  agreementId: string,
+  streamId: string,
+  commitmentType: CommitmentType,
+  activeVersionId: string,
+  parsedConfig: ReturnType<typeof parseOutcomeCostAllocationConfig>
+) => {
+  const [allocations, budgetYears, outcomes, activeStreamCommitmentIds] = await Promise.all([
+    getSavedAllocations(db, agreementId, activeVersionId),
+    getAgreementBudgetYears(db, agreementId, streamId),
+    getAgreementOutcomes(db, agreementId),
+    getActiveStreamCommitmentIds(db, streamId)
+  ])
+  const yearTotals: YearFundingTotal[] = budgetYears.map(year => ({
+    agreementBudgetFiscalYearId: String(year.id),
+    programFunding: Number(year.program_funding)
+  }))
+  const scopedAllocations = allocations.filter(allocation => allocation.commitmentType === commitmentType)
+  const streamBudgetIdsByAgreementBudgetFiscalYearId = new Map(budgetYears.map(year => [
+    String(year.id),
+    String(year.stream_budget_id ?? '')
+  ]))
+  const resolvedAllocations = resolveAllocationAmounts(scopedAllocations, yearTotals)
+
+  return {
+    referenceIssues: validateAllocationReferences(
+      scopedAllocations,
+      yearTotals,
+      new Set(outcomes.map(outcome => String(outcome.id)))
+    ),
+    mappingIssues: validateCommitmentMappings(
+      commitmentType,
+      resolvedAllocations,
+      parsedConfig,
+      streamBudgetIdsByAgreementBudgetFiscalYearId,
+      activeStreamCommitmentIds
+    ),
+    resolvedAllocations,
+    streamBudgetIdsByAgreementBudgetFiscalYearId
+  }
+}
+
+const getDesiredStreamCommitmentIds = (
+  parsedConfig: ReturnType<typeof parseOutcomeCostAllocationConfig>,
+  commitmentType: CommitmentType,
+  paymentAllocations: OutcomeAllocationResolved[],
+  streamBudgetIdsByAgreementBudgetFiscalYearId: Map<string, string>
+): Set<string> => new Set(paymentAllocations.flatMap(allocation => {
+  const streamCommitmentId = getMappedStreamCommitmentId(
+    parsedConfig,
+    commitmentType,
+    allocation,
+    streamBudgetIdsByAgreementBudgetFiscalYearId
+  )
+
+  return streamCommitmentId ? [streamCommitmentId] : []
+}))
+
+const getCommitmentLineCoverageByStreamCommitmentId = async (
+  db: OutcomeCostAllocationDb,
+  commitmentId: string,
+  desiredStreamCommitmentIds: Set<string>
+): Promise<{
+  commitmentLineByStreamCommitmentId: Map<string, CommitmentLinePaymentCoverage>
+  paidAmountByCommitmentLineId: Map<string, number>
+}> => {
+  const commitmentLines = await db
+    .selectFrom('Funding_Case_Agreement_Commitment_Line')
+    .where('egcs_fc_commitment', '=', commitmentId)
+    .where('egcs_fc_transferpaymentstreamcommitment', 'in', Array.from(desiredStreamCommitmentIds))
+    .where('_deleted', '=', false)
+    .select([
+      'id',
+      'egcs_fc_transferpaymentstreamcommitment',
+      'egcs_fc_amount'
+    ])
+    .forUpdate()
+    .execute()
+  const commitmentLineByStreamCommitmentId = new Map(commitmentLines.map(line => [
+    String(line.egcs_fc_transferpaymentstreamcommitment),
+    {
+      id: String(line.id),
+      amount: Number(line.egcs_fc_amount)
+    }
+  ]))
+  const paidRows = commitmentLines.length === 0
+    ? []
+    : await db
+        .selectFrom('Funding_Case_Agreement_Payment_Line')
+        .innerJoin(
+          'Funding_Case_Agreement_Payment',
+          'Funding_Case_Agreement_Payment.id',
+          'Funding_Case_Agreement_Payment_Line.egcs_fc_fundingagreementpayment'
+        )
+        .where('Funding_Case_Agreement_Payment_Line.egcs_fc_fundingagreementcommitmentline', 'in', commitmentLines.map(line => String(line.id)))
+        .where('Funding_Case_Agreement_Payment_Line._deleted', '=', false)
+        .where('Funding_Case_Agreement_Payment._deleted', '=', false)
+        .where('Funding_Case_Agreement_Payment.egcs_fc_status', 'not in', PAYMENT_COVERAGE_EXCLUDED_STATUSES)
+        .select([
+          'Funding_Case_Agreement_Payment_Line.egcs_fc_fundingagreementcommitmentline as commitment_line_id',
+          sql<number>`COALESCE(SUM(${sql.ref('Funding_Case_Agreement_Payment_Line.egcs_fc_amount')}), 0)`.as('paid_amount')
+        ])
+        .groupBy('Funding_Case_Agreement_Payment_Line.egcs_fc_fundingagreementcommitmentline')
+        .execute()
+
+  return {
+    commitmentLineByStreamCommitmentId,
+    paidAmountByCommitmentLineId: new Map(paidRows.map(row => [
+      String(row.commitment_line_id),
+      Number(row.paid_amount)
+    ]))
+  }
+}
+
+const getPaymentLineInputs = (
+  parsedConfig: ReturnType<typeof parseOutcomeCostAllocationConfig>,
+  commitmentType: CommitmentType,
+  paymentAllocations: OutcomeAllocationResolved[],
+  streamBudgetIdsByAgreementBudgetFiscalYearId: Map<string, string>,
+  commitmentLineByStreamCommitmentId: Map<string, CommitmentLinePaymentCoverage>,
+  paidAmountByCommitmentLineId: Map<string, number>
+): {
+  paymentLineInputs: PaymentLineInput[]
+  paymentLineIssues: AllocationValidationIssue[]
+} => {
+  const paymentLineInputByCommitmentLineId = new Map<string, PaymentLineInput>()
+  const paymentLineIssues: AllocationValidationIssue[] = []
+
+  for (const [index, allocation] of paymentAllocations.entries()) {
+    const streamCommitmentId = getMappedStreamCommitmentId(
+      parsedConfig,
+      commitmentType,
+      allocation,
+      streamBudgetIdsByAgreementBudgetFiscalYearId
+    )
+    const commitmentLine = streamCommitmentId
+      ? commitmentLineByStreamCommitmentId.get(streamCommitmentId)
+      : undefined
+
+    if (!streamCommitmentId || !commitmentLine) {
+      paymentLineIssues.push({
+        code: 'GCS_OUTCOME_COST_ALLOCATION_PAYMENT_COMMITMENT_LINE_MISSING',
+        path: `allocations.${index}`,
+        message: 'apiErrors.extensions.outcome_cost_allocation.payment_commitment_line_missing'
+      })
+      continue
+    }
+
+    const paidAmount = paidAmountByCommitmentLineId.get(commitmentLine.id) ?? 0
+    const existingInput = paymentLineInputByCommitmentLineId.get(commitmentLine.id)
+    paymentLineInputByCommitmentLineId.set(commitmentLine.id, {
+      commitmentLineId: commitmentLine.id,
+      weightAmount: toMoney((existingInput?.weightAmount ?? 0) + allocation.amount),
+      remainingAmount: toMoney(commitmentLine.amount - paidAmount)
+    })
+  }
+
+  return {
+    paymentLineInputs: Array.from(paymentLineInputByCommitmentLineId.values()),
+    paymentLineIssues
+  }
+}
+
 export const getGeneratedPaymentLines = async (
   db: OutcomeCostAllocationDb,
   agreementId: string,
@@ -819,50 +1011,23 @@ export const getGeneratedPaymentLines = async (
     }
   }
 
-  const [allocations, budgetYears, outcomes, activeStreamCommitmentIds] = await Promise.all([
-    getSavedAllocations(db, agreementId, activeVersion.id),
-    getAgreementBudgetYears(db, agreementId, streamId),
-    getAgreementOutcomes(db, agreementId),
-    getActiveStreamCommitmentIds(db, streamId)
-  ])
-  const yearTotals: YearFundingTotal[] = budgetYears.map(year => ({
-    agreementBudgetFiscalYearId: String(year.id),
-    programFunding: Number(year.program_funding)
-  }))
-  const scopedAllocations = allocations.filter(allocation => allocation.commitmentType === commitmentType)
-  const referenceIssues = validateAllocationReferences(
-    scopedAllocations,
-    yearTotals,
-    new Set(outcomes.map(outcome => String(outcome.id)))
-  )
-  const resolvedAllocations = resolveAllocationAmounts(scopedAllocations, yearTotals)
-  const streamBudgetIdsByAgreementBudgetFiscalYearId = new Map(budgetYears.map(year => [
-    String(year.id),
-    String(year.stream_budget_id ?? '')
-  ]))
-  const mappingIssues = validateCommitmentMappings(
-    commitmentType,
+  const {
+    referenceIssues,
+    mappingIssues,
     resolvedAllocations,
-    parsedConfig,
-    streamBudgetIdsByAgreementBudgetFiscalYearId,
-    activeStreamCommitmentIds
-  )
+    streamBudgetIdsByAgreementBudgetFiscalYearId
+  } = await getPaymentContext(db, agreementId, streamId, commitmentType, activeVersion.id, parsedConfig)
   const paymentAllocations = resolvedAllocations.filter(allocation =>
     allocation.agreementBudgetFiscalYearId === agreementBudgetFiscalYearId
     && allocation.amount > 0
   )
 
-  const desiredStreamCommitmentIds = new Set(paymentAllocations.flatMap(allocation => {
-    const streamBudgetId = streamBudgetIdsByAgreementBudgetFiscalYearId.get(allocation.agreementBudgetFiscalYearId) ?? ''
-    const mapping = parsedConfig.mappings.find(candidate =>
-      candidate.commitmentType === commitmentType
-      && candidate.outcomeId === allocation.outcomeId
-      && candidate.streamBudgetId === streamBudgetId
-      && (!allocation.streamCommitmentId || candidate.streamCommitmentId === allocation.streamCommitmentId)
-    )
-
-    return mapping?.streamCommitmentId ? [mapping.streamCommitmentId] : []
-  }))
+  const desiredStreamCommitmentIds = getDesiredStreamCommitmentIds(
+    parsedConfig,
+    commitmentType,
+    paymentAllocations,
+    streamBudgetIdsByAgreementBudgetFiscalYearId
+  )
 
   if (desiredStreamCommitmentIds.size === 0) {
     return {
@@ -880,86 +1045,21 @@ export const getGeneratedPaymentLines = async (
     }
   }
 
-  const commitmentLines = await db
-    .selectFrom('Funding_Case_Agreement_Commitment_Line')
-    .where('egcs_fc_commitment', '=', commitmentId)
-    .where('egcs_fc_transferpaymentstreamcommitment', 'in', Array.from(desiredStreamCommitmentIds))
-    .where('_deleted', '=', false)
-    .select([
-      'id',
-      'egcs_fc_transferpaymentstreamcommitment',
-      'egcs_fc_amount'
-    ])
-    .forUpdate()
-    .execute()
-  const commitmentLineByStreamCommitmentId = new Map(commitmentLines.map(line => [
-    String(line.egcs_fc_transferpaymentstreamcommitment),
-    {
-      id: String(line.id),
-      amount: Number(line.egcs_fc_amount)
-    }
-  ]))
-  const paidRows = commitmentLines.length === 0
-    ? []
-    : await db
-        .selectFrom('Funding_Case_Agreement_Payment_Line')
-        .innerJoin(
-          'Funding_Case_Agreement_Payment',
-          'Funding_Case_Agreement_Payment.id',
-          'Funding_Case_Agreement_Payment_Line.egcs_fc_fundingagreementpayment'
-        )
-        .where('Funding_Case_Agreement_Payment_Line.egcs_fc_fundingagreementcommitmentline', 'in', commitmentLines.map(line => String(line.id)))
-        .where('Funding_Case_Agreement_Payment_Line._deleted', '=', false)
-        .where('Funding_Case_Agreement_Payment._deleted', '=', false)
-        .where('Funding_Case_Agreement_Payment.egcs_fc_status', 'not in', PAYMENT_COVERAGE_EXCLUDED_STATUSES)
-        .select([
-          'Funding_Case_Agreement_Payment_Line.egcs_fc_fundingagreementcommitmentline as commitment_line_id',
-          sql<number>`COALESCE(SUM(${sql.ref('Funding_Case_Agreement_Payment_Line.egcs_fc_amount')}), 0)`.as('paid_amount')
-        ])
-        .groupBy('Funding_Case_Agreement_Payment_Line.egcs_fc_fundingagreementcommitmentline')
-        .execute()
-  const paidAmountByCommitmentLineId = new Map(paidRows.map(row => [
-    String(row.commitment_line_id),
-    Number(row.paid_amount)
-  ]))
-  const paymentLineInputByCommitmentLineId = new Map<string, {
-    commitmentLineId: string
-    weightAmount: number
-    remainingAmount: number
-  }>()
-  const paymentLineIssues: AllocationValidationIssue[] = []
-
-  for (const [index, allocation] of paymentAllocations.entries()) {
-    const streamBudgetId = streamBudgetIdsByAgreementBudgetFiscalYearId.get(allocation.agreementBudgetFiscalYearId) ?? ''
-    const mapping = parsedConfig.mappings.find(candidate =>
-      candidate.commitmentType === commitmentType
-      && candidate.outcomeId === allocation.outcomeId
-      && candidate.streamBudgetId === streamBudgetId
-      && (!allocation.streamCommitmentId || candidate.streamCommitmentId === allocation.streamCommitmentId)
-    )
-    const commitmentLine = mapping?.streamCommitmentId
-      ? commitmentLineByStreamCommitmentId.get(mapping.streamCommitmentId)
-      : undefined
-
-    if (!mapping || !commitmentLine) {
-      paymentLineIssues.push({
-        code: 'GCS_OUTCOME_COST_ALLOCATION_PAYMENT_COMMITMENT_LINE_MISSING',
-        path: `allocations.${index}`,
-        message: 'apiErrors.extensions.outcome_cost_allocation.payment_commitment_line_missing'
-      })
-      continue
-    }
-
-    const paidAmount = paidAmountByCommitmentLineId.get(commitmentLine.id) ?? 0
-    const existingInput = paymentLineInputByCommitmentLineId.get(commitmentLine.id)
-    paymentLineInputByCommitmentLineId.set(commitmentLine.id, {
-      commitmentLineId: commitmentLine.id,
-      weightAmount: toMoney((existingInput?.weightAmount ?? 0) + allocation.amount),
-      remainingAmount: toMoney(commitmentLine.amount - paidAmount)
-    })
-  }
-
-  const paymentLineInputs = Array.from(paymentLineInputByCommitmentLineId.values())
+  const {
+    commitmentLineByStreamCommitmentId,
+    paidAmountByCommitmentLineId
+  } = await getCommitmentLineCoverageByStreamCommitmentId(db, commitmentId, desiredStreamCommitmentIds)
+  const {
+    paymentLineInputs,
+    paymentLineIssues
+  } = getPaymentLineInputs(
+    parsedConfig,
+    commitmentType,
+    paymentAllocations,
+    streamBudgetIdsByAgreementBudgetFiscalYearId,
+    commitmentLineByStreamCommitmentId,
+    paidAmountByCommitmentLineId
+  )
   const remainingTotal = toMoney(paymentLineInputs.reduce((sum, line) => sum + line.remainingAmount, 0))
   if (toMoney(paymentAmount) > toMoney(remainingTotal + 0.01)) {
     paymentLineIssues.push({

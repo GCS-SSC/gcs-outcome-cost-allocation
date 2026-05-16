@@ -102,38 +102,47 @@ const errorMessages: Record<string, { en: string, fr: string }> = {
   }
 }
 
+type ExtensionActionError = {
+  data?: {
+    code?: string
+    message?: string
+    data?: {
+      code?: string
+      message?: string
+    }
+  }
+  message?: string
+}
+
+const getConfiguredErrorMessage = (errorCode?: string) => {
+  const configuredMessage = errorCode ? errorMessages[errorCode] : undefined
+  if (!configuredMessage) {
+    return null
+  }
+
+  return locale.value === 'fr' ? configuredMessage.fr : configuredMessage.en
+}
+
+const getFallbackErrorMessage = (error: ExtensionActionError, rawError: unknown) =>
+  error.data?.data?.message
+  ?? error.data?.message
+  ?? error.message
+  ?? String(rawError)
+
 const resolveErrorMessage = (error: unknown): string => {
   if (!error || typeof error !== 'object') {
     return String(error)
   }
 
-  const err = error as {
-    data?: {
-      code?: string
-      message?: string
-      data?: {
-        code?: string
-        message?: string
-      }
-    }
-    message?: string
-  }
+  const err = error as ExtensionActionError
 
   const errorCode = err.data?.code ?? err.data?.data?.code
-  const configuredMessage = errorCode ? errorMessages[errorCode] : undefined
+  const configuredMessage = getConfiguredErrorMessage(errorCode)
   if (configuredMessage) {
-    return locale.value === 'fr' ? configuredMessage.fr : configuredMessage.en
+    return configuredMessage
   }
 
-  if (err.data?.data?.message) {
-    return err.data.data.message
-  }
-
-  if (err.data?.message) {
-    return err.data.message
-  }
-
-  return err.message ?? String(error)
+  return getFallbackErrorMessage(err, error)
 }
 
 const parseErrorResponse = async (response: Response): Promise<unknown> => {
