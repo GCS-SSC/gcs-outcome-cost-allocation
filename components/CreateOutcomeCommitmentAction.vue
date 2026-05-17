@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { getClientRequestUrl } from '~/utils/client-request-url'
 import { computed, ref } from 'vue'
 import type { Ref } from 'vue'
-import type {
-  GcsExtensionCreateOperation,
-  GcsExtensionJsonConfig,
-  GcsExtensionRbacRequirement
+import {
+  getClientRequestUrl,
+  type GcsExtensionCreateOperation,
+  type GcsExtensionJsonConfig,
+  type GcsExtensionRbacRequirement
 } from '@gcs-ssc/extensions'
 import type { ExtensionEntityTabContext } from '@gcs-ssc/extensions/server'
 import {

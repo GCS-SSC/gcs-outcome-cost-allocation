@@ -1,7 +1,6 @@
 <script setup lang="ts">
-import { getClientRequestUrl } from '~/utils/client-request-url'
 import type { Ref } from 'vue'
-import type { GcsExtensionJsonConfig, GcsResolvedExtension } from '@gcs-ssc/extensions'
+import { getClientRequestUrl, type GcsExtensionJsonConfig, type GcsResolvedExtension } from '@gcs-ssc/extensions'
 import {
   COMMITMENT_TYPES,
   type CommitmentType,

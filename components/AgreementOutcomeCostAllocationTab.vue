@@ -1,7 +1,6 @@
 <script setup lang="ts">
-import { getClientRequestUrl } from '~/utils/client-request-url'
 import type { Ref } from 'vue'
-import type { GcsExtensionJsonConfig, GcsExtensionRbacRequirement } from '@gcs-ssc/extensions'
+import { getClientRequestUrl, type GcsExtensionJsonConfig, type GcsExtensionRbacRequirement } from '@gcs-ssc/extensions'
 import type { ExtensionEntityTabContext } from '@gcs-ssc/extensions/server'
 import {
   COMMITMENT_TYPES,

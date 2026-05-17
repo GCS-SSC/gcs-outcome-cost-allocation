@@ -9,7 +9,7 @@
     "test:unit": "vitest run"
   },
   "dependencies": {
-    "@gcs-ssc/extensions": "github:GCS-SSC/gcs-ssc-extensions#main",
+    "@gcs-ssc/extensions": "workspace:*",
     "h3": "1.15.5"
   },
   "peerDependencies": {
@@ -19,7 +19,6 @@
     "vue": "^3.5.28"
   },
   "devDependencies": {
-    "@vitejs/plugin-vue": "^6.0.4",
     "kysely": "^0.28.11",
     "typescript": "^5.9.3",
     "vitest": "^4.0.18",
