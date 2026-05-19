@@ -1,23 +1,16 @@
 /* eslint-disable jsdoc/require-jsdoc */
-import type { H3Event } from 'h3'
+import { defineGcsExtensionRouteHandler } from '@gcs-ssc/extensions/server'
 import { asOutcomeCostAllocationDb } from '../db'
 import { deleteDraftAllocationVersion } from '../allocation-data'
 
-type AllocationVersionDeleteEvent = H3Event & {
-  context: {
-    $db: unknown
-    params?: Record<string, string | undefined>
-  }
-}
-
-export default async (event: AllocationVersionDeleteEvent) => {
-  const agreementId = event.context.params?.agreementId ?? ''
-  const allocationVersionId = event.context.params?.allocationVersionId ?? ''
-  const db = asOutcomeCostAllocationDb(event.context.$db)
+export default defineGcsExtensionRouteHandler(async ({ params, db: rawDb }) => {
+  const agreementId = params.agreementId ?? ''
+  const allocationVersionId = params.allocationVersionId ?? ''
+  const db = asOutcomeCostAllocationDb(rawDb)
 
   await deleteDraftAllocationVersion(db, agreementId, allocationVersionId)
 
   return {
     ok: true
   }
-}
+})

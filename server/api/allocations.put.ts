@@ -1,7 +1,6 @@
 /* eslint-disable jsdoc/require-jsdoc */
-import type { H3Event } from 'h3'
 import { z } from 'zod'
-import { readBody } from 'h3'
+import { defineGcsExtensionRouteHandler } from '@gcs-ssc/extensions/server'
 import { asOutcomeCostAllocationDb } from '../db'
 import { saveAllocations } from '../allocation-data'
 
@@ -19,26 +18,14 @@ const SaveAllocationsSchema = z.object({
   allocations: z.array(AllocationSchema)
 })
 
-type AllocationPutEvent = H3Event & {
-  context: {
-    $db: unknown
-    params?: Record<string, string | undefined>
-    gcsExtension?: {
-      entity?: {
-        streamId?: string
-      }
-    }
-  }
-}
-
-export default async (event: AllocationPutEvent) => {
-  const body = SaveAllocationsSchema.parse(await readBody(event))
-  const agreementId = event.context.params?.agreementId ?? ''
-  const db = asOutcomeCostAllocationDb(event.context.$db)
+export default defineGcsExtensionRouteHandler(async ({ params, db: rawDb, readBody }) => {
+  const body = SaveAllocationsSchema.parse(await readBody())
+  const agreementId = params.agreementId ?? ''
+  const db = asOutcomeCostAllocationDb(rawDb)
 
   await saveAllocations(db, agreementId, body.allocationVersionId, body.allocations)
 
   return {
     ok: true
   }
-}
+})

@@ -8,9 +8,6 @@ declare global {
   const defineProps: typeof import('vue')['defineProps']
   const defineEmits: typeof import('vue')['defineEmits']
   const defineModel: typeof import('vue')['defineModel']
-  const useToast: () => {
-    add: (message: Record<string, unknown>) => void
-  }
 }
 
 export {}

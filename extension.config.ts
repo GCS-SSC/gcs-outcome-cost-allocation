@@ -3,6 +3,20 @@ import { defineGcsExtension } from '@gcs-ssc/extensions'
 
 export default defineGcsExtension({
   key: 'gcs-outcome-cost-allocation',
+  sdkVersion: '^0.1.0',
+  requiredHostCapabilities: [
+    'stream-config-modal',
+    'entity-tabs',
+    'create-actions',
+    'server-handlers',
+    'server-handler-rbac',
+    'migrations',
+    'extension-ui',
+    'extension-api-client',
+    'host-api-client',
+    'extension-create-operation-hooks',
+    'extension-lifecycle-hooks'
+  ],
   name: {
     en: 'Outcome cost allocation',
     fr: 'Repartition des couts par resultat'

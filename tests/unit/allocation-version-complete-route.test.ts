@@ -30,7 +30,7 @@ const buildEvent = () => ({
       }
     }
   }
-}) as H3Event & {
+}) as unknown as H3Event & {
   context: {
     $db: unknown
     params: Record<string, string>

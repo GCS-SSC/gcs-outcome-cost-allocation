@@ -1,6 +1,16 @@
 <script setup lang="ts">
 import type { Ref } from 'vue'
-import { getClientRequestUrl, type GcsExtensionJsonConfig, type GcsResolvedExtension } from '@gcs-ssc/extensions'
+import type { GcsExtensionJsonConfig, GcsResolvedExtension } from '@gcs-ssc/extensions'
+import {
+  ExtensionButton,
+  ExtensionFormField,
+  ExtensionIcon,
+  ExtensionModal,
+  ExtensionSelect,
+  ExtensionTable,
+  useHostApi,
+  useExtensionI18n
+} from '@gcs-ssc/extensions/ui'
 import {
   COMMITMENT_TYPES,
   type CommitmentType,
@@ -54,7 +64,8 @@ const {
 }>()
 
 const config = defineModel<GcsExtensionJsonConfig>({ required: true })
-const { locale } = useI18n()
+const { locale } = useExtensionI18n()
+const hostApi = useHostApi()
 
 const localConfig: Ref<OutcomeCostAllocationConfig> = ref(parseOutcomeCostAllocationConfig(config.value))
 const lastSyncedConfigJson: Ref<string> = ref(JSON.stringify({
@@ -69,8 +80,11 @@ const outcomesResponse: Ref<ListResponse<OutcomeItem> | null> = ref(null)
 const budgetsResponse: Ref<ListResponse<StreamBudgetItem> | null> = ref(null)
 const commitmentsResponse: Ref<ListResponse<StreamCommitmentItem> | null> = ref(null)
 const fetchList = async <T>(url: string) => {
-  const response = await fetch(getClientRequestUrl(url))
-  return response.ok ? await response.json() as ListResponse<T> : { items: [] } as ListResponse<T>
+  try {
+    return await hostApi.get<ListResponse<T>>(url)
+  } catch {
+    return { items: [] } as ListResponse<T>
+  }
 }
 const refreshLookups = async () => {
   if (!transferPaymentId) {
@@ -354,7 +368,7 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
       <h2 class="text-lg font-semibold text-zinc-900 dark:text-white">
         {{ tLocal('title') }}
       </h2>
-      <UButton
+      <ExtensionButton
         icon="i-lucide-plus"
         :label="tLocal('addAssociation')"
         color="primary"
@@ -372,14 +386,14 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
     </p>
 
     <div class="overflow-hidden rounded-md border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
-      <UTable
+      <ExtensionTable
         :data="tableRows"
         :columns="mappingColumns"
         class="min-w-full">
         <template #commitmentLine-cell="{ row }">
           <div v-if="row.original.rowType === 'commitmentType'" class="flex w-full items-center gap-3 py-1">
             <button type="button" class="group flex min-w-0 items-center gap-3 text-left" @click="toggleGroup(row.original.id)">
-              <UIcon :name="isExpanded(row.original.id) ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" class="size-4 text-zinc-400 transition-colors group-hover:text-primary" />
+              <ExtensionIcon :name="isExpanded(row.original.id) ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" class="size-4 text-zinc-400 transition-colors group-hover:text-primary" />
               <span class="text-sm font-semibold text-zinc-900 dark:text-white">{{ row.original.commitmentTypeGroup }}</span>
               <span class="rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-semibold text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
                 {{ row.original.associationCount }}
@@ -388,7 +402,7 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
           </div>
           <div v-else-if="row.original.rowType === 'fiscalYear'" class="flex w-full items-center gap-3 py-1 pl-6">
             <button type="button" class="group flex min-w-0 items-center gap-3 text-left" @click="toggleGroup(row.original.id)">
-              <UIcon :name="isExpanded(row.original.id) ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" class="size-4 text-zinc-400 transition-colors group-hover:text-primary" />
+              <ExtensionIcon :name="isExpanded(row.original.id) ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" class="size-4 text-zinc-400 transition-colors group-hover:text-primary" />
               <span class="text-sm font-semibold text-zinc-800 dark:text-zinc-100">{{ row.original.fiscalYearGroup }}</span>
               <span class="rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-semibold text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
                 {{ row.original.associationCount }}
@@ -396,7 +410,7 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
             </button>
           </div>
           <div v-else class="flex min-w-0 items-center gap-3 py-1 pl-12">
-            <UIcon name="i-lucide-corner-down-right" class="size-4 shrink-0 text-zinc-400" />
+            <ExtensionIcon name="i-lucide-corner-down-right" class="size-4 shrink-0 text-zinc-400" />
             <div class="min-w-0">
               <div class="truncate text-sm font-semibold text-zinc-900 dark:text-white">
                 {{ row.original.lineLabel }}
@@ -419,7 +433,7 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
 
         <template #actions-cell="{ row }">
           <div v-if="row.original.rowType === 'association' && row.original.association" class="flex justify-end">
-            <UButton
+            <ExtensionButton
               icon="i-lucide-x"
               color="neutral"
               variant="ghost"
@@ -428,39 +442,39 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
               @click="removeAssociation(row.original.association)" />
           </div>
         </template>
-      </UTable>
+      </ExtensionTable>
       <div class="border-t border-zinc-200 px-4 py-3 text-xs font-bold tracking-widest text-zinc-400 uppercase dark:border-zinc-800">
         {{ tableRows.length }} {{ tLocal('records') }}
       </div>
     </div>
 
-    <UModal v-if="selectedAssociation" v-model:open="isAssociationModalOpen" :title="tLocal('addAssociation')">
+    <ExtensionModal v-if="selectedAssociation" v-model:open="isAssociationModalOpen" :title="tLocal('addAssociation')">
       <template #body>
         <div class="space-y-4">
-          <UFormField :label="tLocal('commitmentLine')">
-            <USelect
+          <ExtensionFormField :label="tLocal('commitmentLine')">
+            <ExtensionSelect
               v-model="selectedAssociation.streamCommitmentId"
               value-key="value"
               :items="commitmentLineOptions"
               class="w-full" />
-          </UFormField>
-          <UFormField :label="tLocal('commitmentType')">
-            <USelect
+          </ExtensionFormField>
+          <ExtensionFormField :label="tLocal('commitmentType')">
+            <ExtensionSelect
               v-model="selectedAssociation.commitmentType"
               value-key="value"
               :items="commitmentTypeOptions"
               class="w-full" />
-          </UFormField>
-          <UFormField :label="tLocal('outcome')">
-            <USelect
+          </ExtensionFormField>
+          <ExtensionFormField :label="tLocal('outcome')">
+            <ExtensionSelect
               v-model="selectedAssociation.outcomeId"
               value-key="value"
               :items="outcomeOptions"
               class="w-full" />
-          </UFormField>
+          </ExtensionFormField>
           <div class="flex justify-end gap-2 pt-2">
-            <UButton :label="tLocal('cancel')" color="neutral" variant="ghost" class="cursor-default" @click="isAssociationModalOpen = false" />
-            <UButton
+            <ExtensionButton :label="tLocal('cancel')" color="neutral" variant="ghost" class="cursor-default" @click="isAssociationModalOpen = false" />
+            <ExtensionButton
               icon="i-lucide-plus"
               :label="tLocal('add')"
               color="primary"
@@ -470,6 +484,6 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
           </div>
         </div>
       </template>
-    </UModal>
+    </ExtensionModal>
   </div>
 </template>

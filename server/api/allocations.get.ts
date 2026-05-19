@@ -1,4 +1,5 @@
 /* eslint-disable jsdoc/require-jsdoc */
+import { defineGcsExtensionRouteHandler } from '@gcs-ssc/extensions/server'
 import { asOutcomeCostAllocationDb } from '../db'
 import {
   createDraftAllocationVersion,
@@ -9,20 +10,10 @@ import {
   getStreamCommitmentLines
 } from '../allocation-data'
 
-export default async (event: {
-  context: {
-    $db: unknown
-    params?: Record<string, string | undefined>
-    gcsExtension?: {
-      entity?: {
-        streamId?: string
-      }
-    }
-  }
-}) => {
-  const agreementId = event.context.params?.agreementId ?? ''
-  const streamId = event.context.gcsExtension?.entity?.streamId ?? ''
-  const db = asOutcomeCostAllocationDb(event.context.$db)
+export default defineGcsExtensionRouteHandler(async ({ params, entity, db: rawDb }) => {
+  const agreementId = params.agreementId ?? ''
+  const streamId = String(entity?.streamId ?? '')
+  const db = asOutcomeCostAllocationDb(rawDb)
 
   let versions = await getAllocationVersions(db, agreementId)
   if (versions.length === 0) {
@@ -44,4 +35,4 @@ export default async (event: {
     allocations,
     streamCommitments
   }
-}
+})

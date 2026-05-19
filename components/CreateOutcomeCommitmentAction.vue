@@ -2,12 +2,20 @@
 import { computed, ref } from 'vue'
 import type { Ref } from 'vue'
 import {
-  getClientRequestUrl,
   type GcsExtensionCreateOperation,
   type GcsExtensionJsonConfig,
   type GcsExtensionRbacRequirement
 } from '@gcs-ssc/extensions'
-import type { ExtensionEntityTabContext } from '@gcs-ssc/extensions/server'
+import type { ExtensionEntityTabContext } from '@gcs-ssc/extensions'
+import {
+  ExtensionButton,
+  ExtensionFormField,
+  ExtensionModal,
+  ExtensionSelect,
+  useHostApi,
+  useExtensionI18n,
+  useExtensionToast
+} from '@gcs-ssc/extensions/ui'
 import {
   COMMITMENT_TYPES,
   type CommitmentType
@@ -33,8 +41,9 @@ const {
   onCreated: () => void
 }>()
 
-const { locale } = useI18n()
-const toast = useToast()
+const { locale } = useExtensionI18n()
+const toast = useExtensionToast()
+const hostApi = useHostApi()
 const isOpen: Ref<boolean> = ref(false)
 const isSaving: Ref<boolean> = ref(false)
 const selectedType: Ref<CommitmentType> = ref('commitment')
@@ -145,16 +154,6 @@ const resolveErrorMessage = (error: unknown): string => {
   return getFallbackErrorMessage(err, error)
 }
 
-const parseErrorResponse = async (response: Response): Promise<unknown> => {
-  try {
-    return await response.json()
-  } catch {
-    return {
-      message: response.statusText
-    }
-  }
-}
-
 const createCommitment = async () => {
   if (isSaving.value) {
     return
@@ -163,16 +162,9 @@ const createCommitment = async () => {
   try {
     isSaving.value = true
     errorMessage.value = ''
-    const response = await fetch(getClientRequestUrl(`/api/agreements/${agreementId}/commitments`), {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        egcs_fc_type: selectedType.value
-      })
+    await hostApi.post(`/api/agreements/${agreementId}/commitments`, {
+      egcs_fc_type: selectedType.value
     })
-    if (!response.ok) {
-      throw await parseErrorResponse(response)
-    }
     isOpen.value = false
     toast.add({
       title: locale.value === 'fr' ? 'Succes' : 'Success',
@@ -189,8 +181,8 @@ const createCommitment = async () => {
 </script>
 
 <template>
-  <UModal v-model:open="isOpen" :title="buttonLabel">
-    <UButton
+  <ExtensionModal v-model:open="isOpen" :title="buttonLabel">
+    <ExtensionButton
       :icon="icon"
       :label="buttonLabel"
       color="primary"
@@ -198,26 +190,26 @@ const createCommitment = async () => {
 
     <template #body>
       <div class="space-y-4">
-        <UFormField :label="isFrench ? 'Type' : 'Type'">
-          <USelect
+        <ExtensionFormField :label="isFrench ? 'Type' : 'Type'">
+          <ExtensionSelect
             v-model="selectedType"
             value-key="value"
             :items="typeOptions"
             class="w-full" />
-        </UFormField>
+        </ExtensionFormField>
 
         <p v-if="errorMessage" class="text-sm text-error">
           {{ errorMessage }}
         </p>
 
         <div class="flex justify-end gap-2 pt-2">
-          <UButton
+          <ExtensionButton
             :label="isFrench ? 'Annuler' : 'Cancel'"
             color="neutral"
             variant="ghost"
             class="cursor-default"
             @click="isOpen = false" />
-          <UButton
+          <ExtensionButton
             icon="i-lucide-save"
             :label="isFrench ? 'Ajouter' : 'Add'"
             color="primary"
@@ -228,5 +220,5 @@ const createCommitment = async () => {
         </div>
       </div>
     </template>
-  </UModal>
+  </ExtensionModal>
 </template>

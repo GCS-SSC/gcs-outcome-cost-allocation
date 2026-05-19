@@ -22,7 +22,7 @@ const versions = [
   { id: 'active-1', status: 'active' },
   { id: 'draft-1', status: 'draft' },
   { id: 'archived-1', status: 'archived' }
-] as CostAllocationVersion[]
+] as unknown as CostAllocationVersion[]
 
 describe('agreement outcome cost allocation tab helpers', () => {
   it('keeps the currently selected allocation version when available', () => {
@@ -32,7 +32,7 @@ describe('agreement outcome cost allocation tab helpers', () => {
   it('prefers draft, then active, then the first available version', () => {
     expect(resolveSelectedOutcomeAllocationVersionId('', versions)).toBe('draft-1')
     expect(resolveSelectedOutcomeAllocationVersionId('', versions.filter(version => version.status !== 'draft'))).toBe('active-1')
-    expect(resolveSelectedOutcomeAllocationVersionId('', [{ id: 'archived-1', status: 'archived' }] as CostAllocationVersion[]))
+    expect(resolveSelectedOutcomeAllocationVersionId('', [{ id: 'archived-1', status: 'archived' }] as unknown as CostAllocationVersion[]))
       .toBe('archived-1')
     expect(resolveSelectedOutcomeAllocationVersionId('', [])).toBe('')
   })

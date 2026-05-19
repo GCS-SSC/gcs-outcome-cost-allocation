@@ -1,7 +1,24 @@
 <script setup lang="ts">
 import type { Ref } from 'vue'
-import { getClientRequestUrl, type GcsExtensionJsonConfig, type GcsExtensionRbacRequirement } from '@gcs-ssc/extensions'
-import type { ExtensionEntityTabContext } from '@gcs-ssc/extensions/server'
+import type { GcsExtensionJsonConfig, GcsExtensionRbacRequirement } from '@gcs-ssc/extensions'
+import type { ExtensionEntityTabContext } from '@gcs-ssc/extensions'
+import {
+  ExtensionBadge,
+  ExtensionButton,
+  ExtensionFormField,
+  ExtensionIcon,
+  ExtensionInput,
+  ExtensionModal,
+  ExtensionSaveButton,
+  ExtensionSelect,
+  ExtensionSelectMenu,
+  ExtensionStatusBadge,
+  ExtensionTable,
+  useExtensionApi,
+  useExtensionConfirmDialog,
+  useExtensionI18n,
+  useExtensionToast
+} from '@gcs-ssc/extensions/ui'
 import {
   COMMITMENT_TYPES,
   type AllocationMethod,
@@ -23,7 +40,6 @@ import {
   type ConfiguredAssociationRow,
   getOutcomeAllocationVersionEndpoint,
   getOutcomeAllocationVersionsEndpoint,
-  getOutcomeAllocationResponseErrorMessage,
   getOutcomeAllocationToastText,
   resolveCreatedDraftVersionId,
   resolveDeletedDraftVersionId,
@@ -69,8 +85,8 @@ const {
   rbac: GcsExtensionRbacRequirement
 }>()
 
-const { locale } = useI18n()
-const toast = useToast()
+const { locale } = useExtensionI18n()
+const toast = useExtensionToast()
 const allocations: Ref<VersionedOutcomeAllocationInput[]> = ref([])
 const selectedVersionId: Ref<string> = ref('')
 const isSaving: Ref<boolean> = ref(false)
@@ -82,17 +98,17 @@ const expandedRows: Ref<Record<string, boolean>> = ref({})
 const isGenerateModalOpen: Ref<boolean> = ref(false)
 const generationCommitmentType: Ref<CommitmentType> = ref('commitment')
 const generationYearIds: Ref<string[]> = ref([])
-const confirm = useConfirmDialog()
+const confirm = useExtensionConfirmDialog()
+const api = useExtensionApi(extensionKey)
 
-const endpoint = computed(() => `/api/extensions/${extensionKey}/agreements/${context.agreementId}/allocations`)
+const endpoint = computed(() => `/agreements/${context.agreementId}/allocations`)
 const data: Ref<AllocationResponse | null> = ref(null)
 const status: Ref<'idle' | 'pending' | 'success' | 'error'> = ref('idle')
 const refresh = async () => {
   try {
     status.value = 'pending'
-    const response = await fetch(getClientRequestUrl(endpoint.value))
-    data.value = response.ok ? await response.json() as AllocationResponse : null
-    status.value = response.ok ? 'success' : 'error'
+    data.value = await api.get<AllocationResponse>(endpoint.value)
+    status.value = 'success'
   } catch {
     data.value = null
     status.value = 'error'
@@ -561,7 +577,7 @@ const save = async () => {
     isSaving.value = true
     saveError.value = ''
     await saveOutcomeAllocationsRequest(
-      getClientRequestUrl(endpoint.value),
+      api.path(endpoint.value),
       selectedVersionId.value,
       activeAllocations.value
     )
@@ -586,7 +602,7 @@ const completeSelectedVersion = async () => completeOutcomeAllocationSelectedVer
   saveError,
   save,
   refresh,
-  buildCompleteRequestUrl: versionId => getClientRequestUrl(`${getOutcomeAllocationVersionEndpoint(endpoint.value, versionId)}/complete`),
+  buildCompleteRequestUrl: versionId => api.path(`${getOutcomeAllocationVersionEndpoint(endpoint.value, versionId)}/complete`),
   toast,
   completeRequest: completeOutcomeAllocationVersionRequest
 })
@@ -599,11 +615,7 @@ const createDraftVersion = async () => {
   try {
     isCreatingDraft.value = true
     saveError.value = ''
-    const fetchResponse = await fetch(getClientRequestUrl(getOutcomeAllocationVersionsEndpoint(endpoint.value)), {
-      method: 'POST'
-    })
-    if (!fetchResponse.ok) throw new Error(await getOutcomeAllocationResponseErrorMessage(fetchResponse))
-    const response = await fetchResponse.json() as { version?: CostAllocationVersion }
+    const response = await api.post<{ version?: CostAllocationVersion }>(getOutcomeAllocationVersionsEndpoint(endpoint.value))
     await refresh()
     selectedVersionId.value = resolveCreatedDraftVersionId(selectedVersionId.value, response)
   } catch (error: unknown) {
@@ -622,7 +634,7 @@ const deleteDraftVersion = async (versionId: string) => {
     deletingVersionId.value = versionId
     saveError.value = ''
     await deleteOutcomeAllocationDraftVersionRequest(
-      getClientRequestUrl(getOutcomeAllocationVersionEndpoint(endpoint.value, versionId))
+      api.path(getOutcomeAllocationVersionEndpoint(endpoint.value, versionId))
     )
     selectedVersionId.value = resolveDeletedDraftVersionId(selectedVersionId.value, versionId)
     await refresh()
@@ -760,7 +772,7 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
       <h2 class="text-lg font-semibold text-zinc-900 dark:text-white">
         {{ tLocal('title') }}
       </h2>
-      <UButton
+      <ExtensionButton
         icon="i-lucide-plus"
         :label="tLocal('newDraft')"
         color="primary"
@@ -823,7 +835,7 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
               @keydown.space.prevent="selectVersion(version.id)">
               <th scope="row" class="px-4 py-4 text-left">
                 <div class="flex min-w-0 items-center gap-3">
-                  <UIcon
+                  <ExtensionIcon
                     v-if="version.id === selectedVersionId"
                     name="i-lucide-check-circle-2"
                     class="size-4 shrink-0 text-primary"
@@ -839,7 +851,7 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
                 </div>
               </th>
               <td class="px-4 py-4">
-                <CommonStatusBadge enum-name="statuses" :status="version.status" />
+                <ExtensionStatusBadge enum-name="statuses" :status="version.status" />
               </td>
               <td class="px-4 py-4 font-semibold">
                 <span>
@@ -853,7 +865,7 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
               </td>
               <td class="px-4 py-4">
                 <div class="flex justify-end gap-2" @click.stop>
-                  <UButton
+                  <ExtensionButton
                     color="neutral"
                     variant="ghost"
                     size="sm"
@@ -862,8 +874,8 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
                     :disabled="version.id === selectedVersionId"
                     @click="selectVersion(version.id)">
                     {{ version.id === selectedVersionId ? tLocal('selected') : tLocal('view') }}
-                  </UButton>
-                  <UButton
+                  </ExtensionButton>
+                  <ExtensionButton
                     v-if="version.status === 'draft'"
                     color="error"
                     variant="ghost"
@@ -874,7 +886,7 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
                     :disabled="!canDeleteVersion(version)"
                     @click="deleteDraftVersion(version.id)">
                     {{ tLocal('delete') }}
-                  </UButton>
+                  </ExtensionButton>
                 </div>
               </td>
             </tr>
@@ -889,16 +901,16 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
           <h3 class="text-base font-semibold text-zinc-900 dark:text-white">
             {{ tLocal('selectedAllocation') }} {{ selectedVersion.versionNumber }}
           </h3>
-          <UBadge :color="getStatusColor(selectedVersion.status)" variant="subtle">
+          <ExtensionBadge :color="getStatusColor(selectedVersion.status)" variant="subtle">
             {{ getStatusLabel(selectedVersion.status) }}
-          </UBadge>
+          </ExtensionBadge>
         </div>
         <p v-if="!canEditSelectedVersion" class="text-sm text-zinc-500 dark:text-zinc-400">
           {{ tLocal('readonly') }}
         </p>
       </div>
       <div class="flex flex-wrap gap-2">
-        <UButton
+        <ExtensionButton
           v-if="canEditSelectedVersion"
           icon="i-lucide-plus"
           :label="tLocal('generateRows')"
@@ -907,13 +919,13 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
           class="cursor-default"
           :disabled="isSaving || isCompleting || isLoading"
           @click="openGenerateRows" />
-        <CommonSaveButton
+        <ExtensionSaveButton
           v-if="canEditSelectedVersion"
           :label="tLocal('save')"
           :loading="isSaving"
           :disabled="isSaving || isCompleting || isLoading"
           @click="save" />
-        <UButton
+        <ExtensionButton
           v-if="canEditSelectedVersion"
           icon="i-lucide-check"
           :label="tLocal('complete')"
@@ -927,14 +939,14 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
 
     <div class="outcome-cost-allocation-table w-full min-w-0 max-w-full overflow-hidden rounded-md border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
       <div class="w-full min-w-0 overflow-hidden">
-        <UTable
+        <ExtensionTable
           :data="allocationRows"
           :columns="allocationColumns"
           class="w-full max-w-full table-fixed">
         <template #commitmentLine-cell="{ row }">
           <div v-if="row.original.rowType === 'commitmentType'" class="flex w-full items-center gap-3 py-1">
             <button type="button" class="group flex min-w-0 items-center gap-3 text-left" @click="toggleGroup(row.original.id)">
-              <UIcon :name="isExpanded(row.original.id) ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" class="size-4 text-zinc-400 transition-colors group-hover:text-primary" />
+              <ExtensionIcon :name="isExpanded(row.original.id) ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" class="size-4 text-zinc-400 transition-colors group-hover:text-primary" />
               <span class="text-sm font-semibold text-zinc-900 dark:text-white">{{ row.original.commitmentTypeLabel }}</span>
               <span class="rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-semibold text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
                 {{ row.original.associationCount }}
@@ -943,7 +955,7 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
           </div>
           <div v-else-if="row.original.rowType === 'fiscalYear'" class="flex w-full items-center gap-3 py-1 pl-6">
             <button type="button" class="group flex min-w-0 items-center gap-3 text-left" @click="toggleGroup(row.original.id)">
-              <UIcon :name="isExpanded(row.original.id) ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" class="size-4 text-zinc-400 transition-colors group-hover:text-primary" />
+              <ExtensionIcon :name="isExpanded(row.original.id) ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" class="size-4 text-zinc-400 transition-colors group-hover:text-primary" />
               <span class="text-sm font-semibold text-zinc-800 dark:text-zinc-100">{{ row.original.yearLabel }}</span>
               <span class="rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-semibold text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
                 {{ row.original.associationCount }}
@@ -951,7 +963,7 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
             </button>
           </div>
           <div v-else class="flex min-w-0 items-center gap-3 py-1 pl-12">
-            <UIcon name="i-lucide-corner-down-right" class="size-4 shrink-0 text-zinc-400" />
+            <ExtensionIcon name="i-lucide-corner-down-right" class="size-4 shrink-0 text-zinc-400" />
             <div class="min-w-0">
               <div class="truncate text-sm font-semibold text-zinc-900 dark:text-white">
                 {{ row.original.commitmentLineLabel }}
@@ -974,7 +986,7 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
 
         <template #method-cell="{ row }">
           <div v-if="row.original.rowType === 'association' && row.original.association">
-            <USelect
+            <ExtensionSelect
               :model-value="getAllocation(row.original.association)?.allocationMethod ?? 'amount'"
               value-key="value"
               :items="methodOptions"
@@ -986,7 +998,7 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
 
         <template #value-cell="{ row }">
           <div v-if="row.original.rowType === 'association' && row.original.association">
-            <UInput
+            <ExtensionInput
               :model-value="getAllocation(row.original.association)?.allocationValue ?? 0"
               type="number"
               min="0"
@@ -1010,7 +1022,7 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
             {{ formatMoney(getUnallocatedForRow(row.original) ?? 0) }}
           </span>
         </template>
-        </UTable>
+        </ExtensionTable>
       </div>
       <div class="border-t border-zinc-200 px-4 py-3 text-xs font-bold tracking-widest text-zinc-400 uppercase dark:border-zinc-800">
         <span v-if="displayedAssociationRows.length > 0">
@@ -1022,19 +1034,19 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
       </div>
     </div>
 
-    <UModal v-model:open="isGenerateModalOpen" :title="tLocal('generateRowsTitle')">
+    <ExtensionModal v-model:open="isGenerateModalOpen" :title="tLocal('generateRowsTitle')">
       <template #body>
         <div class="space-y-4">
-          <UFormField :label="tLocal('commitmentType')">
-            <USelect
+          <ExtensionFormField :label="tLocal('commitmentType')">
+            <ExtensionSelect
               v-model="generationCommitmentType"
               value-key="value"
               :items="commitmentTypeOptions"
               class="w-full" />
-          </UFormField>
+          </ExtensionFormField>
 
-          <UFormField :label="tLocal('fiscalYears')">
-            <USelectMenu
+          <ExtensionFormField :label="tLocal('fiscalYears')">
+            <ExtensionSelectMenu
               :model-value="generationYearIds as never"
               multiple
               value-key="value"
@@ -1042,19 +1054,19 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
               :items="generationYearOptions"
               class="w-full"
               @update:model-value="updateGenerationYearIds" />
-          </UFormField>
+          </ExtensionFormField>
         </div>
       </template>
 
       <template #footer>
         <div class="flex w-full justify-end gap-2">
-          <UButton
+          <ExtensionButton
             :label="locale === 'fr' ? 'Annuler' : 'Cancel'"
             color="neutral"
             variant="ghost"
             class="cursor-default"
             @click="isGenerateModalOpen = false" />
-          <UButton
+          <ExtensionButton
             :label="tLocal('generateRows')"
             color="primary"
             class="cursor-default"
@@ -1062,7 +1074,7 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
             @click="applyGeneratedRows" />
         </div>
       </template>
-    </UModal>
+    </ExtensionModal>
   </div>
 </template>
 

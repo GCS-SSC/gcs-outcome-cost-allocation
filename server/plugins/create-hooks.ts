@@ -1,6 +1,7 @@
 /* eslint-disable jsdoc/require-jsdoc */
 import {
   createGcsExtensionUserError,
+  defineGcsExtensionNitroPlugin,
   type GcsExtensionCreateOperationContext,
   type GcsExtensionCreateOperationResult,
   registerGcsExtensionCreateOperationHandler
@@ -219,7 +220,7 @@ const handlePaymentCreate = async (context: CreateOperationContext): Promise<Cre
   return continueCreateOperation()
 }
 
-export default defineNitroPlugin(nitroApp => {
+export default defineGcsExtensionNitroPlugin(nitroApp => {
   registerGcsExtensionCreateOperationHandler(EXTENSION_KEY, 'agreement.commitments.create', handleCommitmentCreate, nitroApp as Parameters<typeof registerGcsExtensionCreateOperationHandler>[3])
   registerGcsExtensionCreateOperationHandler(EXTENSION_KEY, 'agreement.payments.create', handlePaymentCreate, nitroApp as Parameters<typeof registerGcsExtensionCreateOperationHandler>[3])
 })

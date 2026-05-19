@@ -1,8 +1,8 @@
 /* eslint-disable jsdoc/require-jsdoc */
-import type { H3Event } from 'h3'
-import { getHeader } from 'h3'
 import {
   createGcsExtensionUserError,
+  getGcsExtensionRequestHeader,
+  type GcsExtensionRouteEvent,
   type GcsExtensionLocalizedMessage,
   type GcsExtensionUserErrorDetail,
   type GcsExtensionUserErrorOptions
@@ -104,17 +104,17 @@ const createLocalizedUserError = (options: GcsExtensionUserErrorOptions) => {
   })
 }
 
-const getLocale = (event: H3Event) => {
-  const language = getHeader(event, 'accept-language') ?? ''
+const getLocale = (event: GcsExtensionRouteEvent) => {
+  const language = getGcsExtensionRequestHeader(event, 'accept-language') ?? ''
   return language.toLowerCase().startsWith('fr') ? 'fr' : 'en'
 }
 
 export const getOutcomeCostAllocationErrorMessage = (
-  event: H3Event,
+  event: GcsExtensionRouteEvent,
   code: string | undefined
 ) => {
   const message = getOutcomeCostAllocationErrorMessages(code)
-  return message[getLocale(event)]
+  return typeof message === 'string' ? message : message[getLocale(event)]
 }
 
 export const getOutcomeCostAllocationErrorMessages = (
@@ -138,7 +138,7 @@ export const createOutcomeCostAllocationUserError = (
 })
 
 export const localizeAllocationIssues = (
-  event: H3Event,
+  event: GcsExtensionRouteEvent,
   issues: AllocationValidationIssue[]
 ) => issues.map(issue => ({
   path: issue.path,

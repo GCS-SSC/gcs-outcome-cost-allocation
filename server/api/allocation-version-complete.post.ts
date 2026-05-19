@@ -1,6 +1,5 @@
 /* eslint-disable jsdoc/require-jsdoc */
-import type { H3Event } from 'h3'
-import { createGcsExtensionUserError } from '@gcs-ssc/extensions/server'
+import { createGcsExtensionUserError, defineGcsExtensionRouteHandler, type GcsExtensionRouteContext } from '@gcs-ssc/extensions/server'
 import { asOutcomeCostAllocationDb } from '../db'
 import { completeAllocationVersion } from '../allocation-data'
 import {
@@ -9,28 +8,15 @@ import {
 } from '../errors'
 import type { AllocationValidationIssue } from '../../shared/allocation'
 
-type AllocationVersionCompleteEvent = H3Event & {
-  context: {
-    $db: unknown
-    params?: Record<string, string | undefined>
-    gcsExtension?: {
-      config?: unknown
-      entity?: {
-        streamId?: string
-      }
-    }
-  }
-}
-
 const hasAllocationIssues = (error: unknown): error is Error & { issues: AllocationValidationIssue[] } =>
   error instanceof Error && Array.isArray((error as Error & { issues?: unknown }).issues)
 
-const resolveCompletionContext = (event: AllocationVersionCompleteEvent) => ({
-  agreementId: event.context.params?.agreementId ?? '',
-  allocationVersionId: event.context.params?.allocationVersionId ?? '',
-  streamId: event.context.gcsExtension?.entity?.streamId ?? '',
-  config: event.context.gcsExtension?.config ?? {},
-  db: asOutcomeCostAllocationDb(event.context.$db)
+const resolveCompletionContext = (context: GcsExtensionRouteContext) => ({
+  agreementId: context.params.agreementId ?? '',
+  allocationVersionId: context.params.allocationVersionId ?? '',
+  streamId: String(context.entity?.streamId ?? ''),
+  config: context.config ?? {},
+  db: asOutcomeCostAllocationDb(context.db)
 })
 
 const throwCompletionError = (error: unknown): never => {
@@ -46,14 +32,14 @@ const throwCompletionError = (error: unknown): never => {
   })
 }
 
-export default async (event: AllocationVersionCompleteEvent) => {
+export default defineGcsExtensionRouteHandler(async context => {
   const {
     agreementId,
     allocationVersionId,
     streamId,
     config,
     db
-  } = resolveCompletionContext(event)
+  } = resolveCompletionContext(context)
 
   try {
     const version = await completeAllocationVersion(db, agreementId, streamId, allocationVersionId, config)
@@ -64,4 +50,4 @@ export default async (event: AllocationVersionCompleteEvent) => {
   } catch (error: unknown) {
     throwCompletionError(error)
   }
-}
+})
