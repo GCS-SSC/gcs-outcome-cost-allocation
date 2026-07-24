@@ -64,6 +64,9 @@ interface ApiErrorResponse {
   }
 }
 
+/**
+ * Preserves an available selection, otherwise preferring a draft, active, then first version.
+ */
 export const resolveSelectedOutcomeAllocationVersionId = (
   currentVersionId: string,
   availableVersions: CostAllocationVersion[]
@@ -78,6 +81,9 @@ export const resolveSelectedOutcomeAllocationVersionId = (
     ?? ''
 }
 
+/**
+ * Extracts the most specific API error message available, falling back to the response status text.
+ */
 export const getOutcomeAllocationResponseErrorMessage = async (response: Response) => {
   try {
     const body = await response.json() as ApiErrorResponse
@@ -94,6 +100,9 @@ export const getOutcomeAllocationResponseErrorMessage = async (response: Respons
 const getCommitmentTypeGroupId = (commitmentType: CommitmentType) => `type:${commitmentType}`
 const getFiscalYearGroupId = (commitmentType: CommitmentType, yearId: string) => `year:${commitmentType}:${yearId}`
 
+/**
+ * Builds commitment-type and fiscal-year groups, adding association rows only for expanded ancestors.
+ */
 export const buildOutcomeAllocationRows = (
   associations: ConfiguredAssociationRow[],
   options: {
@@ -179,22 +188,37 @@ export const buildOutcomeAllocationRows = (
   return rows
 }
 
+/**
+ * Derives the allocation-version collection endpoint from the allocations endpoint.
+ */
 export const getOutcomeAllocationVersionsEndpoint = (allocationsEndpoint: string) =>
   allocationsEndpoint.replace('/allocations', '/allocation-versions')
 
+/**
+ * Appends a caller-encoded version id to the derived allocation-version collection endpoint.
+ */
 export const getOutcomeAllocationVersionEndpoint = (allocationsEndpoint: string, versionId: string) =>
   `${getOutcomeAllocationVersionsEndpoint(allocationsEndpoint)}/${versionId}`
 
+/**
+ * Selects the created draft id when returned, otherwise preserving the current version id.
+ */
 export const resolveCreatedDraftVersionId = (
   currentVersionId: string,
   response: { version?: CostAllocationVersion }
 ) => response.version?.id ? response.version.id : currentVersionId
 
+/**
+ * Clears the selected id only when the deleted draft was selected.
+ */
 export const resolveDeletedDraftVersionId = (
   currentVersionId: string,
   deletedVersionId: string
 ) => currentVersionId === deletedVersionId ? '' : currentVersionId
 
+/**
+ * Builds the version-scoped allocation replacement request body.
+ */
 export const buildSaveOutcomeAllocationsRequestBody = (
   allocationVersionId: string,
   allocations: VersionedOutcomeAllocationInput[]
@@ -203,6 +227,9 @@ export const buildSaveOutcomeAllocationsRequestBody = (
   allocations
 })
 
+/**
+ * Replaces one version's allocations and throws the server-provided message for a non-success response.
+ */
 export const saveOutcomeAllocationsRequest = async (
   requestUrl: RequestInfo | URL,
   allocationVersionId: string,
@@ -219,6 +246,9 @@ export const saveOutcomeAllocationsRequest = async (
   }
 }
 
+/**
+ * Completes an allocation version and throws the server-provided message for a non-success response.
+ */
 export const completeOutcomeAllocationVersionRequest = async (
   requestUrl: RequestInfo | URL,
   fetcher: Fetcher = fetch
@@ -229,6 +259,9 @@ export const completeOutcomeAllocationVersionRequest = async (
   }
 }
 
+/**
+ * Deletes a draft allocation version and throws the server-provided message for a non-success response.
+ */
 export const deleteOutcomeAllocationDraftVersionRequest = async (
   requestUrl: RequestInfo | URL,
   fetcher: Fetcher = fetch
@@ -287,6 +320,9 @@ export const completeOutcomeAllocationSelectedVersion = async (
   }
 }
 
+/**
+ * Returns the locale-selected title and description for allocation save, activation, deletion, or error feedback.
+ */
 export const getOutcomeAllocationToastText = (
   locale: string,
   key: 'saved' | 'activated' | 'deleted' | 'error'

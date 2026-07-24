@@ -1,4 +1,3 @@
-/* eslint-disable jsdoc/require-jsdoc */
 import { z } from 'zod'
 import { defineGcsExtensionRouteHandler } from '@gcs-ssc/extensions/server'
 import { asOutcomeCostAllocationDb } from '../db'

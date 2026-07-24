@@ -1,4 +1,3 @@
-/* eslint-disable jsdoc/require-jsdoc */
 import { defineGcsExtensionRouteHandler } from '@gcs-ssc/extensions/server'
 import { asOutcomeCostAllocationDb } from '../db'
 import { createDraftAllocationVersion } from '../allocation-data'

@@ -79,7 +79,7 @@ const isAssociationModalOpen: Ref<boolean> = ref(false)
 const outcomesResponse: Ref<ListResponse<OutcomeItem> | null> = ref(null)
 const budgetsResponse: Ref<ListResponse<StreamBudgetItem> | null> = ref(null)
 const commitmentsResponse: Ref<ListResponse<StreamCommitmentItem> | null> = ref(null)
-const fetchList = async <T>(url: string) => {
+const fetchList = async <T,>(url: string) => {
   try {
     return await hostApi.get<ListResponse<T>>(url)
   } catch {
@@ -215,6 +215,9 @@ const openCreateAssociation = (streamCommitmentId = '') => {
   isAssociationModalOpen.value = true
 }
 
+/**
+ * Upserts the selected outcome mapping from its commitment line and recomputes enabled commitment types.
+ */
 const saveAssociation = () => {
   if (!selectedAssociation.value) {
     return

@@ -1,4 +1,3 @@
-/* eslint-disable jsdoc/require-jsdoc */
 export const EXTENSION_KEY = 'gcs-outcome-cost-allocation'
 
 export const COMMITMENT_TYPES = ['commitment', 'paye', 'paye2', 'pyp'] as const
@@ -86,11 +85,20 @@ export interface PaymentLineAllocationResolved extends PaymentLineAllocationInpu
 
 type PaymentLineAllocationCandidate = PaymentLineAllocationInput
 
+/**
+ * Checks whether a value is one of the commitment types supported by allocation generation.
+ */
 export const isCommitmentType = (value: unknown): value is CommitmentType =>
   typeof value === 'string' && COMMITMENT_TYPES.includes(value as CommitmentType)
 
+/**
+ * Rounds a numeric amount to the nearest cent.
+ */
 export const toMoney = (value: number): number => Math.round((value + Number.EPSILON) * 100) / 100
 
+/**
+ * Keeps valid commitment types and complete mapping records from an unknown extension config.
+ */
 export const parseOutcomeCostAllocationConfig = (value: unknown): OutcomeCostAllocationConfig => {
   if (!value || typeof value !== 'object') {
     return {
@@ -137,6 +145,9 @@ export const parseOutcomeCostAllocationConfig = (value: unknown): OutcomeCostAll
   }
 }
 
+/**
+ * Reports allocations that reference outcomes or agreement budget years outside the active sets.
+ */
 export const validateAllocationReferences = (
   allocations: OutcomeAllocationInput[],
   yearTotals: YearFundingTotal[],
@@ -166,6 +177,9 @@ export const validateAllocationReferences = (
   return issues
 }
 
+/**
+ * Combines reference issues with an agreement-level check that resolved allocations equal total program funding.
+ */
 export const validateAllocationTotals = (
   allocations: OutcomeAllocationInput[],
   yearTotals: YearFundingTotal[],
@@ -196,6 +210,9 @@ export const validateAllocationTotals = (
   return issues
 }
 
+/**
+ * Resolves amount allocations directly and percentage allocations against their agreement-year funding total.
+ */
 export const resolveAllocationAmounts = (
   allocations: OutcomeAllocationInput[],
   yearTotals: YearFundingTotal[]
@@ -222,6 +239,9 @@ export const resolveAllocationAmounts = (
   return resolved
 }
 
+/**
+ * Validates positive allocations against stream budgets, configured mappings, and active stream commitments.
+ */
 export const validateCommitmentMappings = (
   commitmentType: CommitmentType,
   allocations: OutcomeAllocationResolved[],
@@ -285,6 +305,9 @@ const commitmentLineCoverageKey = (coverage: {
   coverage.streamCommitmentId
 ].join(':')
 
+/**
+ * Aggregates generated and paid lines by commitment coordinates and reports payments exceeding generated coverage.
+ */
 export const validateGeneratedCommitmentLinePaymentCoverage = (
   generatedLines: GeneratedCommitmentLineCoverage[],
   paidLines: PaidCommitmentLineCoverage[]
@@ -352,6 +375,9 @@ const recordPaymentLineAllocation = (
   })
 }
 
+/**
+ * Allocates one weighted round, capping each line at its remaining amount and carrying eligible remainders forward.
+ */
 const allocatePaymentRound = (
   candidates: PaymentLineAllocationCandidate[],
   remainingPaymentAmount: number,
@@ -398,6 +424,9 @@ const allocatePaymentRound = (
   }
 }
 
+/**
+ * Distributes a valid payment proportionally across positive line weights without exceeding any line remainder.
+ */
 export const allocatePaymentAmountToCommitmentLines = (
   lines: PaymentLineAllocationInput[],
   paymentAmount: number

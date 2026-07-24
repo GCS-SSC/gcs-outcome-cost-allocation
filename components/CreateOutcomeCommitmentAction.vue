@@ -154,6 +154,9 @@ const resolveErrorMessage = (error: unknown): string => {
   return getFallbackErrorMessage(err, error)
 }
 
+/**
+ * Creates the selected commitment type, closing and notifying the host only after a successful request.
+ */
 const createCommitment = async () => {
   if (isSaving.value) {
     return

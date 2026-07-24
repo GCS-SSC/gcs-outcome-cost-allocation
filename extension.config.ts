@@ -1,4 +1,3 @@
-/* eslint-disable jsdoc/require-jsdoc */
 import { defineGcsExtension } from '@gcs-ssc/extensions'
 
 export default defineGcsExtension({

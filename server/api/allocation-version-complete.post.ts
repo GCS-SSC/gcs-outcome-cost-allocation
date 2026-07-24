@@ -1,4 +1,3 @@
-/* eslint-disable jsdoc/require-jsdoc */
 import { createGcsExtensionUserError, defineGcsExtensionRouteHandler, type GcsExtensionRouteContext } from '@gcs-ssc/extensions/server'
 import { asOutcomeCostAllocationDb } from '../db'
 import { completeAllocationVersion } from '../allocation-data'

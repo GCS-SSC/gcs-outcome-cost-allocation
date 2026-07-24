@@ -1,4 +1,3 @@
-/* eslint-disable jsdoc/require-jsdoc */
 import {
   createGcsExtensionUserError,
   getGcsExtensionRequestHeader,
@@ -109,6 +108,9 @@ const getLocale = (event: GcsExtensionRouteEvent) => {
   return language.toLowerCase().startsWith('fr') ? 'fr' : 'en'
 }
 
+/**
+ * Returns one error message localized from the request's accepted language.
+ */
 export const getOutcomeCostAllocationErrorMessage = (
   event: GcsExtensionRouteEvent,
   code: string | undefined
@@ -117,11 +119,17 @@ export const getOutcomeCostAllocationErrorMessage = (
   return typeof message === 'string' ? message : message[getLocale(event)]
 }
 
+/**
+ * Returns the bilingual message for a code, falling back to the generic allocation error.
+ */
 export const getOutcomeCostAllocationErrorMessages = (
   code: string | undefined
 ) => errorMessages[code ?? 'GCS_OUTCOME_COST_ALLOCATION_INVALID']
     ?? errorMessages.GCS_OUTCOME_COST_ALLOCATION_INVALID
 
+/**
+ * Creates a bilingual extension user error with optional field-level detail.
+ */
 export const createOutcomeCostAllocationUserError = (
   code: string,
   path?: string
@@ -137,6 +145,9 @@ export const createOutcomeCostAllocationUserError = (
     : undefined
 })
 
+/**
+ * Converts validation issues to request-locale error details.
+ */
 export const localizeAllocationIssues = (
   event: GcsExtensionRouteEvent,
   issues: AllocationValidationIssue[]
@@ -146,6 +157,9 @@ export const localizeAllocationIssues = (
   code: issue.code
 }))
 
+/**
+ * Converts validation issues to bilingual error details for operation hooks.
+ */
 export const bilingualAllocationIssues = (
   issues: AllocationValidationIssue[]
 ) => issues.map(issue => ({

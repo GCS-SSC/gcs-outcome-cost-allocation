@@ -1,4 +1,3 @@
-/* eslint-disable jsdoc/require-jsdoc */
 import { sql } from 'kysely'
 import { defineGcsExtensionMigration } from '@gcs-ssc/extensions/server'
 

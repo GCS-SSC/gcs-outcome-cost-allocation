@@ -532,6 +532,9 @@ const openGenerateRows = () => {
   isGenerateModalOpen.value = true
 }
 
+/**
+ * Reconciles generated rows for the selected type and years, confirming before removing stale allocations.
+ */
 const applyGeneratedRows = async () => {
   const candidates = getGenerationCandidates()
   const candidateKeys = new Set(candidates.map(getAssociationKey))
@@ -568,6 +571,9 @@ const applyGeneratedRows = async () => {
   isGenerateModalOpen.value = false
 }
 
+/**
+ * Persists the editable version, refreshes server state, and reports success without throwing UI errors.
+ */
 const save = async () => {
   if (isSaving.value || !canEditSelectedVersion.value || !selectedVersionId.value) {
     return false
@@ -625,6 +631,9 @@ const createDraftVersion = async () => {
   }
 }
 
+/**
+ * Deletes one draft version, clears it when selected, refreshes data, and surfaces failures in save state.
+ */
 const deleteDraftVersion = async (versionId: string) => {
   if (deletingVersionId.value) {
     return

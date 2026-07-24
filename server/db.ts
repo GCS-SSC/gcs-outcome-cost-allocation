@@ -1,4 +1,3 @@
-/* eslint-disable jsdoc/require-jsdoc */
 import type { Generated, Kysely } from 'kysely'
 import type { AllocationVersionStatus } from '../shared/allocation'
 
@@ -131,5 +130,8 @@ export interface OutcomeCostAllocationHostDatabase {
 
 export type OutcomeCostAllocationDb = Kysely<OutcomeCostAllocationHostDatabase>
 
+/**
+ * Narrows the host database to the tables used by outcome-cost-allocation services.
+ */
 export const asOutcomeCostAllocationDb = (db: unknown): OutcomeCostAllocationDb =>
   db as OutcomeCostAllocationDb

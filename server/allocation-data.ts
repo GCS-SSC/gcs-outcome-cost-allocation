@@ -1,4 +1,3 @@
-/* eslint-disable jsdoc/require-jsdoc */
 import { sql } from 'kysely'
 import {
   type AllocationValidationIssue,
@@ -85,6 +84,9 @@ const mapAllocationVersion = (row: {
   completedAt: row.completed_at ? new Date(row.completed_at).toISOString() : null
 })
 
+/**
+ * Lists distinct non-deleted outcomes linked to active agreement activities, ordered by English label.
+ */
 export const getAgreementOutcomes = async (
   db: OutcomeCostAllocationDb,
   agreementId: string
@@ -113,6 +115,9 @@ export const getAgreementOutcomes = async (
   .orderBy('Transfer_Payment_Outcome.egcs_tp_name_en', 'asc')
   .execute()
 
+/**
+ * Lists active agreement budget years with summed program funding and the matching stream-budget id.
+ */
 export const getAgreementBudgetYears = async (
   db: OutcomeCostAllocationDb,
   agreementId: string,
@@ -166,6 +171,9 @@ export const getAgreementBudgetYears = async (
   .orderBy('Agency_Fiscal_Year.egcs_ay_fiscalyear', 'asc')
   .execute()
 
+/**
+ * Lists non-deleted allocation versions for an agreement from newest version number to oldest.
+ */
 export const getAllocationVersions = async (
   db: OutcomeCostAllocationDb,
   agreementId: string
@@ -188,6 +196,9 @@ export const getAllocationVersions = async (
   return rows.map(mapAllocationVersion)
 }
 
+/**
+ * Reuses an existing draft or transactionally creates the next agreement version number.
+ */
 export const createDraftAllocationVersion = async (
   db: OutcomeCostAllocationDb,
   agreementId: string
@@ -239,6 +250,9 @@ export const createDraftAllocationVersion = async (
   return mapAllocationVersion(inserted)
 })
 
+/**
+ * Returns the newest existing draft, creating one only when the agreement has none.
+ */
 export const ensureDraftAllocationVersion = async (
   db: OutcomeCostAllocationDb,
   agreementId: string
@@ -262,6 +276,9 @@ export const ensureDraftAllocationVersion = async (
   return existingDraft ? mapAllocationVersion(existingDraft) : await createDraftAllocationVersion(db, agreementId)
 }
 
+/**
+ * Soft-deletes a draft and all of its active allocation rows in one transaction.
+ */
 export const deleteDraftAllocationVersion = async (
   db: OutcomeCostAllocationDb,
   agreementId: string,
@@ -297,6 +314,9 @@ export const deleteDraftAllocationVersion = async (
     .execute()
 })
 
+/**
+ * Loads one non-deleted agreement allocation version or returns `null` when it does not exist.
+ */
 export const getAllocationVersion = async (
   db: OutcomeCostAllocationDb,
   agreementId: string,
@@ -320,6 +340,9 @@ export const getAllocationVersion = async (
   return row ? mapAllocationVersion(row) : null
 }
 
+/**
+ * Loads the agreement's active non-deleted allocation version or returns `null`.
+ */
 export const getActiveAllocationVersion = async (
   db: OutcomeCostAllocationDb,
   agreementId: string
@@ -342,6 +365,9 @@ export const getActiveAllocationVersion = async (
   return row ? mapAllocationVersion(row) : null
 }
 
+/**
+ * Loads non-deleted saved allocations for an agreement, optionally scoped to one version, in insertion order.
+ */
 export const getSavedAllocations = async (
   db: OutcomeCostAllocationDb,
   agreementId: string,
@@ -380,6 +406,9 @@ export const getSavedAllocations = async (
   }))
 }
 
+/**
+ * Lists active stream commitment lines with fiscal-year context, ordered by year then general-ledger code.
+ */
 export const getStreamCommitmentLines = async (
   db: OutcomeCostAllocationDb,
   streamId: string
@@ -416,6 +445,9 @@ export const getStreamCommitmentLines = async (
   .orderBy('Transfer_Payment_Stream_Commitment.egcs_tp_gl', 'asc')
   .execute()
 
+/**
+ * Replaces a draft version's allocations by soft-deleting old rows and inserting the new set transactionally.
+ */
 export const saveAllocations = async (
   db: OutcomeCostAllocationDb,
   agreementId: string,
@@ -461,6 +493,9 @@ export const saveAllocations = async (
   })
 }
 
+/**
+ * Validates allocations against current agreement outcomes, budget years, and total program funding.
+ */
 export const validateAgreementAllocations = async (
   db: OutcomeCostAllocationDb,
   agreementId: string,
@@ -481,6 +516,9 @@ export const validateAgreementAllocations = async (
   return validateAllocationTotals(allocations, yearTotals, activeOutcomeIds)
 }
 
+/**
+ * Projects positive mapped allocations into the commitment-line coverage expected after regeneration.
+ */
 const buildGeneratedCommitmentLineCoverage = (
   commitmentTypes: CommitmentType[],
   allocations: OutcomeAllocationResolved[],
@@ -512,6 +550,9 @@ const buildGeneratedCommitmentLineCoverage = (
     })
 )
 
+/**
+ * Loads non-denied payment amounts against active commitment lines for the selected commitment types.
+ */
 const getPaidCommitmentLineCoverage = async (
   db: OutcomeCostAllocationDb,
   agreementId: string,
@@ -563,6 +604,9 @@ const getPaidCommitmentLineCoverage = async (
   }))
 }
 
+/**
+ * Ensures regenerated lines for enabled commitment types still cover all non-denied paid amounts.
+ */
 export const validateAllocationPaymentCoverage = async (
   db: OutcomeCostAllocationDb,
   agreementId: string,
@@ -604,6 +648,9 @@ export const validateAllocationPaymentCoverage = async (
   return validateGeneratedCommitmentLinePaymentCoverage(generatedLines, paidLines)
 }
 
+/**
+ * Validates a draft, demotes the prior active version, and activates the draft in one transaction.
+ */
 export const completeAllocationVersion = async (
   db: OutcomeCostAllocationDb,
   agreementId: string,
@@ -671,6 +718,9 @@ export const completeAllocationVersion = async (
   return mapAllocationVersion(completed)
 })
 
+/**
+ * Collects non-deleted commitment-line configuration ids for one transfer-payment stream.
+ */
 export const getActiveStreamCommitmentIds = async (
   db: OutcomeCostAllocationDb,
   streamId: string
@@ -685,6 +735,9 @@ export const getActiveStreamCommitmentIds = async (
   return new Set(rows.map(row => String(row.id)))
 }
 
+/**
+ * Resolves allocation-derived commitment-line inputs and validation issues, or defers when the type is not extension-managed.
+ */
 export const getGeneratedCommitmentLines = async (
   db: OutcomeCostAllocationDb,
   agreementId: string,
@@ -797,6 +850,9 @@ const getMappedStreamCommitmentId = (
   return mapping?.streamCommitmentId ?? ''
 }
 
+/**
+ * Loads and resolves the active allocation context needed to validate one commitment type's payment.
+ */
 const getPaymentContext = async (
   db: OutcomeCostAllocationDb,
   agreementId: string,
@@ -856,6 +912,9 @@ const getDesiredStreamCommitmentIds = (
   return streamCommitmentId ? [streamCommitmentId] : []
 }))
 
+/**
+ * Locks desired commitment lines and aggregates their non-denied paid amounts for remaining-balance checks.
+ */
 const getCommitmentLineCoverageByStreamCommitmentId = async (
   db: OutcomeCostAllocationDb,
   commitmentId: string,
@@ -912,6 +971,9 @@ const getCommitmentLineCoverageByStreamCommitmentId = async (
   }
 }
 
+/**
+ * Aggregates allocation weights by mapped commitment line and reports mappings absent from the commitment.
+ */
 const getPaymentLineInputs = (
   parsedConfig: ReturnType<typeof parseOutcomeCostAllocationConfig>,
   commitmentType: CommitmentType,
@@ -961,6 +1023,9 @@ const getPaymentLineInputs = (
   }
 }
 
+/**
+ * Generates a cent-balanced payment split across mapped commitment lines after all active-allocation checks pass.
+ */
 export const getGeneratedPaymentLines = async (
   db: OutcomeCostAllocationDb,
   agreementId: string,

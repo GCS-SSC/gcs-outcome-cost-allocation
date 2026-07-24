@@ -1,4 +1,3 @@
-/* eslint-disable jsdoc/require-jsdoc */
 import {
   createGcsExtensionUserError,
   defineGcsExtensionNitroPlugin,
@@ -38,6 +37,9 @@ const throwOutcomeCostAllocationIssues = (
   })
 }
 
+/**
+ * Inserts a commitment, its generated lines, and allocation provenance in the operation transaction.
+ */
 const createGeneratedCommitment = async (
   context: CreateOperationContext,
   commitmentType: CommitmentType,
@@ -94,6 +96,9 @@ const createGeneratedCommitment = async (
   return commitment
 }
 
+/**
+ * Handles supported commitment creation from the active allocation or lets the host continue unchanged.
+ */
 const handleCommitmentCreate = async (context: CreateOperationContext): Promise<CreateOperationResult> => {
   const commitmentType = context.validatedBody.egcs_fc_type
   if (!isCommitmentType(commitmentType) || context.createdRecord) {
@@ -155,6 +160,9 @@ const paymentCreateInputsAreComplete = (inputs: ReturnType<typeof getPaymentCrea
   && Boolean(inputs.agreementBudgetFiscalYearId)
   && inputs.paymentAmount > 0
 
+/**
+ * Inserts generated payment lines and advances a matching draft payment to in-progress.
+ */
 const createGeneratedPaymentLines = async (
   context: CreateOperationContext,
   paymentId: string,
@@ -179,6 +187,9 @@ const createGeneratedPaymentLines = async (
     .execute()
 }
 
+/**
+ * Adds allocation-derived lines after host payment creation when all required inputs are present.
+ */
 const handlePaymentCreate = async (context: CreateOperationContext): Promise<CreateOperationResult> => {
   if (!context.createdRecord) {
     return continueCreateOperation()
@@ -220,6 +231,9 @@ const handlePaymentCreate = async (context: CreateOperationContext): Promise<Cre
   return continueCreateOperation()
 }
 
+/**
+ * Registers allocation-aware create handlers that generate commitment and payment records in host transactions.
+ */
 export default defineGcsExtensionNitroPlugin(nitroApp => {
   registerGcsExtensionCreateOperationHandler(EXTENSION_KEY, 'agreement.commitments.create', handleCommitmentCreate, nitroApp as Parameters<typeof registerGcsExtensionCreateOperationHandler>[3])
   registerGcsExtensionCreateOperationHandler(EXTENSION_KEY, 'agreement.payments.create', handlePaymentCreate, nitroApp as Parameters<typeof registerGcsExtensionCreateOperationHandler>[3])

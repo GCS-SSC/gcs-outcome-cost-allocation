@@ -1,4 +1,3 @@
-/* eslint-disable jsdoc/require-jsdoc */
 import { describe, expect, it } from 'vitest'
 import {
   allocatePaymentAmountToCommitmentLines,
