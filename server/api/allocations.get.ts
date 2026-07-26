@@ -1,12 +1,12 @@
 import { defineGcsExtensionRouteHandler } from '@gcs-ssc/extensions/server'
-import { asOutcomeCostAllocationDb } from '../db'
+import { asOutcomeCostAllocationDb } from '../db.ts'
 import {
   getAgreementBudgetYears,
   getAgreementOutcomes,
   getAllocationVersions,
   getSavedAllocations,
   getStreamCommitmentLines
-} from '../allocation-data'
+} from '../allocation-data.ts'
 
 export default defineGcsExtensionRouteHandler(async ({ params, entity, db: rawDb }) => {
   const agreementId = params.agreementId ?? ''

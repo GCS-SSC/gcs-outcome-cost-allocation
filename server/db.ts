@@ -1,5 +1,5 @@
 import type { Generated, Kysely } from 'kysely'
-import type { AllocationVersionStatus } from '../shared/allocation'
+import type { AllocationVersionStatus } from '../shared/allocation.ts'
 
 export interface OutcomeCostAllocationHostDatabase {
   'Funding_Case_Agreement_Profile': {

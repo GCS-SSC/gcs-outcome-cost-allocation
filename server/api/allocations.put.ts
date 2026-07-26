@@ -1,11 +1,11 @@
 import { defineGcsExtensionRouteHandler } from '@gcs-ssc/extensions/server'
-import { asOutcomeCostAllocationDb } from '../db'
-import { saveAllocations } from '../allocation-data'
-import { SaveAllocationsRequestSchema } from '../allocation-request-schema'
+import { asOutcomeCostAllocationDb } from '../db.ts'
+import { saveAllocations } from '../allocation-data.ts'
+import { SaveAllocationsRequestSchema } from '../allocation-request-schema.ts'
 import {
   createOutcomeCostAllocationUserError,
   throwOutcomeCostAllocationDatabaseError
-} from '../errors'
+} from '../errors.ts'
 
 const parseSaveAllocationsBody = (value: unknown) => {
   const result = SaveAllocationsRequestSchema.safeParse(value)

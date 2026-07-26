@@ -14,7 +14,7 @@ import {
   registerGcsExtensionDisableGuard
 } from '@gcs-ssc/extensions/server'
 import { sql } from 'kysely'
-import { asOutcomeCostAllocationDb } from '../db'
+import { asOutcomeCostAllocationDb } from '../db.ts'
 import {
   getGeneratedCommitmentLines,
   getGeneratedPaymentLines,
@@ -23,18 +23,18 @@ import {
   lockAgreementAllocationAdvisory,
   lockAgreementAllocationLifecycle,
   lockOutcomeCostAllocationScope
-} from '../allocation-data'
+} from '../allocation-data.ts'
 import {
   bilingualAllocationIssues,
   getOutcomeCostAllocationErrorMessages
-} from '../errors'
+} from '../errors.ts'
 import {
   type AllocationValidationIssue,
   type CommitmentType,
   EXTENSION_KEY,
   isCommitmentType,
   parseExactNumeric19Scale4
-} from '../../shared/allocation'
+} from '../../shared/allocation.ts'
 
 type CreateOperationContext = GcsExtensionCreateOperationContext
 type CreateOperationResult = GcsExtensionCreateOperationResult

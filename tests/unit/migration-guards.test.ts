@@ -164,16 +164,6 @@ describe('outcome allocation generated-record database guards', () => {
       ) AS definition
     `.execute(db)
     managedGuardDefinition = guardFunction.rows[0]?.definition ?? ''
-    // PGlite does not expose advisory locks through pg_locks; real PostgreSQL tests exercise this guard.
-    await sql`
-      CREATE OR REPLACE FUNCTION extensions.gcs_outcome_cost_allocation_assert_managed_mutation(
-        target_agreement_id bigint
-      ) RETURNS void AS $$
-      BEGIN
-        RETURN;
-      END;
-      $$ LANGUAGE plpgsql;
-    `.execute(db)
     await sql`INSERT INTO "Funding_Case_Agreement_Profile" (id, egcs_fc_transferpaymentstream) VALUES (1, 200)`.execute(db)
     await sql`INSERT INTO "Transfer_Payment_Stream" (id, egcs_tp_transferpaymentprofile) VALUES (200, 300)`.execute(db)
     await sql`
@@ -345,7 +335,37 @@ describe('outcome allocation generated-record database guards', () => {
       indexname: 'gcs_outcome_cost_allocation_version_allocation'
     }])
     expect(managedGuardDefinition).toContain('pg_locks')
-    expect(managedGuardDefinition).not.toContain('current_setting')
+    expect(managedGuardDefinition).toContain('compiled by emcc')
+    expect(managedGuardDefinition).toContain('current_setting')
+  })
+
+  it('requires the managed agreement lock for valid PGlite mutations', async () => {
+    await expectGuardConstraint(
+      sql`
+        INSERT INTO extensions.gcs_outcome_cost_allocation_versions (
+          id,
+          agreement_id,
+          version_number,
+          status
+        ) VALUES (99, 1, 99, 'draft')
+      `.execute(db),
+      'gcs_outcome_cost_allocation_managed_mutation_guard'
+    )
+
+    await managedMutation(db, '1', async trx => await sql`
+      INSERT INTO extensions.gcs_outcome_cost_allocation_versions (
+        id,
+        agreement_id,
+        version_number,
+        status
+      ) VALUES (99, 1, 99, 'draft')
+    `.execute(trx))
+
+    await managedMutation(db, '1', async trx => await sql`
+      UPDATE extensions.gcs_outcome_cost_allocation_versions
+      SET _deleted = true
+      WHERE id = 99
+    `.execute(trx))
   })
 
   it('blocks later generated commitment line writes and sensitive parent changes', async () => {

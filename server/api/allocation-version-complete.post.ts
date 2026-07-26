@@ -1,14 +1,14 @@
 import { createGcsExtensionUserError, defineGcsExtensionRouteHandler, type GcsExtensionRouteContext } from '@gcs-ssc/extensions/server'
-import { asOutcomeCostAllocationDb } from '../db'
-import { saveAndCompleteAllocationVersionWithCurrentConfiguration } from '../allocation-data'
-import { CompleteAllocationsRequestSchema } from '../allocation-request-schema'
+import { asOutcomeCostAllocationDb } from '../db.ts'
+import { saveAndCompleteAllocationVersionWithCurrentConfiguration } from '../allocation-data.ts'
+import { CompleteAllocationsRequestSchema } from '../allocation-request-schema.ts'
 import {
   bilingualAllocationIssues,
   createOutcomeCostAllocationUserError,
   getOutcomeCostAllocationErrorMessages,
   throwOutcomeCostAllocationDatabaseError
-} from '../errors'
-import type { AllocationValidationIssue } from '../../shared/allocation'
+} from '../errors.ts'
+import type { AllocationValidationIssue } from '../../shared/allocation.ts'
 
 const parseCompleteAllocationBody = (value: unknown) => {
   const result = CompleteAllocationsRequestSchema.safeParse(value)

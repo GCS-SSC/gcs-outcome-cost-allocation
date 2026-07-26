@@ -23,9 +23,9 @@ import {
   validateAllocationReferences,
   validateAllocationTotals,
   validateCommitmentMappings
-} from '../shared/allocation'
-import type { OutcomeCostAllocationDb } from './db'
-import { createOutcomeCostAllocationUserError } from './errors'
+} from '../shared/allocation.ts'
+import type { OutcomeCostAllocationDb } from './db.ts'
+import { createOutcomeCostAllocationUserError } from './errors.ts'
 
 export interface AgreementOutcome {
   id: string

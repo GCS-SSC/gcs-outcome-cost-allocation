@@ -1,6 +1,6 @@
 import { defineGcsExtensionRouteHandler } from '@gcs-ssc/extensions/server'
-import { asOutcomeCostAllocationDb } from '../db'
-import { createDraftAllocationVersion } from '../allocation-data'
+import { asOutcomeCostAllocationDb } from '../db.ts'
+import { createDraftAllocationVersion } from '../allocation-data.ts'
 
 export default defineGcsExtensionRouteHandler(async ({ params, entity, db: rawDb, authorizeFresh }) => {
   const agreementId = params.agreementId ?? ''

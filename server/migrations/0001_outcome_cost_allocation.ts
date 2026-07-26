@@ -122,6 +122,11 @@ export default defineGcsExtensionMigration({
               CONSTRAINT = 'gcs_outcome_cost_allocation_agreement_guard';
         END IF;
 
+        PERFORM set_config(
+          'gcs_outcome_cost_allocation.managed_agreement_id',
+          target_agreement_id::text,
+          true
+        );
       END;
       $$ LANGUAGE plpgsql;
     `.execute(db)
@@ -133,6 +138,19 @@ export default defineGcsExtensionMigration({
       DECLARE
         agreement_lock_key bigint;
       BEGIN
+        IF version() LIKE '%compiled by emcc%' THEN
+          IF current_setting(
+            'gcs_outcome_cost_allocation.managed_agreement_id',
+            true
+          ) IS DISTINCT FROM target_agreement_id::text THEN
+            RAISE EXCEPTION 'Outcome cost allocation changes require the agreement lifecycle lock.'
+              USING ERRCODE = '23514',
+                CONSTRAINT = 'gcs_outcome_cost_allocation_managed_mutation_guard';
+          END IF;
+
+          RETURN;
+        END IF;
+
         agreement_lock_key := hashtextextended(
           'gcs_outcome_cost_allocation.agreement',
           target_agreement_id

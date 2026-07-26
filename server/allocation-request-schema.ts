@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { parseExactNumeric19Scale4 } from '../shared/allocation'
+import { parseExactNumeric19Scale4 } from '../shared/allocation.ts'
 
 const addInvalidNumericIssue = (context: z.RefinementCtx) => {
   context.addIssue({

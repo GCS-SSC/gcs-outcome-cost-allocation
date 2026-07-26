@@ -6,7 +6,7 @@ import {
   type GcsExtensionUserErrorDetail,
   type GcsExtensionUserErrorOptions
 } from '@gcs-ssc/extensions/server'
-import type { AllocationValidationIssue } from '../shared/allocation'
+import type { AllocationValidationIssue } from '../shared/allocation.ts'
 
 const errorMessages: Record<string, GcsExtensionLocalizedMessage> = {
   GCS_OUTCOME_COST_ALLOCATION_INVALID: {
