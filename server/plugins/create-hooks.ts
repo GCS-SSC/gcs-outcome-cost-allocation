@@ -1,6 +1,7 @@
 import {
   createGcsExtensionUserError,
   defineGcsExtensionNitroPlugin,
+  type GcsExtensionAgreementDeleteGuardContext,
   type GcsExtensionAgreementStreamChangeGuardContext,
   type GcsExtensionAgreementLifecycleLockContext,
   type GcsExtensionAgreementPaymentMutationGuardContext,
@@ -8,6 +9,7 @@ import {
   type GcsExtensionCreateOperationResult,
   type GcsExtensionDisableGuardContext,
   registerGcsExtensionAgreementLifecycleLock,
+  registerGcsExtensionAgreementDeleteGuard,
   registerGcsExtensionAgreementStreamChangeGuard,
   registerGcsExtensionAgreementPaymentMutationGuard,
   registerGcsExtensionCreateOperationHandler,
@@ -84,6 +86,15 @@ const agreementStreamChangeBlocked = () => createGcsExtensionUserError({
   message: {
     en: 'This agreement cannot be moved to another stream because outcome cost allocation history already exists.',
     fr: 'Cette entente ne peut pas etre deplacee vers un autre volet, car un historique de repartition des couts par resultat existe deja.'
+  }
+})
+
+const agreementDeleteBlocked = () => createGcsExtensionUserError({
+  code: 'GCS_OUTCOME_COST_ALLOCATION_AGREEMENT_DELETE_BLOCKED',
+  statusCode: 409,
+  message: {
+    en: 'This agreement cannot be deleted because outcome cost allocation history or generated records exist.',
+    fr: 'Cette entente ne peut pas etre supprimee, car un historique de repartition des couts par resultat ou des enregistrements generes existent.'
   }
 })
 
@@ -388,6 +399,33 @@ const guardAgreementStreamChange = async (
   }
 }
 
+/** Preserves allocation history and generated provenance when the host deletes an agreement. */
+const guardAgreementDelete = async (
+  context: GcsExtensionAgreementDeleteGuardContext
+): Promise<void> => {
+  const db = asOutcomeCostAllocationDb(context.db)
+  if (!await outcomeCostAllocationLifecycleTablesExist(db)) {
+    return
+  }
+
+  await lockAgreementAllocationLifecycle(db, context.agreementId)
+
+  const history = await db
+    .selectFrom('extensions.gcs_outcome_cost_allocation_versions')
+    .where('agreement_id', '=', context.agreementId)
+    .select('id')
+    .executeTakeFirst()
+  const generatedProvenance = await db
+    .selectFrom('extensions.gcs_outcome_cost_allocation_commitment_lines')
+    .where('agreement_id', '=', context.agreementId)
+    .select('id')
+    .executeTakeFirst()
+
+  if (history || generatedProvenance) {
+    throw agreementDeleteBlocked()
+  }
+}
+
 /**
  * Inserts a commitment, its generated lines, and allocation provenance in the operation transaction.
  */
@@ -639,6 +677,7 @@ export default defineGcsExtensionNitroPlugin(nitroApp => {
   registerGcsExtensionCreateOperationHandler(EXTENSION_KEY, 'agreement.payments.create', handlePaymentCreate, nitroApp)
   registerGcsExtensionDisableGuard(EXTENSION_KEY, guardExtensionDisable, nitroApp)
   registerGcsExtensionAgreementLifecycleLock(EXTENSION_KEY, lockAgreementLifecycle, nitroApp)
+  registerGcsExtensionAgreementDeleteGuard(EXTENSION_KEY, guardAgreementDelete, nitroApp)
   registerGcsExtensionAgreementStreamChangeGuard(EXTENSION_KEY, guardAgreementStreamChange, nitroApp)
   registerGcsExtensionAgreementPaymentMutationGuard(EXTENSION_KEY, guardAgreementPaymentMutation, nitroApp)
 })

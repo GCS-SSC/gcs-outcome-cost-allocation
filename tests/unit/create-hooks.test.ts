@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Kysely, Transaction } from 'kysely'
 import type { GcsExtensionCreateOperation } from '@gcs-ssc/extensions'
 import type {
+  GcsExtensionAgreementDeleteGuardHookPayload,
   GcsExtensionAgreementStreamChangeGuardHookPayload,
   GcsExtensionAgreementLifecycleLockHookPayload,
   GcsExtensionAgreementPaymentMutationGuardHookPayload,
@@ -206,7 +207,7 @@ const loadHooks = async () => {
       }
     }
   })
-  expect(hooks).toHaveLength(6)
+  expect(hooks).toHaveLength(7)
   return {
     commitment: hooks[0] as Hook,
     payment: hooks[1] as Hook,
@@ -214,10 +215,13 @@ const loadHooks = async () => {
     lifecycle: hooks[3] as unknown as (
       payload: GcsExtensionAgreementLifecycleLockHookPayload
     ) => Promise<void>,
-    streamChange: hooks[4] as unknown as (
+    agreementDelete: hooks[4] as unknown as (
+      payload: GcsExtensionAgreementDeleteGuardHookPayload
+    ) => Promise<void>,
+    streamChange: hooks[5] as unknown as (
       payload: GcsExtensionAgreementStreamChangeGuardHookPayload
     ) => Promise<void>,
-    paymentMutation: hooks[5] as unknown as (
+    paymentMutation: hooks[6] as unknown as (
       payload: GcsExtensionAgreementPaymentMutationGuardHookPayload
     ) => Promise<void>
   }
@@ -334,6 +338,45 @@ describe('outcome cost allocation create hooks', () => {
       db,
       'agreement-1'
     )
+  })
+
+  it('allows agreement deletion when no allocation history or generated provenance exists', async () => {
+    const { agreementDelete } = await loadHooks()
+    const db = new WriteDb()
+
+    await expect(agreementDelete({
+      event: {},
+      db: db as unknown as Transaction<unknown>,
+      agreementId: 'agreement-1',
+      agencyId: 'agency-1',
+      streamId: 'stream-1'
+    })).resolves.toBeUndefined()
+
+    expect(allocationDataMocks.lockAgreementAllocationLifecycle).toHaveBeenCalledWith(db, 'agreement-1')
+  })
+
+  it.each([
+    ['allocation history', { allocationHistoryId: 'version-1' }],
+    ['generated provenance', { generatedCommitmentLine: true }]
+  ])('blocks agreement deletion when %s exists', async (_label, state) => {
+    const { agreementDelete } = await loadHooks()
+    const db = new WriteDb()
+    Object.assign(db, state)
+
+    await expect(agreementDelete({
+      event: {},
+      db: db as unknown as Transaction<unknown>,
+      agreementId: 'agreement-1',
+      agencyId: 'agency-1',
+      streamId: 'stream-1'
+    })).rejects.toMatchObject({
+      code: 'GCS_OUTCOME_COST_ALLOCATION_AGREEMENT_DELETE_BLOCKED',
+      statusCode: 409,
+      localizedMessage: {
+        en: expect.any(String),
+        fr: expect.any(String)
+      }
+    })
   })
 
   it('blocks sensitive generated-payment edits with a stable bilingual conflict', async () => {
@@ -726,7 +769,7 @@ describe('outcome cost allocation create hooks', () => {
   })
 
   it('skips owned-table lifecycle queries when the extension has never been enabled', async () => {
-    const { paymentMutation, streamChange } = await loadHooks()
+    const { agreementDelete, paymentMutation, streamChange } = await loadHooks()
     const db = new WriteDb()
     db.extensionTablesExist = false
 
@@ -744,6 +787,13 @@ describe('outcome cost allocation create hooks', () => {
       agencyId: 'agency-1',
       currentStreamId: 'stream-1',
       nextStreamId: 'stream-2'
+    })
+    await agreementDelete({
+      event: {},
+      db: db as unknown as Transaction<unknown>,
+      agreementId: 'agreement-1',
+      agencyId: 'agency-1',
+      streamId: 'stream-1'
     })
 
     expect(db.selectedTables).not.toContain('extensions.gcs_outcome_cost_allocation_versions')

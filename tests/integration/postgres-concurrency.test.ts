@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { Kysely, PostgresDialect, sql, type Transaction } from 'kysely'
 import { Pool } from 'pg'
 import type {
+  GcsExtensionAgreementDeleteGuardHookPayload,
   GcsExtensionAgreementStreamChangeGuardHookPayload,
   GcsExtensionAgreementLifecycleLockHookPayload,
   GcsExtensionAgreementPaymentMutationGuardHookPayload,
@@ -276,6 +277,40 @@ const loadAgreementStreamChangeGuard = async () => {
   const guard = hooks[0]
   if (!guard) {
     throw new Error('Agreement stream change guard was not registered.')
+  }
+
+  return guard
+}
+
+const loadAgreementDeleteGuard = async () => {
+  const hooks: Array<(
+    payload: GcsExtensionAgreementDeleteGuardHookPayload
+  ) => Promise<void> | void> = []
+  const plugin = (await import('../../server/plugins/create-hooks')).default as unknown as (
+    nitroApp: {
+      hooks: {
+        hook: (
+          name: string,
+          handler: (
+            payload: GcsExtensionAgreementDeleteGuardHookPayload
+          ) => Promise<void> | void
+        ) => void
+      }
+    }
+  ) => void
+  plugin({
+    hooks: {
+      hook: (name, handler) => {
+        if (name === 'gcs:extension:agreement-delete-guard') {
+          hooks.push(handler)
+        }
+      }
+    }
+  })
+
+  const guard = hooks[0]
+  if (!guard) {
+    throw new Error('Agreement delete guard was not registered.')
   }
 
   return guard
@@ -3290,6 +3325,142 @@ describe('outcome allocation PostgreSQL concurrency', () => {
       releaseActivation.release()
       await Promise.allSettled([activating, ...(deleting ? [deleting] : [])])
     }
+  })
+
+  it('prevents allocation history creation after agreement deletion wins the lifecycle lock', async () => {
+    const guard = await loadAgreementDeleteGuard()
+    await sql`
+      INSERT INTO "Funding_Case_Agreement_Profile" (id, egcs_fc_transferpaymentstream)
+      VALUES (1001, 2)
+    `.execute(observerDb)
+    const deletionReady = createLatch()
+    const releaseDeletion = createLatch()
+    const deletionPid = await sql<{ pid: number }>`SELECT pg_backend_pid()::integer AS pid`
+      .execute(holderDb)
+      .then(result => result.rows[0]?.pid)
+    const historyPid = await sql<{ pid: number }>`SELECT pg_backend_pid()::integer AS pid`
+      .execute(waiterDb)
+      .then(result => result.rows[0]?.pid)
+
+    const deleting = holderDb.transaction().execute(async trx => {
+      await guard({
+        event: {},
+        db: trx as unknown as Transaction<unknown>,
+        agreementId: '1001',
+        agencyId: '2000',
+        streamId: '2'
+      })
+      await trx
+        .updateTable('Funding_Case_Agreement_Profile')
+        .set({ _deleted: true })
+        .where('id', '=', '1001')
+        .execute()
+      deletionReady.release()
+      await releaseDeletion.promise
+    })
+    await waitForLatchOrTask(deletionReady.promise, deleting, 'Agreement deletion')
+
+    const creatingHistory = managedMutation(waiterDb, '1001', async trx => await trx
+      .insertInto('extensions.gcs_outcome_cost_allocation_versions')
+      .values({
+        agreement_id: '1001',
+        version_number: 1,
+        status: 'draft'
+      })
+      .execute())
+
+    try {
+      await vi.waitFor(async () => {
+        const blockers = await sql<{ blocker_pids: number[] }>`
+          SELECT pg_blocking_pids(${historyPid})::integer[] AS blocker_pids
+        `.execute(observerDb)
+        expect(blockers.rows[0]?.blocker_pids).toContain(deletionPid)
+      })
+      releaseDeletion.release()
+      await expect(deleting).resolves.toBeUndefined()
+      await expect(creatingHistory).rejects.toMatchObject({
+        code: 'GCS_OUTCOME_COST_ALLOCATION_INVALID'
+      })
+    } finally {
+      releaseDeletion.release()
+      await Promise.allSettled([deleting, creatingHistory])
+    }
+
+    const history = await observerDb
+      .selectFrom('extensions.gcs_outcome_cost_allocation_versions')
+      .where('agreement_id', '=', '1001')
+      .select('id')
+      .execute()
+    expect(history).toEqual([])
+  })
+
+  it('blocks agreement deletion after allocation history wins the lifecycle lock', async () => {
+    const guard = await loadAgreementDeleteGuard()
+    await sql`
+      INSERT INTO "Funding_Case_Agreement_Profile" (id, egcs_fc_transferpaymentstream)
+      VALUES (1002, 2)
+    `.execute(observerDb)
+    const historyReady = createLatch()
+    const releaseHistory = createLatch()
+    const historyPid = await sql<{ pid: number }>`SELECT pg_backend_pid()::integer AS pid`
+      .execute(holderDb)
+      .then(result => result.rows[0]?.pid)
+    const deletionPid = await sql<{ pid: number }>`SELECT pg_backend_pid()::integer AS pid`
+      .execute(waiterDb)
+      .then(result => result.rows[0]?.pid)
+
+    const creatingHistory = managedMutation(holderDb, '1002', async trx => {
+      await trx
+        .insertInto('extensions.gcs_outcome_cost_allocation_versions')
+        .values({
+          agreement_id: '1002',
+          version_number: 1,
+          status: 'draft'
+        })
+        .execute()
+      historyReady.release()
+      await releaseHistory.promise
+    })
+    await waitForLatchOrTask(historyReady.promise, creatingHistory, 'Allocation history creation')
+
+    const deleting = waiterDb.transaction().execute(async trx => {
+      await guard({
+        event: {},
+        db: trx as unknown as Transaction<unknown>,
+        agreementId: '1002',
+        agencyId: '2000',
+        streamId: '2'
+      })
+      await trx
+        .updateTable('Funding_Case_Agreement_Profile')
+        .set({ _deleted: true })
+        .where('id', '=', '1002')
+        .execute()
+    })
+
+    try {
+      await vi.waitFor(async () => {
+        const blockers = await sql<{ blocker_pids: number[] }>`
+          SELECT pg_blocking_pids(${deletionPid})::integer[] AS blocker_pids
+        `.execute(observerDb)
+        expect(blockers.rows[0]?.blocker_pids).toContain(historyPid)
+      })
+      releaseHistory.release()
+      await expect(creatingHistory).resolves.toBeUndefined()
+      await expect(deleting).rejects.toMatchObject({
+        code: 'GCS_OUTCOME_COST_ALLOCATION_AGREEMENT_DELETE_BLOCKED'
+      })
+    } finally {
+      releaseHistory.release()
+      await Promise.allSettled([creatingHistory, deleting])
+    }
+
+    const agreement = await observerDb
+      .selectFrom('Funding_Case_Agreement_Profile')
+      .where('id', '=', '1002')
+      .select('_deleted')
+      .executeTakeFirstOrThrow()
+    expect(agreement._deleted).toBe(false)
   })
 
   it('refuses rollback after completed allocation history exists', async () => {
