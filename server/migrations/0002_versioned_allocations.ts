@@ -2,7 +2,7 @@ import { sql } from 'kysely'
 import { defineGcsExtensionMigration } from '@gcs-ssc/extensions/server'
 
 export default defineGcsExtensionMigration({
-  async up(db) {
+  up: async (db) => {
     await sql`
       CREATE TABLE IF NOT EXISTS extensions.gcs_outcome_cost_allocation_versions (
         id bigserial PRIMARY KEY,
@@ -11,6 +11,7 @@ export default defineGcsExtensionMigration({
         status varchar(20) NOT NULL,
         created_at timestamp NOT NULL DEFAULT now(),
         completed_at timestamp,
+        funding_basis_amount numeric(19, 2),
         _deleted boolean NOT NULL DEFAULT false,
         CONSTRAINT gcs_outcome_cost_allocation_version_status
           CHECK (status IN ('draft', 'active', 'inactive'))
@@ -33,6 +34,11 @@ export default defineGcsExtensionMigration({
       ALTER TABLE extensions.gcs_outcome_cost_allocation_allocations
       ADD COLUMN IF NOT EXISTS allocation_version_id bigint
       REFERENCES extensions.gcs_outcome_cost_allocation_versions (id) ON DELETE RESTRICT
+    `.execute(db)
+
+    await sql`
+      ALTER TABLE extensions.gcs_outcome_cost_allocation_versions
+      ADD COLUMN IF NOT EXISTS funding_basis_amount numeric(19, 2)
     `.execute(db)
 
     await sql`

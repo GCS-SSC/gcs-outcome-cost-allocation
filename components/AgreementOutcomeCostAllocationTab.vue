@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import type { Ref } from 'vue'
-import type { GcsExtensionJsonConfig, GcsExtensionRbacRequirement } from '@gcs-ssc/extensions'
-import type { ExtensionEntityTabContext } from '@gcs-ssc/extensions'
+import type {
+  ExtensionEntityTabContext,
+  GcsExtensionJsonConfig,
+  GcsExtensionRbacRequirement
+} from '@gcs-ssc/extensions'
 import {
   ExtensionBadge,
   ExtensionButton,
@@ -21,13 +24,14 @@ import {
 } from '@gcs-ssc/extensions/ui'
 import {
   COMMITMENT_TYPES,
+  EXACT_NUMERIC_19_4_MAX,
   type AllocationMethod,
   type AllocationVersionStatus,
   type CommitmentType,
   type CostAllocationVersion,
-  type OutcomeAllocationInput,
   type VersionedOutcomeAllocationInput,
   parseOutcomeCostAllocationConfig,
+  resolveAllocationAmounts,
   toMoney,
   validateAllocationTotals
 } from '../shared/allocation'
@@ -190,6 +194,10 @@ const allocationColumns = computed(() => [
   {
     id: 'unallocated',
     header: tLocal('unallocated')
+  },
+  {
+    id: 'allocationActions',
+    header: tLocal('actions')
   }
 ])
 
@@ -248,7 +256,17 @@ const getYearForStreamBudget = (streamBudgetId: string) =>
 const configuredAssociationRows = computed<ConfiguredAssociationRow[]>(() => streamConfig.value.mappings.flatMap(mapping => {
   const year = getYearForStreamBudget(mapping.streamBudgetId)
   const hasOutcome = outcomes.value.some((outcome: AllocationOutcome) => String(outcome.id) === mapping.outcomeId)
-  if (!year || Number(year.program_funding) <= 0 || !hasOutcome) {
+  const streamCommitment = streamCommitments.value.find(commitment =>
+    String(commitment.id) === mapping.streamCommitmentId
+  )
+  if (
+    !streamConfig.value.enabledCommitmentTypes.includes(mapping.commitmentType)
+    || !year
+    || Number(year.program_funding) <= 0
+    || !hasOutcome
+    || !streamCommitment
+    || String(streamCommitment.stream_budget_id) !== mapping.streamBudgetId
+  ) {
     return []
   }
 
@@ -283,13 +301,13 @@ const configuredAssociationRows = computed<ConfiguredAssociationRow[]>(() => str
 
 const getAllocationKey = (allocation: {
   commitmentType?: CommitmentType
-  streamCommitmentId?: string
+  streamCommitmentId: string
   agreementBudgetFiscalYearId: string
   outcomeId: string
 }) => [
   allocation.commitmentType ?? 'commitment',
   allocation.agreementBudgetFiscalYearId,
-  allocation.streamCommitmentId ?? '',
+  allocation.streamCommitmentId,
   allocation.outcomeId
 ].join(':')
 
@@ -309,9 +327,59 @@ const selectedVersionAllocations = computed<VersionedOutcomeAllocationInput[]>((
   allocation.allocationVersionId === selectedVersionId.value
 ))
 
-const displayedAssociationRows = computed<ConfiguredAssociationRow[]>(() => selectedVersionAllocations.value.flatMap((allocation: VersionedOutcomeAllocationInput) => {
+/**
+ * Builds a display row from immutable saved coordinates when current configuration no longer contains them.
+ */
+const createHistoricalAssociationRow = (
+  allocation: VersionedOutcomeAllocationInput
+): ConfiguredAssociationRow => {
+  const year = budgetYears.value.find(candidate =>
+    String(candidate.id) === allocation.agreementBudgetFiscalYearId
+  )
+  const useSnapshot = selectedVersion.value?.status === 'active'
+    || selectedVersion.value?.status === 'inactive'
+  const outcomeLabel = useSnapshot
+    ? locale.value === 'fr'
+      ? allocation.outcomeLabelFr
+      : allocation.outcomeLabelEn
+    : null
+  const commitmentLabel = useSnapshot
+    ? locale.value === 'fr'
+      ? allocation.commitmentLabelFr
+      : allocation.commitmentLabelEn
+    : null
+
+  return {
+    id: `historical:${allocation.allocationVersionId}:${getAllocationKey(allocation)}`,
+    commitmentType: allocation.commitmentType ?? 'commitment',
+    commitmentTypeLabel: getCommitmentTypeLabel(allocation.commitmentType ?? 'commitment'),
+    yearId: allocation.agreementBudgetFiscalYearId,
+    yearLabel: useSnapshot && allocation.fiscalYearDisplay
+      ? allocation.fiscalYearDisplay
+      : year
+        ? year.fiscal_year_display
+        : allocation.agreementBudgetFiscalYearId,
+    programFunding: useSnapshot && allocation.fundingBasisAmount !== null
+      && allocation.fundingBasisAmount !== undefined
+      ? allocation.fundingBasisAmount
+      : year
+        ? Number(year.program_funding)
+        : 0,
+    streamBudgetId: year && year.stream_budget_id ? String(year.stream_budget_id) : '',
+    streamCommitmentId: allocation.streamCommitmentId,
+    commitmentLineLabel: commitmentLabel || getCommitmentLineLabel(allocation.streamCommitmentId),
+    outcomeId: allocation.outcomeId,
+    outcomeLabel: outcomeLabel || getOutcomeName(allocation.outcomeId)
+  }
+}
+
+const displayedAssociationRows = computed<ConfiguredAssociationRow[]>(() => selectedVersionAllocations.value.map((allocation: VersionedOutcomeAllocationInput) => {
   const association = configuredAssociationByKey.value.get(getAllocationKey(allocation))
-  return association ? [association] : []
+  if (selectedVersion.value?.status === 'draft' && association) {
+    return association
+  }
+
+  return createHistoricalAssociationRow(allocation)
 }))
 
 const isExpanded = (groupId: string) => expandedRows.value[groupId] !== false
@@ -328,21 +396,21 @@ const allocationRows = computed<AllocationTableRow[]>(() => buildOutcomeAllocati
 }))
 
 const getAllocation = (association: ConfiguredAssociationRow): VersionedOutcomeAllocationInput | null => allocations.value.find(allocation =>
-    allocation.allocationVersionId === selectedVersionId.value
-    && allocation.commitmentType === association.commitmentType
-    && allocation.streamCommitmentId === association.streamCommitmentId
-    && allocation.agreementBudgetFiscalYearId === association.yearId
-    && allocation.outcomeId === association.outcomeId
+  allocation.allocationVersionId === selectedVersionId.value
+  && allocation.commitmentType === association.commitmentType
+  && allocation.streamCommitmentId === association.streamCommitmentId
+  && allocation.agreementBudgetFiscalYearId === association.yearId
+  && allocation.outcomeId === association.outcomeId
 ) ?? null
 
 const createAllocation = (association: ConfiguredAssociationRow): VersionedOutcomeAllocationInput => ({
-    allocationVersionId: selectedVersionId.value,
-    commitmentType: association.commitmentType,
-    streamCommitmentId: association.streamCommitmentId,
-    agreementBudgetFiscalYearId: association.yearId,
-    outcomeId: association.outcomeId,
-    allocationMethod: 'amount',
-    allocationValue: 0
+  allocationVersionId: selectedVersionId.value,
+  commitmentType: association.commitmentType,
+  streamCommitmentId: association.streamCommitmentId,
+  agreementBudgetFiscalYearId: association.yearId,
+  outcomeId: association.outcomeId,
+  allocationMethod: 'amount',
+  allocationValue: 0
 })
 
 const ensureAllocation = (association: ConfiguredAssociationRow) => {
@@ -367,7 +435,11 @@ const setAllocationValue = (association: ConfiguredAssociationRow, value: string
 }
 
 const updateAllocationMethod = (association: ConfiguredAssociationRow, value: string | number) => {
-  setAllocationMethod(association, String(value) as AllocationMethod)
+  if (value !== 'amount' && value !== 'percentage') {
+    return
+  }
+
+  setAllocationMethod(association, value)
 }
 
 const updateAllocationRowValue = (row: AllocationTableRow, value: string | number) => {
@@ -378,6 +450,28 @@ const updateAllocationRowValue = (row: AllocationTableRow, value: string | numbe
   setAllocationValue(row.association, value)
 }
 
+const isHistoricalAssociation = (association: ConfiguredAssociationRow) =>
+  !configuredAssociationByKey.value.has(getAssociationKey(association))
+
+/**
+ * Removes one stale draft allocation locally so config drift can be repaired before saving.
+ */
+const removeHistoricalDraftAllocation = (association: ConfiguredAssociationRow) => {
+  if (
+    !canEditSelectedVersion.value
+    || hasPendingDraftMutation.value
+    || !isHistoricalAssociation(association)
+  ) {
+    return
+  }
+
+  const allocationKey = getAssociationKey(association)
+  allocations.value = allocations.value.filter(allocation =>
+    allocation.allocationVersionId !== selectedVersionId.value
+    || getAllocationKey(allocation) !== allocationKey
+  )
+}
+
 const updateGenerationYearIds = (value: unknown) => {
   generationYearIds.value = Array.isArray(value)
     ? value.map(item => String(item))
@@ -386,16 +480,37 @@ const updateGenerationYearIds = (value: unknown) => {
 
 const activeAllocations = computed<VersionedOutcomeAllocationInput[]>(() => selectedVersionAllocations.value)
 
+const allocationYearTotals = computed(() => budgetYears.value.map((year: AllocationBudgetYear) => ({
+  agreementBudgetFiscalYearId: String(year.id),
+  programFunding: Number(year.program_funding)
+})))
+
+const selectedDraftResolvedAmountByKey = computed(() => {
+  if (selectedVersion.value?.status !== 'draft') {
+    return new Map<string, number>()
+  }
+
+  return new Map(resolveAllocationAmounts(
+    activeAllocations.value,
+    allocationYearTotals.value
+  ).map(allocation => [
+    getAllocationKey(allocation),
+    allocation.amount
+  ]))
+})
+
 const getProgramFunding = (yearId: string) =>
   Number(budgetYears.value.find((year: AllocationBudgetYear) => String(year.id) === yearId)?.program_funding ?? 0)
 
-const agreementProgramFundingTotal = computed(() => budgetYears.value
-  .reduce((sum: number, year: AllocationBudgetYear) => toMoney(sum + Number(year.program_funding)), 0)
-)
-
-const getAllocationInputAmount = (allocation: OutcomeAllocationInput) => allocation.allocationMethod === 'percentage'
-  ? toMoney(getProgramFunding(allocation.agreementBudgetFiscalYearId) * allocation.allocationValue / 100)
-  : toMoney(allocation.allocationValue)
+const getAllocationInputAmount = (allocation: VersionedOutcomeAllocationInput) =>
+  allocation.resolvedAmount !== null && allocation.resolvedAmount !== undefined
+    ? toMoney(allocation.resolvedAmount)
+    : allocation.allocationVersionId === selectedVersionId.value
+      && selectedVersion.value?.status === 'draft'
+      ? selectedDraftResolvedAmountByKey.value.get(getAllocationKey(allocation)) ?? 0
+      : allocation.allocationMethod === 'percentage'
+        ? toMoney(getProgramFunding(allocation.agreementBudgetFiscalYearId) * allocation.allocationValue / 100)
+        : toMoney(allocation.allocationValue)
 
 const getAllocationAmount = (association: ConfiguredAssociationRow) => {
   const allocation = getAllocation(association)
@@ -409,8 +524,20 @@ const getVersionAllocations = (versionId: string) => allocations.value.filter((a
 const getVersionTotal = (versionId: string) => getVersionAllocations(versionId)
   .reduce((sum: number, allocation: VersionedOutcomeAllocationInput) => toMoney(sum + getAllocationInputAmount(allocation)), 0)
 
+const getVersionProgramFundingTotal = (versionId: string) => {
+  const version = versions.value.find(candidate => candidate.id === versionId)
+  if (version?.fundingBasisAmount !== null && version?.fundingBasisAmount !== undefined) {
+    return version.fundingBasisAmount
+  }
+
+  return budgetYears.value.reduce(
+    (sum, year) => toMoney(sum + Number(year.program_funding)),
+    0
+  )
+}
+
 const getVersionUnallocated = (versionId: string) =>
-  toMoney(agreementProgramFundingTotal.value - getVersionTotal(versionId))
+  toMoney(getVersionProgramFundingTotal(versionId) - getVersionTotal(versionId))
 
 const selectVersion = (versionId: string) => {
   selectedVersionId.value = versionId
@@ -418,10 +545,7 @@ const selectVersion = (versionId: string) => {
 
 const validationIssues = computed(() => validateAllocationTotals(
   activeAllocations.value,
-  budgetYears.value.map((year: AllocationBudgetYear) => ({
-    agreementBudgetFiscalYearId: String(year.id),
-    programFunding: Number(year.program_funding)
-  })),
+  allocationYearTotals.value,
   new Set(outcomes.value.map((outcome: AllocationOutcome) => String(outcome.id)))
 ))
 
@@ -481,12 +605,6 @@ const getFiscalYearAmountTotal = (commitmentType: CommitmentType, yearId: string
     row.commitmentType === commitmentType && row.yearId === yearId
   ))
 
-const getCommitmentTypeUnallocated = (commitmentType: CommitmentType) =>
-  toMoney(agreementProgramFundingTotal.value - getCommitmentTypeAmountTotal(commitmentType))
-
-const getFiscalYearUnallocated = (commitmentType: CommitmentType, yearId: string) =>
-  toMoney(getProgramFunding(yearId) - getFiscalYearAmountTotal(commitmentType, yearId))
-
 const getAmountForRow = (row: AllocationTableRow) => {
   if (row.rowType === 'commitmentType' && row.commitmentType) {
     return getCommitmentTypeAmountTotal(row.commitmentType)
@@ -500,12 +618,8 @@ const getAmountForRow = (row: AllocationTableRow) => {
 }
 
 const getUnallocatedForRow = (row: AllocationTableRow): number | null => {
-  if (row.rowType === 'commitmentType' && row.commitmentType) {
-    return getCommitmentTypeUnallocated(row.commitmentType)
-  }
-
-  if (row.rowType === 'fiscalYear' && row.commitmentType) {
-    return getFiscalYearUnallocated(row.commitmentType, row.yearId)
+  if (row.rowType === 'commitmentType' || row.rowType === 'fiscalYear') {
+    return getVersionUnallocated(selectedVersionId.value)
   }
 
   return null
@@ -527,6 +641,10 @@ const getGenerationCandidates = () => {
 }
 
 const openGenerateRows = () => {
+  if (!canEditSelectedVersion.value || hasPendingDraftMutation.value) {
+    return
+  }
+
   generationCommitmentType.value = streamConfig.value.enabledCommitmentTypes[0] ?? 'commitment'
   generationYearIds.value = fundedBudgetYears.value.map((year: AllocationBudgetYear) => String(year.id))
   isGenerateModalOpen.value = true
@@ -536,6 +654,10 @@ const openGenerateRows = () => {
  * Reconciles generated rows for the selected type and years, confirming before removing stale allocations.
  */
 const applyGeneratedRows = async () => {
+  if (!canEditSelectedVersion.value || hasPendingDraftMutation.value) {
+    return
+  }
+
   const candidates = getGenerationCandidates()
   const candidateKeys = new Set(candidates.map(getAssociationKey))
   const existingKeys = new Set(selectedVersionAllocations.value.map(getAllocationKey))
@@ -575,7 +697,7 @@ const applyGeneratedRows = async () => {
  * Persists the editable version, refreshes server state, and reports success without throwing UI errors.
  */
 const save = async () => {
-  if (isSaving.value || !canEditSelectedVersion.value || !selectedVersionId.value) {
+  if (hasPendingDraftMutation.value || !canEditSelectedVersion.value || !selectedVersionId.value) {
     return false
   }
 
@@ -600,13 +722,14 @@ const save = async () => {
 
 const completeSelectedVersion = async () => completeOutcomeAllocationSelectedVersion({
   isCompleting,
+  hasPendingMutation: hasPendingDraftMutation.value,
   canEditSelectedVersion: canEditSelectedVersion.value,
   selectedVersionId: selectedVersionId.value,
   validationIssueCount: validationIssues.value.length,
   validationMessage: validationMessage.value,
   locale: locale.value,
   saveError,
-  save,
+  allocations: activeAllocations.value.map(allocation => ({ ...allocation })),
   refresh,
   buildCompleteRequestUrl: versionId => api.path(`${getOutcomeAllocationVersionEndpoint(endpoint.value, versionId)}/complete`),
   toast,
@@ -635,7 +758,7 @@ const createDraftVersion = async () => {
  * Deletes one draft version, clears it when selected, refreshes data, and surfaces failures in save state.
  */
 const deleteDraftVersion = async (versionId: string) => {
-  if (deletingVersionId.value) {
+  if (hasPendingDraftMutation.value) {
     return
   }
 
@@ -655,7 +778,16 @@ const deleteDraftVersion = async (versionId: string) => {
   }
 }
 
-const canDeleteVersion = (version: CostAllocationVersion) => version.status === 'draft' && deletingVersionId.value !== version.id
+const hasPendingDraftMutation = computed(() =>
+  isSaving.value
+  || isCompleting.value
+  || isCreatingDraft.value
+  || Boolean(deletingVersionId.value)
+)
+
+const canDeleteVersion = (version: CostAllocationVersion) =>
+  version.status === 'draft'
+  && !hasPendingDraftMutation.value
 
 const text = {
   title: {
@@ -734,6 +866,10 @@ const text = {
     en: 'Generating will remove rows that no longer match the selected commitment type, fiscal years, and agreement outcomes.',
     fr: 'La generation supprimera les lignes qui ne correspondent plus au type d engagement, aux exercices et aux resultats de l entente selectionnes.'
   },
+  removeAllocation: {
+    en: 'Remove allocation',
+    fr: 'Retirer la repartition'
+  },
   noRows: {
     en: 'No allocation rows have been added to this draft.',
     fr: 'Aucune ligne de repartition n a ete ajoutee a ce brouillon.'
@@ -791,7 +927,9 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
         @click="createDraftVersion" />
     </div>
 
-    <p v-if="outcomes.length === 0 || budgetYears.length === 0 || configuredAssociationRows.length === 0" class="text-sm text-zinc-500">
+    <p
+      v-if="displayedAssociationRows.length === 0 && (outcomes.length === 0 || budgetYears.length === 0 || configuredAssociationRows.length === 0)"
+      class="text-sm text-zinc-500">
       {{ tLocal('empty') }}
     </p>
 
@@ -832,16 +970,17 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
               v-for="(version, versionIndex) in versions"
               :key="version.id"
               :aria-current="version.id === selectedVersionId ? 'true' : undefined"
-              tabindex="0"
+              :aria-disabled="hasPendingDraftMutation ? 'true' : undefined"
+              :tabindex="hasPendingDraftMutation ? -1 : 0"
               role="button"
               :class="[
                 versionIndex > 0 && version.id !== selectedVersionId && versions[versionIndex - 1]?.id !== selectedVersionId ? 'border-t border-zinc-200 dark:border-zinc-800' : '',
                 version.id === selectedVersionId ? 'border-l-4 border-primary bg-blue-50/60 dark:bg-blue-950/20' : 'border-l-4 border-transparent',
                 'cursor-default focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-primary hover:bg-zinc-50 dark:hover:bg-zinc-900/60'
               ]"
-              @click="selectVersion(version.id)"
-              @keydown.enter.prevent="selectVersion(version.id)"
-              @keydown.space.prevent="selectVersion(version.id)">
+              @click="!hasPendingDraftMutation && selectVersion(version.id)"
+              @keydown.enter.prevent="!hasPendingDraftMutation && selectVersion(version.id)"
+              @keydown.space.prevent="!hasPendingDraftMutation && selectVersion(version.id)">
               <th scope="row" class="px-4 py-4 text-left">
                 <div class="flex min-w-0 items-center gap-3">
                   <ExtensionIcon
@@ -880,7 +1019,7 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
                     size="sm"
                     class="cursor-default"
                     :icon="version.id === selectedVersionId ? 'i-lucide-check' : 'i-lucide-panel-top-open'"
-                    :disabled="version.id === selectedVersionId"
+                    :disabled="version.id === selectedVersionId || hasPendingDraftMutation"
                     @click="selectVersion(version.id)">
                     {{ version.id === selectedVersionId ? tLocal('selected') : tLocal('view') }}
                   </ExtensionButton>
@@ -926,13 +1065,13 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
           color="neutral"
           variant="outline"
           class="cursor-default"
-          :disabled="isSaving || isCompleting || isLoading"
+          :disabled="hasPendingDraftMutation || isLoading"
           @click="openGenerateRows" />
         <ExtensionSaveButton
           v-if="canEditSelectedVersion"
           :label="tLocal('save')"
           :loading="isSaving"
-          :disabled="isSaving || isCompleting || isLoading"
+          :disabled="hasPendingDraftMutation || isLoading"
           @click="save" />
         <ExtensionButton
           v-if="canEditSelectedVersion"
@@ -941,7 +1080,7 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
           color="primary"
           class="cursor-default"
           :loading="isCompleting"
-          :disabled="isSaving || isCompleting || isLoading"
+          :disabled="hasPendingDraftMutation || isLoading"
           @click="completeSelectedVersion" />
       </div>
     </div>
@@ -952,85 +1091,99 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
           :data="allocationRows"
           :columns="allocationColumns"
           class="w-full max-w-full table-fixed">
-        <template #commitmentLine-cell="{ row }">
-          <div v-if="row.original.rowType === 'commitmentType'" class="flex w-full items-center gap-3 py-1">
-            <button type="button" class="group flex min-w-0 items-center gap-3 text-left" @click="toggleGroup(row.original.id)">
-              <ExtensionIcon :name="isExpanded(row.original.id) ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" class="size-4 text-zinc-400 transition-colors group-hover:text-primary" />
-              <span class="text-sm font-semibold text-zinc-900 dark:text-white">{{ row.original.commitmentTypeLabel }}</span>
-              <span class="rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-semibold text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
-                {{ row.original.associationCount }}
-              </span>
-            </button>
-          </div>
-          <div v-else-if="row.original.rowType === 'fiscalYear'" class="flex w-full items-center gap-3 py-1 pl-6">
-            <button type="button" class="group flex min-w-0 items-center gap-3 text-left" @click="toggleGroup(row.original.id)">
-              <ExtensionIcon :name="isExpanded(row.original.id) ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" class="size-4 text-zinc-400 transition-colors group-hover:text-primary" />
-              <span class="text-sm font-semibold text-zinc-800 dark:text-zinc-100">{{ row.original.yearLabel }}</span>
-              <span class="rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-semibold text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
-                {{ row.original.associationCount }}
-              </span>
-            </button>
-          </div>
-          <div v-else class="flex min-w-0 items-center gap-3 py-1 pl-12">
-            <ExtensionIcon name="i-lucide-corner-down-right" class="size-4 shrink-0 text-zinc-400" />
-            <div class="min-w-0">
-              <div class="truncate text-sm font-semibold text-zinc-900 dark:text-white">
-                {{ row.original.commitmentLineLabel }}
-              </div>
-              <div class="text-xs text-zinc-500 dark:text-zinc-400">
-                {{ row.original.yearLabel }}
+          <template #commitmentLine-cell="{ row }">
+            <div v-if="row.original.rowType === 'commitmentType'" class="flex w-full items-center gap-3 py-1">
+              <button type="button" class="group flex min-w-0 items-center gap-3 text-left" @click="toggleGroup(row.original.id)">
+                <ExtensionIcon :name="isExpanded(row.original.id) ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" class="size-4 text-zinc-400 transition-colors group-hover:text-primary" />
+                <span class="text-sm font-semibold text-zinc-900 dark:text-white">{{ row.original.commitmentTypeLabel }}</span>
+                <span class="rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-semibold text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
+                  {{ row.original.associationCount }}
+                </span>
+              </button>
+            </div>
+            <div v-else-if="row.original.rowType === 'fiscalYear'" class="flex w-full items-center gap-3 py-1 pl-6">
+              <button type="button" class="group flex min-w-0 items-center gap-3 text-left" @click="toggleGroup(row.original.id)">
+                <ExtensionIcon :name="isExpanded(row.original.id) ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" class="size-4 text-zinc-400 transition-colors group-hover:text-primary" />
+                <span class="text-sm font-semibold text-zinc-800 dark:text-zinc-100">{{ row.original.yearLabel }}</span>
+                <span class="rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-semibold text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
+                  {{ row.original.associationCount }}
+                </span>
+              </button>
+            </div>
+            <div v-else class="flex min-w-0 items-center gap-3 py-1 pl-12">
+              <ExtensionIcon name="i-lucide-corner-down-right" class="size-4 shrink-0 text-zinc-400" />
+              <div class="min-w-0">
+                <div class="truncate text-sm font-semibold text-zinc-900 dark:text-white">
+                  {{ row.original.commitmentLineLabel }}
+                </div>
+                <div class="text-xs text-zinc-500 dark:text-zinc-400">
+                  {{ row.original.yearLabel }}
+                </div>
               </div>
             </div>
-          </div>
-        </template>
+          </template>
 
-        <template #outcome-cell="{ row }">
-          <span v-if="row.original.rowType !== 'association'" class="text-sm text-zinc-500 dark:text-zinc-400">
-            {{ row.original.associationCount }} {{ tLocal('records') }}
-          </span>
-          <span v-else class="text-sm font-medium text-zinc-700 dark:text-zinc-200">
-            {{ row.original.outcomeLabel }}
-          </span>
-        </template>
+          <template #outcome-cell="{ row }">
+            <span v-if="row.original.rowType !== 'association'" class="text-sm text-zinc-500 dark:text-zinc-400">
+              {{ row.original.associationCount }} {{ tLocal('records') }}
+            </span>
+            <span v-else class="text-sm font-medium text-zinc-700 dark:text-zinc-200">
+              {{ row.original.outcomeLabel }}
+            </span>
+          </template>
 
-        <template #method-cell="{ row }">
-          <div v-if="row.original.rowType === 'association' && row.original.association">
-            <ExtensionSelect
-              :model-value="getAllocation(row.original.association)?.allocationMethod ?? 'amount'"
-              value-key="value"
-              :items="methodOptions"
-              class="w-full min-w-0"
-              :disabled="!canEditSelectedVersion"
-              @update:model-value="updateAllocationMethod(row.original.association, $event)" />
-          </div>
-        </template>
+          <template #method-cell="{ row }">
+            <div v-if="row.original.rowType === 'association' && row.original.association">
+              <ExtensionSelect
+                :model-value="getAllocation(row.original.association)?.allocationMethod ?? 'amount'"
+                value-key="value"
+                :items="methodOptions"
+                class="w-full min-w-0"
+                :disabled="!canEditSelectedVersion || hasPendingDraftMutation"
+                @update:model-value="updateAllocationMethod(row.original.association, $event)" />
+            </div>
+          </template>
 
-        <template #value-cell="{ row }">
-          <div v-if="row.original.rowType === 'association' && row.original.association">
-            <ExtensionInput
-              :model-value="getAllocation(row.original.association)?.allocationValue ?? 0"
-              type="number"
-              min="0"
-              step="0.01"
-              class="w-full min-w-0"
-              :disabled="!canEditSelectedVersion"
-              @update:model-value="(value: string | number) => updateAllocationRowValue(row.original, value)" />
-          </div>
-        </template>
+          <template #value-cell="{ row }">
+            <div v-if="row.original.rowType === 'association' && row.original.association">
+              <ExtensionInput
+                :model-value="getAllocation(row.original.association)?.allocationValue ?? 0"
+                type="number"
+                min="0"
+                :max="getAllocation(row.original.association)?.allocationMethod === 'percentage' ? 100 : EXACT_NUMERIC_19_4_MAX"
+                step="0.01"
+                class="w-full min-w-0"
+                :disabled="!canEditSelectedVersion || hasPendingDraftMutation"
+                @update:model-value="(value: string | number) => updateAllocationRowValue(row.original, value)" />
+            </div>
+          </template>
 
-        <template #amount-cell="{ row }">
-          <span class="text-sm font-medium text-zinc-700 dark:text-zinc-200">
-            {{ formatMoney(getAmountForRow(row.original)) }}
-          </span>
-        </template>
+          <template #amount-cell="{ row }">
+            <span class="text-sm font-medium text-zinc-700 dark:text-zinc-200">
+              {{ formatMoney(getAmountForRow(row.original)) }}
+            </span>
+          </template>
 
-        <template #unallocated-cell="{ row }">
-          <span
-            v-if="getUnallocatedForRow(row.original) !== null"
-            :class="getUnallocatedClass(getUnallocatedForRow(row.original))">
-            {{ formatMoney(getUnallocatedForRow(row.original) ?? 0) }}
-          </span>
-        </template>
+          <template #unallocated-cell="{ row }">
+            <span
+              v-if="getUnallocatedForRow(row.original) !== null"
+              :class="getUnallocatedClass(getUnallocatedForRow(row.original))">
+              {{ formatMoney(getUnallocatedForRow(row.original) ?? 0) }}
+            </span>
+          </template>
+
+          <template #allocationActions-cell="{ row }">
+            <ExtensionButton
+              v-if="canEditSelectedVersion && row.original.association && isHistoricalAssociation(row.original.association)"
+              color="error"
+              variant="ghost"
+              size="sm"
+              icon="i-lucide-trash-2"
+              class="cursor-default"
+              :label="tLocal('removeAllocation')"
+              :disabled="hasPendingDraftMutation"
+              @click="removeHistoricalDraftAllocation(row.original.association)" />
+          </template>
         </ExtensionTable>
       </div>
       <div class="border-t border-zinc-200 px-4 py-3 text-xs font-bold tracking-widest text-zinc-400 uppercase dark:border-zinc-800">
@@ -1051,16 +1204,18 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
               v-model="generationCommitmentType"
               value-key="value"
               :items="commitmentTypeOptions"
+              :disabled="hasPendingDraftMutation"
               class="w-full" />
           </ExtensionFormField>
 
           <ExtensionFormField :label="tLocal('fiscalYears')">
             <ExtensionSelectMenu
-              :model-value="generationYearIds as never"
+              :model-value="generationYearIds"
               multiple
               value-key="value"
               label-key="label"
               :items="generationYearOptions"
+              :disabled="hasPendingDraftMutation"
               class="w-full"
               @update:model-value="updateGenerationYearIds" />
           </ExtensionFormField>
@@ -1079,7 +1234,7 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
             :label="tLocal('generateRows')"
             color="primary"
             class="cursor-default"
-            :disabled="generationYearIds.length === 0"
+            :disabled="hasPendingDraftMutation || generationYearIds.length === 0"
             @click="applyGeneratedRows" />
         </div>
       </template>
@@ -1102,26 +1257,30 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
 }
 
 :deep(.outcome-cost-allocation-table th:nth-child(1)) {
-  width: 28%;
+  width: 24%;
 }
 
 :deep(.outcome-cost-allocation-table th:nth-child(2)) {
-  width: 18%;
+  width: 16%;
 }
 
 :deep(.outcome-cost-allocation-table th:nth-child(3)) {
-  width: 14%;
+  width: 13%;
 }
 
 :deep(.outcome-cost-allocation-table th:nth-child(4)) {
-  width: 14%;
+  width: 13%;
 }
 
 :deep(.outcome-cost-allocation-table th:nth-child(5)) {
-  width: 13%;
+  width: 11%;
 }
 
 :deep(.outcome-cost-allocation-table th:nth-child(6)) {
-  width: 13%;
+  width: 11%;
+}
+
+:deep(.outcome-cost-allocation-table th:nth-child(7)) {
+  width: 12%;
 }
 </style>

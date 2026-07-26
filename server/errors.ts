@@ -57,6 +57,18 @@ const errorMessages: Record<string, GcsExtensionLocalizedMessage> = {
     en: 'One configured stream commitment line is no longer active.',
     fr: 'Une ligne d engagement de volet configuree n est plus active.'
   },
+  GCS_OUTCOME_COST_ALLOCATION_STREAM_COMMITMENT_BUDGET_MISMATCH: {
+    en: 'One configured stream commitment line belongs to a different fiscal-year budget.',
+    fr: 'Une ligne d engagement de volet configuree appartient au budget d un autre exercice.'
+  },
+  GCS_OUTCOME_COST_ALLOCATION_COMMITMENT_TYPE_DISABLED: {
+    en: 'One saved allocation uses a commitment type that is no longer enabled.',
+    fr: 'Une repartition enregistree utilise un type d engagement qui n est plus autorise.'
+  },
+  GCS_OUTCOME_COST_ALLOCATION_COMMITMENT_LINES_MISSING: {
+    en: 'The active cost allocation has no positive allocations for this commitment type.',
+    fr: 'La repartition des couts active ne contient aucune repartition positive pour ce type d engagement.'
+  },
   GCS_OUTCOME_COST_ALLOCATION_PAYMENT_EXCEEDS_GENERATED_LINE: {
     en: 'This cost allocation would create a commitment line below the amount already paid.',
     fr: 'Cette repartition des couts creerait une ligne d engagement inferieure au montant deja paye.'
@@ -73,6 +85,10 @@ const errorMessages: Record<string, GcsExtensionLocalizedMessage> = {
     en: 'This payment exceeds the remaining balance of the cost allocation commitment lines.',
     fr: 'Ce paiement depasse le solde restant des lignes d engagement de la repartition des couts.'
   },
+  GCS_OUTCOME_COST_ALLOCATION_GENERATED_PAYMENT_IMMUTABLE: {
+    en: 'This payment is managed by outcome cost allocation and its amount, allocation coordinates, and payment lines cannot be changed.',
+    fr: 'Ce paiement est gere par la repartition des couts par resultat; son montant, ses coordonnees de repartition et ses lignes de paiement ne peuvent pas etre modifies.'
+  },
   GCS_OUTCOME_COST_ALLOCATION_DRAFT_DELETE_REQUIRED: {
     en: 'Only draft cost allocations can be deleted.',
     fr: 'Seules les repartitions des couts en ebauche peuvent etre supprimees.'
@@ -84,6 +100,114 @@ const errorMessages: Record<string, GcsExtensionLocalizedMessage> = {
   GCS_OUTCOME_COST_ALLOCATION_DRAFT_COMPLETE_REQUIRED: {
     en: 'Only draft cost allocations can be completed.',
     fr: 'Seules les repartitions des couts en ebauche peuvent etre terminees.'
+  },
+  GCS_OUTCOME_COST_ALLOCATION_DRAFT_EXISTS: {
+    en: 'A draft cost allocation already exists for this agreement. Refresh and edit that draft.',
+    fr: 'Une repartition des couts en ebauche existe deja pour cette entente. Actualisez la page et modifiez cette ebauche.'
+  },
+  GCS_OUTCOME_COST_ALLOCATION_STALE_COORDINATE: {
+    en: 'One allocation reference is no longer available for this agreement. Refresh the allocation and try again.',
+    fr: 'Une reference de repartition n est plus disponible pour cette entente. Actualisez la repartition et reessayez.'
+  },
+  GCS_OUTCOME_COST_ALLOCATION_DATABASE_CONFLICT: {
+    en: 'The cost allocation changed while this request was being processed. Refresh and try again.',
+    fr: 'La repartition des couts a change pendant le traitement de cette demande. Actualisez la page et reessayez.'
+  }
+}
+
+type OutcomeCostAllocationDatabaseError = {
+  code?: unknown
+  constraint?: unknown
+}
+
+const databaseConstraintErrors: Record<string, { code: string, path?: string }> = {
+  gcs_outcome_cost_allocation_agreement_guard: {
+    code: 'GCS_OUTCOME_COST_ALLOCATION_INVALID',
+    path: 'agreementId'
+  },
+  gcs_outcome_cost_allocation_commitment_type: {
+    code: 'GCS_OUTCOME_COST_ALLOCATION_INVALID',
+    path: 'allocations'
+  },
+  gcs_outcome_cost_allocation_method: {
+    code: 'GCS_OUTCOME_COST_ALLOCATION_INVALID',
+    path: 'allocations'
+  },
+  gcs_outcome_cost_allocation_version_status: {
+    code: 'GCS_OUTCOME_COST_ALLOCATION_DATABASE_CONFLICT',
+    path: 'allocationVersionId'
+  },
+  gcs_outcome_cost_allocation_allocation_coordinate_guard: {
+    code: 'GCS_OUTCOME_COST_ALLOCATION_STALE_COORDINATE',
+    path: 'allocations'
+  },
+  gcs_outcome_cost_allocation_commitment_line_provenance_coordinate_guard: {
+    code: 'GCS_OUTCOME_COST_ALLOCATION_STALE_COORDINATE',
+    path: 'allocations'
+  },
+  gcs_outcome_cost_allocation_generated_payment_line_coordinate_guard: {
+    code: 'GCS_OUTCOME_COST_ALLOCATION_STALE_COORDINATE',
+    path: 'allocations'
+  },
+  gcs_outcome_cost_allocation_one_draft_version: {
+    code: 'GCS_OUTCOME_COST_ALLOCATION_DRAFT_EXISTS',
+    path: 'allocationVersionId'
+  },
+  gcs_outcome_cost_allocation_one_active_version: {
+    code: 'GCS_OUTCOME_COST_ALLOCATION_DATABASE_CONFLICT',
+    path: 'allocationVersionId'
+  },
+  gcs_outcome_cost_allocation_unique_version: {
+    code: 'GCS_OUTCOME_COST_ALLOCATION_DATABASE_CONFLICT',
+    path: 'allocationVersionId'
+  },
+  gcs_outcome_cost_allocation_version_allocation: {
+    code: 'GCS_OUTCOME_COST_ALLOCATION_DATABASE_CONFLICT',
+    path: 'allocations'
+  },
+  gcs_outcome_cost_allocation_allocation_draft_guard: {
+    code: 'GCS_OUTCOME_COST_ALLOCATION_DRAFT_EDIT_REQUIRED',
+    path: 'allocationVersionId'
+  },
+  gcs_outcome_cost_allocation_allocation_identity_guard: {
+    code: 'GCS_OUTCOME_COST_ALLOCATION_DRAFT_EDIT_REQUIRED',
+    path: 'allocationVersionId'
+  },
+  gcs_outcome_cost_allocation_allocation_soft_delete_guard: {
+    code: 'GCS_OUTCOME_COST_ALLOCATION_DRAFT_EDIT_REQUIRED',
+    path: 'allocationVersionId'
+  },
+  gcs_outcome_cost_allocation_managed_mutation_guard: {
+    code: 'GCS_OUTCOME_COST_ALLOCATION_DATABASE_CONFLICT',
+    path: 'allocationVersionId'
+  },
+  gcs_outcome_cost_allocation_snapshot_guard: {
+    code: 'GCS_OUTCOME_COST_ALLOCATION_DATABASE_CONFLICT',
+    path: 'allocations'
+  },
+  gcs_outcome_cost_allocation_version_children_guard: {
+    code: 'GCS_OUTCOME_COST_ALLOCATION_DATABASE_CONFLICT',
+    path: 'allocationVersionId'
+  },
+  gcs_outcome_cost_allocation_version_identity_guard: {
+    code: 'GCS_OUTCOME_COST_ALLOCATION_DATABASE_CONFLICT',
+    path: 'allocationVersionId'
+  },
+  gcs_outcome_cost_allocation_version_transition_guard: {
+    code: 'GCS_OUTCOME_COST_ALLOCATION_DATABASE_CONFLICT',
+    path: 'allocationVersionId'
+  },
+  gcs_outcome_cost_allocation_generated_payment_guard: {
+    code: 'GCS_OUTCOME_COST_ALLOCATION_GENERATED_PAYMENT_IMMUTABLE',
+    path: 'paymentId'
+  },
+  gcs_outcome_cost_allocation_generated_payment_line_guard: {
+    code: 'GCS_OUTCOME_COST_ALLOCATION_GENERATED_PAYMENT_IMMUTABLE',
+    path: 'paymentLineId'
+  },
+  gcs_outcome_cost_allocation_generated_payment_total_guard: {
+    code: 'GCS_OUTCOME_COST_ALLOCATION_GENERATED_PAYMENT_IMMUTABLE',
+    path: 'paymentId'
   }
 }
 
@@ -125,7 +249,7 @@ export const getOutcomeCostAllocationErrorMessage = (
 export const getOutcomeCostAllocationErrorMessages = (
   code: string | undefined
 ) => errorMessages[code ?? 'GCS_OUTCOME_COST_ALLOCATION_INVALID']
-    ?? errorMessages.GCS_OUTCOME_COST_ALLOCATION_INVALID
+  ?? errorMessages.GCS_OUTCOME_COST_ALLOCATION_INVALID
 
 /**
  * Creates a bilingual extension user error with optional field-level detail.
@@ -144,6 +268,38 @@ export const createOutcomeCostAllocationUserError = (
       }]
     : undefined
 })
+
+/**
+ * Converts only known allocation persistence failures to stable bilingual user errors.
+ */
+export const throwOutcomeCostAllocationDatabaseError = (error: unknown): never => {
+  if (typeof error !== 'object' || error === null) {
+    throw error
+  }
+
+  const databaseError = error as OutcomeCostAllocationDatabaseError
+  const sqlState = typeof databaseError.code === 'string' ? databaseError.code : ''
+  const constraint = typeof databaseError.constraint === 'string' ? databaseError.constraint : ''
+  const mapped = databaseConstraintErrors[constraint]
+
+  if (mapped) {
+    throw createOutcomeCostAllocationUserError(mapped.code, mapped.path)
+  }
+
+  const isExtensionForeignKey = sqlState === '23503'
+    && constraint.startsWith('gcs_outcome_cost_allocation_')
+  const isExtensionUnique = sqlState === '23505'
+    && constraint.startsWith('gcs_outcome_cost_allocation_')
+
+  if (isExtensionForeignKey || isExtensionUnique) {
+    throw createOutcomeCostAllocationUserError(
+      'GCS_OUTCOME_COST_ALLOCATION_STALE_COORDINATE',
+      'allocations'
+    )
+  }
+
+  throw error
+}
 
 /**
  * Converts validation issues to request-locale error details.

@@ -7,7 +7,8 @@
   "scripts": {
     "typecheck": "vue-tsc --noEmit",
     "test:unit": "vitest run --config vitest.config.ts",
-    "test:coverage": "vitest run --coverage --config vitest.config.ts"
+    "test:coverage": "vitest run --coverage --config vitest.config.ts",
+    "test:integration:postgres": "vitest run --config vitest.postgres.config.ts"
   },
   "dependencies": {
     "@gcs-ssc/extensions": "^0.1.0"
@@ -16,8 +17,15 @@
     "vue": "^3.5.28"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "0.3.16",
+    "@types/pg": "^8.16.0",
+    "@vitejs/plugin-vue": "^6.0.4",
+    "@vue/test-utils": "^2.4.6",
     "h3": "1.15.5",
+    "jsdom": "^28.1.0",
     "kysely": "^0.28.11",
+    "kysely-pglite": "^0.6.1",
+    "pg": "^8.18.0",
     "typescript": "^5.9.3",
     "vitest": "^4.0.18",
     "vue-tsc": "^3.2.4",

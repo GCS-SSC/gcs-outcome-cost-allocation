@@ -3,6 +3,7 @@ import {
   allocatePaymentAmountToCommitmentLines,
   parseOutcomeCostAllocationConfig,
   resolveAllocationAmounts,
+  toMoney,
   validateGeneratedCommitmentLinePaymentCoverage,
   validateAllocationReferences,
   validateAllocationTotals,
@@ -26,18 +27,21 @@ describe('outcome cost allocation logic', () => {
   it('validates amount allocations against the total agreement budget', () => {
     expect(validateAllocationTotals([
       {
+        streamCommitmentId: 'stream-commitment-1',
         agreementBudgetFiscalYearId: 'year-1',
         outcomeId: 'outcome-1',
         allocationMethod: 'amount',
         allocationValue: 600
       },
       {
+        streamCommitmentId: 'stream-commitment-1',
         agreementBudgetFiscalYearId: 'year-1',
         outcomeId: 'outcome-2',
         allocationMethod: 'amount',
         allocationValue: 400
       },
       {
+        streamCommitmentId: 'stream-commitment-1',
         agreementBudgetFiscalYearId: 'year-2',
         outcomeId: 'outcome-1',
         allocationMethod: 'amount',
@@ -47,6 +51,7 @@ describe('outcome cost allocation logic', () => {
 
     expect(validateAllocationTotals([
       {
+        streamCommitmentId: 'stream-commitment-1',
         agreementBudgetFiscalYearId: 'year-1',
         outcomeId: 'outcome-1',
         allocationMethod: 'amount',
@@ -55,21 +60,45 @@ describe('outcome cost allocation logic', () => {
     ], years, activeOutcomes).map(issue => issue.code)).toContain('GCS_OUTCOME_COST_ALLOCATION_TOTAL_INVALID')
   })
 
+  it('rejects an allocation total that exceeds the agreement budget by one cent', () => {
+    expect(validateAllocationTotals([
+      {
+        streamCommitmentId: 'stream-commitment-1',
+        agreementBudgetFiscalYearId: 'year-1',
+        outcomeId: 'outcome-1',
+        allocationMethod: 'amount',
+        allocationValue: 1000.01
+      },
+      {
+        streamCommitmentId: 'stream-commitment-1',
+        agreementBudgetFiscalYearId: 'year-2',
+        outcomeId: 'outcome-2',
+        allocationMethod: 'amount',
+        allocationValue: 333.33
+      }
+    ], years, activeOutcomes).map(issue => issue.code)).toContain(
+      'GCS_OUTCOME_COST_ALLOCATION_TOTAL_INVALID'
+    )
+  })
+
   it('validates percentage allocations and allows mixed methods when the total resolves to the agreement budget', () => {
     expect(validateAllocationTotals([
       {
+        streamCommitmentId: 'stream-commitment-1',
         agreementBudgetFiscalYearId: 'year-1',
         outcomeId: 'outcome-1',
         allocationMethod: 'percentage',
         allocationValue: 60
       },
       {
+        streamCommitmentId: 'stream-commitment-1',
         agreementBudgetFiscalYearId: 'year-1',
         outcomeId: 'outcome-2',
         allocationMethod: 'percentage',
         allocationValue: 40
       },
       {
+        streamCommitmentId: 'stream-commitment-1',
         agreementBudgetFiscalYearId: 'year-2',
         outcomeId: 'outcome-1',
         allocationMethod: 'percentage',
@@ -79,18 +108,21 @@ describe('outcome cost allocation logic', () => {
 
     expect(validateAllocationTotals([
       {
+        streamCommitmentId: 'stream-commitment-1',
         agreementBudgetFiscalYearId: 'year-1',
         outcomeId: 'outcome-1',
         allocationMethod: 'percentage',
         allocationValue: 60
       },
       {
+        streamCommitmentId: 'stream-commitment-1',
         agreementBudgetFiscalYearId: 'year-1',
         outcomeId: 'outcome-2',
         allocationMethod: 'amount',
         allocationValue: 400
       },
       {
+        streamCommitmentId: 'stream-commitment-1',
         agreementBudgetFiscalYearId: 'year-2',
         outcomeId: 'outcome-1',
         allocationMethod: 'percentage',
@@ -102,6 +134,7 @@ describe('outcome cost allocation logic', () => {
   it('allows the full agreement budget to be allocated in one budget year', () => {
     expect(validateAllocationTotals([
       {
+        streamCommitmentId: 'stream-commitment-1',
         agreementBudgetFiscalYearId: 'year-1',
         outcomeId: 'outcome-1',
         allocationMethod: 'amount',
@@ -114,6 +147,7 @@ describe('outcome cost allocation logic', () => {
     expect(validateAllocationTotals([
       {
         commitmentType: 'commitment',
+        streamCommitmentId: 'stream-commitment-1',
         agreementBudgetFiscalYearId: 'year-1',
         outcomeId: 'outcome-1',
         allocationMethod: 'amount',
@@ -121,6 +155,7 @@ describe('outcome cost allocation logic', () => {
       },
       {
         commitmentType: 'paye',
+        streamCommitmentId: 'stream-commitment-2',
         agreementBudgetFiscalYearId: 'year-2',
         outcomeId: 'outcome-2',
         allocationMethod: 'amount',
@@ -133,6 +168,7 @@ describe('outcome cost allocation logic', () => {
     expect(validateAllocationReferences([
       {
         commitmentType: 'commitment',
+        streamCommitmentId: 'stream-commitment-1',
         agreementBudgetFiscalYearId: 'year-1',
         outcomeId: 'outcome-1',
         allocationMethod: 'amount',
@@ -144,12 +180,14 @@ describe('outcome cost allocation logic', () => {
   it('rounds generated percentage lines so the year total is exact', () => {
     const resolved = resolveAllocationAmounts([
       {
+        streamCommitmentId: 'stream-commitment-1',
         agreementBudgetFiscalYearId: 'year-2',
         outcomeId: 'outcome-1',
         allocationMethod: 'percentage',
         allocationValue: 33.33
       },
       {
+        streamCommitmentId: 'stream-commitment-1',
         agreementBudgetFiscalYearId: 'year-2',
         outcomeId: 'outcome-2',
         allocationMethod: 'percentage',
@@ -161,9 +199,79 @@ describe('outcome cost allocation logic', () => {
     expect(resolved.reduce((sum, allocation) => sum + allocation.amount, 0)).toBe(333.33)
   })
 
+  it('balances percentage residual cents deterministically and validates the resolved values', () => {
+    const centSensitiveYears = [{
+      agreementBudgetFiscalYearId: 'year-1',
+      programFunding: 2.05
+    }]
+    const allocations = [
+      {
+        streamCommitmentId: 'stream-commitment-1',
+        agreementBudgetFiscalYearId: 'year-1',
+        outcomeId: 'outcome-1',
+        allocationMethod: 'percentage' as const,
+        allocationValue: 10
+      },
+      {
+        streamCommitmentId: 'stream-commitment-1',
+        agreementBudgetFiscalYearId: 'year-1',
+        outcomeId: 'outcome-2',
+        allocationMethod: 'percentage' as const,
+        allocationValue: 90
+      }
+    ]
+
+    const resolved = resolveAllocationAmounts(allocations, centSensitiveYears)
+
+    expect(resolved.map(allocation => allocation.amount)).toEqual([0.21, 1.84])
+    expect(toMoney(resolved.reduce((sum, allocation) => sum + allocation.amount, 0))).toBe(2.05)
+    expect(validateAllocationTotals(allocations, centSensitiveYears, activeOutcomes)).toEqual([])
+  })
+
+  it('assigns equal percentage remainders to the same coordinate after request reordering', () => {
+    const centSensitiveYears = [{
+      agreementBudgetFiscalYearId: 'year-1',
+      programFunding: 2.05
+    }]
+    const allocations = [
+      {
+        streamCommitmentId: 'stream-commitment-1',
+        agreementBudgetFiscalYearId: 'year-1',
+        outcomeId: 'outcome-1',
+        allocationMethod: 'percentage' as const,
+        allocationValue: 10
+      },
+      {
+        streamCommitmentId: 'stream-commitment-1',
+        agreementBudgetFiscalYearId: 'year-1',
+        outcomeId: 'outcome-2',
+        allocationMethod: 'percentage' as const,
+        allocationValue: 90
+      }
+    ]
+    const byOutcomeId = (resolved: ReturnType<typeof resolveAllocationAmounts>) => new Map(
+      resolved.map(allocation => [allocation.outcomeId, allocation.amount])
+    )
+
+    const forward = byOutcomeId(resolveAllocationAmounts(allocations, centSensitiveYears))
+    const reversed = byOutcomeId(resolveAllocationAmounts([...allocations].reverse(), centSensitiveYears))
+
+    expect(forward).toEqual(new Map([
+      ['outcome-1', 0.21],
+      ['outcome-2', 1.84]
+    ]))
+    expect(reversed).toEqual(forward)
+  })
+
+  it('rounds decimal half cents correctly without binary floating-point drift', () => {
+    expect(toMoney(10.075)).toBe(10.08)
+    expect(toMoney(1.005)).toBe(1.01)
+  })
+
   it('reports missing activity outcomes and stale budget rows', () => {
     const issues = validateAllocationTotals([
       {
+        streamCommitmentId: 'stream-commitment-1',
         agreementBudgetFiscalYearId: 'stale-year',
         outcomeId: 'stale-outcome',
         allocationMethod: 'amount',
@@ -199,6 +307,7 @@ describe('outcome cost allocation logic', () => {
       'commitment',
       [
         {
+          streamCommitmentId: 'stream-commitment-1',
           agreementBudgetFiscalYearId: 'year-1',
           outcomeId: 'outcome-1',
           allocationMethod: 'amount',
@@ -206,6 +315,7 @@ describe('outcome cost allocation logic', () => {
           amount: 500
         },
         {
+          streamCommitmentId: 'inactive-stream-commitment',
           agreementBudgetFiscalYearId: 'year-1',
           outcomeId: 'outcome-2',
           allocationMethod: 'amount',
@@ -215,10 +325,41 @@ describe('outcome cost allocation logic', () => {
       ],
       config,
       new Map([['year-1', 'stream-budget-1']]),
-      new Set(['stream-commitment-1'])
+      new Map([['stream-commitment-1', 'stream-budget-1']])
     ).map(issue => issue.code)
 
     expect(issues).toEqual(['GCS_OUTCOME_COST_ALLOCATION_STREAM_COMMITMENT_INACTIVE'])
+  })
+
+  it('rejects active stream commitments attached to a different fiscal-year budget', () => {
+    const config = parseOutcomeCostAllocationConfig({
+      enabledCommitmentTypes: ['commitment'],
+      mappings: [{
+        commitmentType: 'commitment',
+        outcomeId: 'outcome-1',
+        streamBudgetId: 'stream-budget-1',
+        streamCommitmentId: 'stream-commitment-1'
+      }]
+    })
+
+    expect(validateCommitmentMappings(
+      'commitment',
+      [{
+        streamCommitmentId: 'stream-commitment-1',
+        agreementBudgetFiscalYearId: 'year-1',
+        outcomeId: 'outcome-1',
+        allocationMethod: 'amount',
+        allocationValue: 1000,
+        amount: 1000
+      }],
+      config,
+      new Map([['year-1', 'stream-budget-1']]),
+      new Map([['stream-commitment-1', 'different-stream-budget']])
+    )).toEqual([{
+      code: 'GCS_OUTCOME_COST_ALLOCATION_STREAM_COMMITMENT_BUDGET_MISMATCH',
+      path: 'allocations.0.streamCommitmentId',
+      message: 'apiErrors.extensions.outcome_cost_allocation.stream_commitment_budget_mismatch'
+    }])
   })
 
   it('rejects generated commitment lines below existing paid amounts', () => {
@@ -397,5 +538,25 @@ describe('outcome cost allocation logic', () => {
 
     expect(lines.map(line => line.paymentAmount)).toEqual([33.33, 33.33, 33.34])
     expect(lines.reduce((sum, line) => sum + line.paymentAmount, 0)).toBe(100)
+  })
+
+  it('weights large exact financial values without overflowing Number multiplication', () => {
+    const lines = allocatePaymentAmountToCommitmentLines([
+      {
+        commitmentLineId: 'line-1',
+        weightAmount: 900_000_000_000,
+        remainingAmount: 900_000_000_000
+      },
+      {
+        commitmentLineId: 'line-2',
+        weightAmount: 900_000_000_000,
+        remainingAmount: 900_000_000_000
+      }
+    ], 900_000_000_000)
+
+    expect(lines.map(line => line.paymentAmount)).toEqual([
+      450_000_000_000,
+      450_000_000_000
+    ])
   })
 })

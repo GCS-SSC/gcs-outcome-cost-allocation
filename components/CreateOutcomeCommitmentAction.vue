@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import type { Ref } from 'vue'
-import {
-  type GcsExtensionCreateOperation,
-  type GcsExtensionJsonConfig,
-  type GcsExtensionRbacRequirement
+import type {
+  ExtensionEntityTabContext,
+  GcsExtensionCreateOperation,
+  GcsExtensionJsonConfig,
+  GcsExtensionRbacRequirement
 } from '@gcs-ssc/extensions'
-import type { ExtensionEntityTabContext } from '@gcs-ssc/extensions'
 import {
   ExtensionButton,
   ExtensionFormField,
@@ -108,6 +108,14 @@ const errorMessages: Record<string, { en: string, fr: string }> = {
   GCS_OUTCOME_COST_ALLOCATION_STREAM_COMMITMENT_INACTIVE: {
     en: 'One configured stream commitment line is no longer active.',
     fr: 'Une ligne d engagement de volet configuree n est plus active.'
+  },
+  GCS_OUTCOME_COST_ALLOCATION_STREAM_COMMITMENT_BUDGET_MISMATCH: {
+    en: 'One configured stream commitment line belongs to a different fiscal-year budget.',
+    fr: 'Une ligne d engagement de volet configuree appartient au budget d un autre exercice.'
+  },
+  GCS_OUTCOME_COST_ALLOCATION_COMMITMENT_LINES_MISSING: {
+    en: 'The active cost allocation has no positive allocations for this commitment type.',
+    fr: 'La repartition des couts active ne contient aucune repartition positive pour ce type d engagement.'
   }
 }
 

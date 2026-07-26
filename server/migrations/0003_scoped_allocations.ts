@@ -2,7 +2,7 @@ import { sql } from 'kysely'
 import { defineGcsExtensionMigration } from '@gcs-ssc/extensions/server'
 
 export default defineGcsExtensionMigration({
-  async up(db) {
+  up: async (db) => {
     await sql`
       ALTER TABLE extensions.gcs_outcome_cost_allocation_allocations
       ADD COLUMN IF NOT EXISTS commitment_type varchar(20) NOT NULL DEFAULT 'commitment'
@@ -35,7 +35,18 @@ export default defineGcsExtensionMigration({
     `.execute(db)
 
     await sql`
-      CREATE UNIQUE INDEX IF NOT EXISTS gcs_outcome_cost_allocation_scoped_allocation
+      DROP INDEX IF EXISTS extensions.gcs_outcome_cost_allocation_scoped_allocation
+    `.execute(db)
+
+    await sql`
+      ALTER TABLE extensions.gcs_outcome_cost_allocation_allocations
+      ALTER COLUMN commitment_type DROP DEFAULT,
+      ALTER COLUMN commitment_type SET NOT NULL,
+      ALTER COLUMN stream_commitment_id SET NOT NULL
+    `.execute(db)
+
+    await sql`
+      CREATE UNIQUE INDEX gcs_outcome_cost_allocation_version_allocation
       ON extensions.gcs_outcome_cost_allocation_allocations (
         allocation_version_id,
         commitment_type,

@@ -1,6 +1,10 @@
 import type { Ref } from 'vue'
-import { COMMITMENT_TYPES, type CommitmentType, type CostAllocationVersion } from './allocation'
-import type { VersionedOutcomeAllocationInput } from './allocation'
+import {
+  COMMITMENT_TYPES,
+  type CommitmentType,
+  type CostAllocationVersion,
+  type VersionedOutcomeAllocationInput
+} from './allocation'
 
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
 
@@ -10,17 +14,21 @@ interface ToastLike {
 
 export interface CompleteOutcomeAllocationSelectedVersionOptions {
   isCompleting: Ref<boolean>
+  hasPendingMutation: boolean
   canEditSelectedVersion: boolean
   selectedVersionId: string
   validationIssueCount: number
   validationMessage: string
   locale: string
   saveError: Ref<string>
-  save: () => Promise<boolean>
+  allocations: VersionedOutcomeAllocationInput[]
   refresh: () => Promise<void>
   buildCompleteRequestUrl: (versionId: string) => RequestInfo | URL
   toast: ToastLike
-  completeRequest?: (requestUrl: RequestInfo | URL) => Promise<void>
+  completeRequest?: (
+    requestUrl: RequestInfo | URL,
+    allocations: VersionedOutcomeAllocationInput[]
+  ) => Promise<void>
 }
 
 export interface ConfiguredAssociationRow {
@@ -251,9 +259,14 @@ export const saveOutcomeAllocationsRequest = async (
  */
 export const completeOutcomeAllocationVersionRequest = async (
   requestUrl: RequestInfo | URL,
+  allocations: VersionedOutcomeAllocationInput[],
   fetcher: Fetcher = fetch
 ) => {
-  const response = await fetcher(requestUrl, { method: 'POST' })
+  const response = await fetcher(requestUrl, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ allocations })
+  })
   if (!response.ok) {
     throw new Error(await getOutcomeAllocationResponseErrorMessage(response))
   }
@@ -280,7 +293,12 @@ export const deleteOutcomeAllocationDraftVersionRequest = async (
 export const completeOutcomeAllocationSelectedVersion = async (
   options: CompleteOutcomeAllocationSelectedVersionOptions
 ) => {
-  if (options.isCompleting.value || !options.canEditSelectedVersion || !options.selectedVersionId) {
+  if (
+    options.isCompleting.value
+    || options.hasPendingMutation
+    || !options.canEditSelectedVersion
+    || !options.selectedVersionId
+  ) {
     return
   }
 
@@ -296,12 +314,9 @@ export const completeOutcomeAllocationSelectedVersion = async (
   try {
     options.isCompleting.value = true
     options.saveError.value = ''
-    const saved = await options.save()
-    if (!saved) {
-      return
-    }
     await (options.completeRequest ?? completeOutcomeAllocationVersionRequest)(
-      options.buildCompleteRequestUrl(options.selectedVersionId)
+      options.buildCompleteRequestUrl(options.selectedVersionId),
+      options.allocations
     )
     await options.refresh()
     options.toast.add({

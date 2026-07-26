@@ -79,11 +79,12 @@ const isAssociationModalOpen: Ref<boolean> = ref(false)
 const outcomesResponse: Ref<ListResponse<OutcomeItem> | null> = ref(null)
 const budgetsResponse: Ref<ListResponse<StreamBudgetItem> | null> = ref(null)
 const commitmentsResponse: Ref<ListResponse<StreamCommitmentItem> | null> = ref(null)
-const fetchList = async <T,>(url: string) => {
+type FetchList = <T>(url: string) => Promise<ListResponse<T>>
+const fetchList: FetchList = async url => {
   try {
-    return await hostApi.get<ListResponse<T>>(url)
+    return await hostApi.get<ListResponse<never>>(url)
   } catch {
-    return { items: [] } as ListResponse<T>
+    return { items: [] }
   }
 }
 const refreshLookups = async () => {

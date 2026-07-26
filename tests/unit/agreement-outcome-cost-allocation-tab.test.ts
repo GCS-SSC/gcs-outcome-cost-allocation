@@ -15,8 +15,10 @@ import {
   resolveSelectedOutcomeAllocationVersionId,
   saveOutcomeAllocationsRequest
 } from '../../shared/agreement-outcome-cost-allocation-tab'
-import type { VersionedOutcomeAllocationInput } from '../../shared/allocation'
-import type { CostAllocationVersion } from '../../shared/allocation'
+import type {
+  CostAllocationVersion,
+  VersionedOutcomeAllocationInput
+} from '../../shared/allocation'
 
 const versions = [
   { id: 'active-1', status: 'active' },
@@ -216,26 +218,34 @@ describe('agreement outcome cost allocation tab helpers', () => {
   it('sends complete and draft delete requests', async () => {
     const fetcher = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }))
 
-    await expect(completeOutcomeAllocationVersionRequest('/allocation-versions/version-1/complete', fetcher))
+    await expect(completeOutcomeAllocationVersionRequest(
+      '/allocation-versions/version-1/complete',
+      [],
+      fetcher
+    ))
       .resolves.toBeUndefined()
     await expect(deleteOutcomeAllocationDraftVersionRequest('/allocation-versions/version-1', fetcher))
       .resolves.toBeUndefined()
 
-    expect(fetcher).toHaveBeenNthCalledWith(1, '/allocation-versions/version-1/complete', { method: 'POST' })
+    expect(fetcher).toHaveBeenNthCalledWith(1, '/allocation-versions/version-1/complete', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ allocations: [] })
+    })
     expect(fetcher).toHaveBeenNthCalledWith(2, '/allocation-versions/version-1', { method: 'DELETE' })
   })
 
   it('skips completion when already completing, not editable, or missing a version', async () => {
-    const save = vi.fn().mockResolvedValue(true)
     const baseOptions = {
       isCompleting: ref(false),
+      hasPendingMutation: false,
       canEditSelectedVersion: true,
       selectedVersionId: 'version-1',
       validationIssueCount: 0,
       validationMessage: '',
       locale: 'en',
       saveError: ref(''),
-      save,
+      allocations: [],
       refresh: vi.fn().mockResolvedValue(undefined),
       buildCompleteRequestUrl: (versionId: string) => `/versions/${versionId}/complete`,
       toast: { add: vi.fn() },
@@ -243,22 +253,24 @@ describe('agreement outcome cost allocation tab helpers', () => {
     }
 
     await completeOutcomeAllocationSelectedVersion({ ...baseOptions, isCompleting: ref(true) })
+    await completeOutcomeAllocationSelectedVersion({ ...baseOptions, hasPendingMutation: true })
     await completeOutcomeAllocationSelectedVersion({ ...baseOptions, canEditSelectedVersion: false })
     await completeOutcomeAllocationSelectedVersion({ ...baseOptions, selectedVersionId: '' })
 
-    expect(save).not.toHaveBeenCalled()
+    expect(baseOptions.completeRequest).not.toHaveBeenCalled()
   })
 
   it('shows validation errors before saving completion requests', async () => {
     const options = {
       isCompleting: ref(false),
+      hasPendingMutation: false,
       canEditSelectedVersion: true,
       selectedVersionId: 'version-1',
       validationIssueCount: 1,
       validationMessage: 'The full agreement budget must be allocated.',
       locale: 'en',
       saveError: ref(''),
-      save: vi.fn().mockResolvedValue(true),
+      allocations: [],
       refresh: vi.fn().mockResolvedValue(undefined),
       buildCompleteRequestUrl: (versionId: string) => `/versions/${versionId}/complete`,
       toast: { add: vi.fn() },
@@ -272,20 +284,29 @@ describe('agreement outcome cost allocation tab helpers', () => {
       description: 'The full agreement budget must be allocated.',
       color: 'error'
     })
-    expect(options.save).not.toHaveBeenCalled()
     expect(options.completeRequest).not.toHaveBeenCalled()
   })
 
-  it('saves, completes, refreshes, and shows success for valid completion requests', async () => {
+  it('atomically saves and completes, refreshes, and shows success for valid completion requests', async () => {
+    const allocations: VersionedOutcomeAllocationInput[] = [{
+      allocationVersionId: 'version-1',
+      commitmentType: 'commitment',
+      agreementBudgetFiscalYearId: 'year-1',
+      streamCommitmentId: 'commitment-1',
+      outcomeId: 'outcome-1',
+      allocationMethod: 'amount',
+      allocationValue: 10
+    }]
     const options = {
       isCompleting: ref(false),
+      hasPendingMutation: false,
       canEditSelectedVersion: true,
       selectedVersionId: 'version-1',
       validationIssueCount: 0,
       validationMessage: '',
       locale: 'en',
       saveError: ref('previous'),
-      save: vi.fn().mockResolvedValue(true),
+      allocations,
       refresh: vi.fn().mockResolvedValue(undefined),
       buildCompleteRequestUrl: (versionId: string) => `/versions/${versionId}/complete`,
       toast: { add: vi.fn() },
@@ -295,8 +316,10 @@ describe('agreement outcome cost allocation tab helpers', () => {
     await completeOutcomeAllocationSelectedVersion(options)
 
     expect(options.saveError.value).toBe('')
-    expect(options.save).toHaveBeenCalled()
-    expect(options.completeRequest).toHaveBeenCalledWith('/versions/version-1/complete')
+    expect(options.completeRequest).toHaveBeenCalledWith(
+      '/versions/version-1/complete',
+      allocations
+    )
     expect(options.refresh).toHaveBeenCalled()
     expect(options.toast.add).toHaveBeenCalledWith({
       title: 'Success',
@@ -306,39 +329,17 @@ describe('agreement outcome cost allocation tab helpers', () => {
     expect(options.isCompleting.value).toBe(false)
   })
 
-  it('does not complete when saving the version fails', async () => {
-    const options = {
-      isCompleting: ref(false),
-      canEditSelectedVersion: true,
-      selectedVersionId: 'version-1',
-      validationIssueCount: 0,
-      validationMessage: '',
-      locale: 'en',
-      saveError: ref(''),
-      save: vi.fn().mockResolvedValue(false),
-      refresh: vi.fn().mockResolvedValue(undefined),
-      buildCompleteRequestUrl: (versionId: string) => `/versions/${versionId}/complete`,
-      toast: { add: vi.fn() },
-      completeRequest: vi.fn().mockResolvedValue(undefined)
-    }
-
-    await completeOutcomeAllocationSelectedVersion(options)
-
-    expect(options.completeRequest).not.toHaveBeenCalled()
-    expect(options.refresh).not.toHaveBeenCalled()
-    expect(options.isCompleting.value).toBe(false)
-  })
-
   it('stores and toasts completion request errors', async () => {
     const options = {
       isCompleting: ref(false),
+      hasPendingMutation: false,
       canEditSelectedVersion: true,
       selectedVersionId: 'version-1',
       validationIssueCount: 0,
       validationMessage: '',
       locale: 'en',
       saveError: ref(''),
-      save: vi.fn().mockResolvedValue(true),
+      allocations: [],
       refresh: vi.fn().mockResolvedValue(undefined),
       buildCompleteRequestUrl: (versionId: string) => `/versions/${versionId}/complete`,
       toast: { add: vi.fn() },

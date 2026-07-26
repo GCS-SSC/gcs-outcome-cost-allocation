@@ -8,9 +8,50 @@ export type AllocationMethod = typeof ALLOCATION_METHODS[number]
 export const ALLOCATION_VERSION_STATUSES = ['draft', 'active', 'inactive'] as const
 export type AllocationVersionStatus = typeof ALLOCATION_VERSION_STATUSES[number]
 
+export const EXACT_NUMERIC_19_4_MAX = 900_719_925_474.0991
+
+/**
+ * Converts a non-negative scale-four decimal to exact units when it fits a safe JavaScript integer.
+ */
+export const toExactNumeric19Scale4Units = (value: unknown): bigint | null => {
+  if (typeof value !== 'number' && typeof value !== 'string') {
+    return null
+  }
+  if (typeof value === 'number' && !Number.isFinite(value)) {
+    return null
+  }
+
+  const numericText = typeof value === 'string' ? value.trim() : String(value)
+  const match = /^(\d+)(?:\.(\d+))?$/.exec(numericText)
+  if (!match) {
+    return null
+  }
+
+  const integerDigits = (match[1] ?? '').replace(/^0+/, '') || '0'
+  const fractionDigits = match[2] ?? ''
+  if (integerDigits.length > 15 || fractionDigits.length > 4) {
+    return null
+  }
+
+  const scaledUnits = BigInt(`${integerDigits}${fractionDigits.padEnd(4, '0')}`)
+  return scaledUnits > BigInt(Number.MAX_SAFE_INTEGER) ? null : scaledUnits
+}
+
+/**
+ * Parses a non-negative scale-four decimal only when its scaled units fit a safe JavaScript integer.
+ */
+export const parseExactNumeric19Scale4 = (value: unknown): number | null => {
+  if (toExactNumeric19Scale4Units(value) === null) {
+    return null
+  }
+
+  const parsed = Number(typeof value === 'string' ? value.trim() : value)
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null
+}
+
 export interface OutcomeAllocationInput {
   commitmentType?: CommitmentType
-  streamCommitmentId?: string
+  streamCommitmentId: string
   agreementBudgetFiscalYearId: string
   outcomeId: string
   allocationMethod: AllocationMethod
@@ -19,6 +60,13 @@ export interface OutcomeAllocationInput {
 
 export interface VersionedOutcomeAllocationInput extends OutcomeAllocationInput {
   allocationVersionId: string
+  resolvedAmount?: number | null
+  fundingBasisAmount?: number | null
+  outcomeLabelEn?: string | null
+  outcomeLabelFr?: string | null
+  commitmentLabelEn?: string | null
+  commitmentLabelFr?: string | null
+  fiscalYearDisplay?: string | null
 }
 
 export interface CostAllocationVersion {
@@ -28,6 +76,7 @@ export interface CostAllocationVersion {
   versionNumber: number
   createdAt?: string | null
   completedAt?: string | null
+  fundingBasisAmount?: number | null
 }
 
 export interface OutcomeAllocationResolved extends OutcomeAllocationInput {
@@ -85,6 +134,11 @@ export interface PaymentLineAllocationResolved extends PaymentLineAllocationInpu
 
 type PaymentLineAllocationCandidate = PaymentLineAllocationInput
 
+const BIGINT_ZERO = BigInt(0)
+const BIGINT_ONE = BigInt(1)
+const BIGINT_TWO = BigInt(2)
+const PERCENTAGE_DENOMINATOR = BigInt(1_000_000)
+
 /**
  * Checks whether a value is one of the commitment types supported by allocation generation.
  */
@@ -92,9 +146,58 @@ export const isCommitmentType = (value: unknown): value is CommitmentType =>
   typeof value === 'string' && COMMITMENT_TYPES.includes(value as CommitmentType)
 
 /**
+ * Converts a finite decimal number to a rounded scaled integer without binary half-cent drift.
+ */
+const decimalToScaledBigInt = (value: number, scale: number): bigint => {
+  if (!Number.isFinite(value)) {
+    return BIGINT_ZERO
+  }
+
+  const sign = value < 0 ? -BIGINT_ONE : BIGINT_ONE
+  const [coefficient = '0', exponentText = '0'] = Math.abs(value).toString().toLowerCase().split('e')
+  const [integerPart = '0', fractionPart = ''] = coefficient.split('.')
+  const exponent = Number(exponentText)
+  const digits = `${integerPart}${fractionPart}`
+  const decimalPosition = integerPart.length + exponent
+  const normalized = decimalPosition <= 0
+    ? `${'0'.repeat(-decimalPosition)}${digits}`
+    : `${digits}${'0'.repeat(Math.max(0, decimalPosition - digits.length))}`
+  const scaledPosition = decimalPosition + scale
+  const wholeDigits = scaledPosition <= 0
+    ? '0'
+    : normalized.slice(0, scaledPosition).padEnd(scaledPosition, '0') || '0'
+  const roundingDigit = scaledPosition < 0
+    ? '0'
+    : normalized[scaledPosition] ?? '0'
+  const rounded = BigInt(wholeDigits) + (roundingDigit >= '5' ? BIGINT_ONE : BIGINT_ZERO)
+
+  return sign * rounded
+}
+
+/**
+ * Converts a finite decimal number to a rounded scaled integer.
+ */
+const decimalToScaledInteger = (value: number, scale: number): number => {
+  const scaled = decimalToScaledBigInt(value, scale)
+  return scaled > BigInt(Number.MAX_SAFE_INTEGER) || scaled < BigInt(Number.MIN_SAFE_INTEGER)
+    ? 0
+    : Number(scaled)
+}
+
+/**
  * Rounds a numeric amount to the nearest cent.
  */
-export const toMoney = (value: number): number => Math.round((value + Number.EPSILON) * 100) / 100
+export const toMoney = (value: number): number => decimalToScaledInteger(value, 2) / 100
+
+/**
+ * Converts a monetary value to an integer number of cents.
+ */
+export const toCents = (value: number): number => decimalToScaledInteger(value, 2)
+
+/**
+ * Converts an integer number of cents to a monetary value.
+ */
+export const fromCents = (value: number): number => value / 100
 
 /**
  * Keeps valid commitment types and complete mapping records from an unknown extension config.
@@ -186,20 +289,22 @@ export const validateAllocationTotals = (
   activeOutcomeIds: Set<string>
 ): AllocationValidationIssue[] => {
   const issues: AllocationValidationIssue[] = validateAllocationReferences(allocations, yearTotals, activeOutcomeIds)
-  const totalsByYearId = new Map(yearTotals.map(total => [total.agreementBudgetFiscalYearId, total.programFunding]))
-  let allocatedTotal = 0
-
-  for (const allocation of allocations) {
-    const yearTotal = totalsByYearId.get(allocation.agreementBudgetFiscalYearId) ?? 0
-    if (allocation.allocationMethod === 'percentage') {
-      allocatedTotal = toMoney(allocatedTotal + yearTotal * allocation.allocationValue / 100)
-    } else {
-      allocatedTotal = toMoney(allocatedTotal + allocation.allocationValue)
-    }
+  const allocatedTotalCents = resolveAllocationAmounts(allocations, yearTotals)
+    .reduce((sum, allocation) => sum + BigInt(toCents(allocation.amount)), BIGINT_ZERO)
+  const agreementBudgetTotalCents = yearTotals
+    .reduce((sum, total) => sum + BigInt(toCents(total.programFunding)), BIGINT_ZERO)
+  const agreementBudgetScale4Units = yearTotals.reduce(
+    (sum, total) => sum + (toExactNumeric19Scale4Units(total.programFunding) ?? BIGINT_ZERO),
+    BIGINT_ZERO
+  )
+  if (allocatedTotalCents !== agreementBudgetTotalCents) {
+    issues.push({
+      code: 'GCS_OUTCOME_COST_ALLOCATION_TOTAL_INVALID',
+      path: 'allocations',
+      message: 'apiErrors.extensions.outcome_cost_allocation.total_invalid'
+    })
   }
-
-  const agreementBudgetTotal = toMoney(yearTotals.reduce((sum, total) => sum + total.programFunding, 0))
-  if (Math.abs(toMoney(allocatedTotal) - agreementBudgetTotal) > 0.01) {
+  if (agreementBudgetScale4Units > BigInt(Number.MAX_SAFE_INTEGER)) {
     issues.push({
       code: 'GCS_OUTCOME_COST_ALLOCATION_TOTAL_INVALID',
       path: 'allocations',
@@ -210,6 +315,17 @@ export const validateAllocationTotals = (
   return issues
 }
 
+const stableAllocationCoordinate = (
+  allocation: OutcomeAllocationInput | undefined
+): string => allocation
+  ? [
+      allocation.commitmentType ?? 'commitment',
+      allocation.agreementBudgetFiscalYearId,
+      allocation.outcomeId,
+      allocation.streamCommitmentId
+    ].join(':')
+  : ''
+
 /**
  * Resolves amount allocations directly and percentage allocations against their agreement-year funding total.
  */
@@ -217,26 +333,68 @@ export const resolveAllocationAmounts = (
   allocations: OutcomeAllocationInput[],
   yearTotals: YearFundingTotal[]
 ): OutcomeAllocationResolved[] => {
-  const totalsByYearId = new Map(yearTotals.map(total => [total.agreementBudgetFiscalYearId, total.programFunding]))
-  const resolved: OutcomeAllocationResolved[] = []
+  const totalsByYearId = new Map(yearTotals.map(total => [
+    total.agreementBudgetFiscalYearId,
+    toCents(total.programFunding)
+  ]))
+  const resolvedCents = allocations.map(allocation =>
+    allocation.allocationMethod === 'amount' ? toCents(allocation.allocationValue) : 0
+  )
+  const percentageIndexesByYearId = new Map<string, number[]>()
 
-  for (const allocation of allocations) {
-    if (allocation.allocationMethod === 'amount') {
-      resolved.push({
-        ...allocation,
-        amount: toMoney(allocation.allocationValue)
-      })
-      continue
+  allocations.forEach((allocation, index) => {
+    if (allocation.allocationMethod !== 'percentage') {
+      return
     }
 
-    const total = totalsByYearId.get(allocation.agreementBudgetFiscalYearId) ?? 0
-    resolved.push({
-      ...allocation,
-      amount: toMoney(total * allocation.allocationValue / 100)
+    const indexes = percentageIndexesByYearId.get(allocation.agreementBudgetFiscalYearId) ?? []
+    indexes.push(index)
+    percentageIndexesByYearId.set(allocation.agreementBudgetFiscalYearId, indexes)
+  })
+
+  for (const [yearId, indexes] of percentageIndexesByYearId) {
+    const fundingCents = BigInt(totalsByYearId.get(yearId) ?? 0)
+    const denominator = PERCENTAGE_DENOMINATOR
+    const shares = indexes.map(index => {
+      const allocation = allocations[index]
+      const percentageUnits = decimalToScaledBigInt(allocation?.allocationValue ?? 0, 4)
+      const numerator = fundingCents * percentageUnits
+      return {
+        index,
+        cents: numerator / denominator,
+        remainder: numerator % denominator,
+        numerator
+      }
     })
+    const totalNumerator = shares.reduce((sum, share) => sum + share.numerator, BIGINT_ZERO)
+    const targetCents = totalNumerator / denominator
+      + (totalNumerator % denominator >= denominator / BIGINT_TWO ? BIGINT_ONE : BIGINT_ZERO)
+    const floorCents = shares.reduce((sum, share) => sum + share.cents, BIGINT_ZERO)
+    let residualCents = Number(targetCents - floorCents)
+
+    shares
+      .sort((left, right) => {
+        if (left.remainder === right.remainder) {
+          const leftCoordinate = stableAllocationCoordinate(allocations[left.index])
+          const rightCoordinate = stableAllocationCoordinate(allocations[right.index])
+          if (leftCoordinate === rightCoordinate) {
+            return left.index - right.index
+          }
+          return leftCoordinate < rightCoordinate ? -1 : 1
+        }
+        return left.remainder > right.remainder ? -1 : 1
+      })
+      .forEach(share => {
+        const balancedCents = share.cents + (residualCents > 0 ? BIGINT_ONE : BIGINT_ZERO)
+        resolvedCents[share.index] = Number(balancedCents)
+        residualCents = Math.max(0, residualCents - 1)
+      })
   }
 
-  return resolved
+  return allocations.map((allocation, index) => ({
+    ...allocation,
+    amount: fromCents(resolvedCents[index] ?? 0)
+  }))
 }
 
 /**
@@ -247,7 +405,7 @@ export const validateCommitmentMappings = (
   allocations: OutcomeAllocationResolved[],
   config: OutcomeCostAllocationConfig,
   streamBudgetIdsByAgreementBudgetFiscalYearId: Map<string, string>,
-  activeStreamCommitmentIds: Set<string>
+  activeStreamCommitmentBudgetIds: Map<string, string>
 ): AllocationValidationIssue[] => {
   const issues: AllocationValidationIssue[] = []
   const mappingKeys = new Set(config.mappings
@@ -283,11 +441,21 @@ export const validateCommitmentMappings = (
         return
       }
 
-      if (!activeStreamCommitmentIds.has(mapping.streamCommitmentId)) {
+      const activeStreamCommitmentBudgetId = activeStreamCommitmentBudgetIds.get(mapping.streamCommitmentId)
+      if (!activeStreamCommitmentBudgetId) {
         issues.push({
           code: 'GCS_OUTCOME_COST_ALLOCATION_STREAM_COMMITMENT_INACTIVE',
           path: `allocations.${index}.outcomeId`,
           message: 'apiErrors.extensions.outcome_cost_allocation.stream_commitment_inactive'
+        })
+        return
+      }
+
+      if (activeStreamCommitmentBudgetId !== streamBudgetId) {
+        issues.push({
+          code: 'GCS_OUTCOME_COST_ALLOCATION_STREAM_COMMITMENT_BUDGET_MISMATCH',
+          path: `allocations.${index}.streamCommitmentId`,
+          message: 'apiErrors.extensions.outcome_cost_allocation.stream_commitment_budget_mismatch'
         })
       }
     })
@@ -331,7 +499,7 @@ export const validateGeneratedCommitmentLinePaymentCoverage = (
 
   return Array.from(paidAmountByKey.entries()).flatMap(([key, paidLine]) => {
     const generatedAmount = generatedAmountByKey.get(key) ?? 0
-    if (toMoney(paidLine.paidAmount) <= toMoney(generatedAmount + 0.01)) {
+    if (toCents(paidLine.paidAmount) <= toCents(generatedAmount)) {
       return []
     }
 
@@ -357,10 +525,11 @@ const canAllocatePaymentAmount = (
   candidates: PaymentLineAllocationCandidate[],
   amountToAllocate: number
 ) => {
-  const totalRemaining = toMoney(candidates.reduce((sum, line) => sum + line.remainingAmount, 0))
-  return amountToAllocate > 0
-    && totalRemaining > 0
-    && amountToAllocate <= toMoney(totalRemaining + 0.01)
+  const totalRemainingCents = candidates.reduce((sum, line) => sum + toCents(line.remainingAmount), 0)
+  const amountToAllocateCents = toCents(amountToAllocate)
+  return amountToAllocateCents > 0
+    && totalRemainingCents > 0
+    && amountToAllocateCents <= totalRemainingCents
 }
 
 const recordPaymentLineAllocation = (
@@ -380,46 +549,56 @@ const recordPaymentLineAllocation = (
  */
 const allocatePaymentRound = (
   candidates: PaymentLineAllocationCandidate[],
-  remainingPaymentAmount: number,
+  remainingPaymentCents: number,
   allocatedByLineId: Map<string, PaymentLineAllocationResolved>
 ) => {
-  const totalWeight = toMoney(candidates.reduce((sum, line) => sum + line.weightAmount, 0))
-  if (totalWeight <= 0) {
+  const totalWeightCents = candidates.reduce(
+    (sum, line) => sum + BigInt(toCents(line.weightAmount)),
+    BIGINT_ZERO
+  )
+  if (totalWeightCents <= BIGINT_ZERO) {
     return {
-      roundAllocated: 0,
-      roundRemainingAmount: remainingPaymentAmount,
+      roundAllocatedCents: 0,
+      roundRemainingCents: remainingPaymentCents,
       nextCandidates: []
     }
   }
 
-  const roundStartAmount = remainingPaymentAmount
-  let roundRemainingAmount = remainingPaymentAmount
+  const roundStartCents = remainingPaymentCents
+  let roundRemainingCents = remainingPaymentCents
   const nextCandidates: PaymentLineAllocationCandidate[] = []
   for (const [index, line] of candidates.entries()) {
     const isLastLine = index === candidates.length - 1
-    const targetAmount = isLastLine
-      ? roundRemainingAmount
-      : toMoney(roundStartAmount * line.weightAmount / totalWeight)
-    const paymentLineAmount = toMoney(Math.min(targetAmount, line.remainingAmount, roundRemainingAmount))
-    if (paymentLineAmount <= 0) {
+    const lineWeightCents = BigInt(toCents(line.weightAmount))
+    const lineRemainingCents = toCents(line.remainingAmount)
+    const targetCents = isLastLine
+      ? roundRemainingCents
+      : Number(
+          (
+            BigInt(roundStartCents) * lineWeightCents
+            + totalWeightCents / BIGINT_TWO
+          ) / totalWeightCents
+        )
+    const paymentLineCents = Math.min(targetCents, lineRemainingCents, roundRemainingCents)
+    if (paymentLineCents <= 0) {
       nextCandidates.push(line)
       continue
     }
 
-    recordPaymentLineAllocation(allocatedByLineId, line, paymentLineAmount)
-    roundRemainingAmount = toMoney(roundRemainingAmount - paymentLineAmount)
-    const nextRemaining = toMoney(line.remainingAmount - paymentLineAmount)
-    if (nextRemaining > 0) {
+    recordPaymentLineAllocation(allocatedByLineId, line, fromCents(paymentLineCents))
+    roundRemainingCents -= paymentLineCents
+    const nextRemainingCents = lineRemainingCents - paymentLineCents
+    if (nextRemainingCents > 0) {
       nextCandidates.push({
         ...line,
-        remainingAmount: nextRemaining
+        remainingAmount: fromCents(nextRemainingCents)
       })
     }
   }
 
   return {
-    roundAllocated: toMoney(roundStartAmount - roundRemainingAmount),
-    roundRemainingAmount,
+    roundAllocatedCents: roundStartCents - roundRemainingCents,
+    roundRemainingCents,
     nextCandidates
   }
 }
@@ -437,16 +616,16 @@ export const allocatePaymentAmountToCommitmentLines = (
     return []
   }
 
-  let remainingPaymentAmount = amountToAllocate
+  let remainingPaymentCents = toCents(amountToAllocate)
   const allocatedByLineId = new Map<string, PaymentLineAllocationResolved>()
 
-  while (remainingPaymentAmount > 0.009 && candidates.length > 0) {
-    const round = allocatePaymentRound(candidates, remainingPaymentAmount, allocatedByLineId)
-    if (round.roundAllocated <= 0) {
+  while (remainingPaymentCents > 0 && candidates.length > 0) {
+    const round = allocatePaymentRound(candidates, remainingPaymentCents, allocatedByLineId)
+    if (round.roundAllocatedCents <= 0) {
       break
     }
 
-    remainingPaymentAmount = round.roundRemainingAmount
+    remainingPaymentCents = round.roundRemainingCents
     candidates = round.nextCandidates
   }
 

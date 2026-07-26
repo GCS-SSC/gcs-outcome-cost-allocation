@@ -1,28 +1,41 @@
-import { z } from 'zod'
 import { defineGcsExtensionRouteHandler } from '@gcs-ssc/extensions/server'
 import { asOutcomeCostAllocationDb } from '../db'
 import { saveAllocations } from '../allocation-data'
+import { SaveAllocationsRequestSchema } from '../allocation-request-schema'
+import {
+  createOutcomeCostAllocationUserError,
+  throwOutcomeCostAllocationDatabaseError
+} from '../errors'
 
-const AllocationSchema = z.object({
-  commitmentType: z.enum(['commitment', 'paye', 'paye2', 'pyp']),
-  streamCommitmentId: z.string().min(1),
-  agreementBudgetFiscalYearId: z.string().min(1),
-  outcomeId: z.string().min(1),
-  allocationMethod: z.enum(['amount', 'percentage']),
-  allocationValue: z.coerce.number().nonnegative()
-})
+const parseSaveAllocationsBody = (value: unknown) => {
+  const result = SaveAllocationsRequestSchema.safeParse(value)
+  if (result.success) {
+    return result.data
+  }
 
-const SaveAllocationsSchema = z.object({
-  allocationVersionId: z.string().min(1),
-  allocations: z.array(AllocationSchema)
-})
+  const path = result.error.issues[0]?.path.map(segment => String(segment)).join('.')
+  throw createOutcomeCostAllocationUserError(
+    'GCS_OUTCOME_COST_ALLOCATION_INVALID',
+    path
+  )
+}
 
-export default defineGcsExtensionRouteHandler(async ({ params, db: rawDb, readBody }) => {
-  const body = SaveAllocationsSchema.parse(await readBody())
+export default defineGcsExtensionRouteHandler(async ({ params, entity, db: rawDb, readBody, authorizeFresh }) => {
+  const body = parseSaveAllocationsBody(await readBody())
   const agreementId = params.agreementId ?? ''
   const db = asOutcomeCostAllocationDb(rawDb)
+  if (!authorizeFresh) {
+    throw new Error('Fresh extension authorization is required for allocation writes.')
+  }
 
-  await saveAllocations(db, agreementId, body.allocationVersionId, body.allocations)
+  try {
+    await saveAllocations(db, agreementId, body.allocationVersionId, body.allocations, {
+      agencyId: String(entity?.agencyId ?? ''),
+      streamId: String(entity?.streamId ?? '')
+    }, async trx => await authorizeFresh(trx))
+  } catch (error: unknown) {
+    throwOutcomeCostAllocationDatabaseError(error)
+  }
 
   return {
     ok: true
