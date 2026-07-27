@@ -25,6 +25,7 @@ import {
   lockAgreementAllocationLifecycle,
   saveAllocations as saveAllocationsWithExpectedScope,
   saveAndCompleteAllocationVersion as saveAndCompleteAllocationVersionWithExpectedScope,
+  saveAndCompleteAllocationVersionWithCurrentConfiguration,
   validateAgreementAllocations,
   validateAllocationPaymentCoverage
 } from '../../server/allocation-data'
@@ -277,6 +278,12 @@ class ScriptedDb {
       return this.state.records.at(-1)?.joins.length === 0
         ? [{ egcs_fc_transferpaymentstream: 'stream-1' }]
         : [{ agency_id: 'agency-1', stream_id: 'stream-1' }]
+    }
+    if (operation === 'select' && table === 'Transfer_Payment_Stream' && queued.length === 0) {
+      return [{
+        stream_id: 'stream-1',
+        transfer_payment_profile_id: 'profile-1'
+      }]
     }
     if (operation === 'select' && queued.length === 0) {
       throw new Error(`Unexpected unscripted database query: ${key}`)
@@ -559,8 +566,8 @@ const enqueueCompletionBudgetCapture = (db: ScriptedDb) => {
     id: 'fiscal-year-1'
   }])
   db.enqueue('select', 'Transfer_Payment_Stream', [{
-    id: 'stream-1',
-    egcs_tp_transferpaymentprofile: 'transfer-payment-1'
+    stream_id: 'stream-1',
+    transfer_payment_profile_id: 'transfer-payment-1'
   }])
   db.enqueue('select', 'Transfer_Payment_Fiscal_Year_Budget', [{
     id: 'fiscal-budget-1'
@@ -658,7 +665,17 @@ const expectAgreementLifecycleLock = (db: ScriptedDb, agreementId = 'agreement-1
     'agency-1',
     'stream-1'
   )
-  expect(db.records[1]?.selections[0]?.[0]).toEqual([
+  expect(db.records[1]).toMatchObject({
+    operation: 'select',
+    table: 'Transfer_Payment_Stream',
+    scope: 'transaction',
+    lockedForUpdate: true,
+    wheres: expect.arrayContaining([
+      ['Transfer_Payment_Stream.id', '=', 'stream-1'],
+      ['Transfer_Payment_Stream._deleted', '=', false]
+    ])
+  })
+  expect(db.records[2]?.selections[0]?.[0]).toEqual([
     'egcs_fc_transferpaymentstream',
     expect.anything()
   ])
@@ -1016,7 +1033,7 @@ describe('outcome allocation version lifecycle', () => {
     })
     expect(db.transactionEntries).toBe(1)
     expectAgreementLifecycleLock(db)
-    expect(db.records[3]).toMatchObject({
+    expect(db.records[4]).toMatchObject({
       operation: 'select',
       table: 'extensions.gcs_outcome_cost_allocation_versions',
       wheres: [
@@ -1028,15 +1045,28 @@ describe('outcome allocation version lifecycle', () => {
     expect(db.records.some(record => record.operation === 'insert')).toBe(false)
   })
 
-  it('fresh-authorizes after the agreement lifecycle lock and before allocation writes', async () => {
+  it('locks auth state before lifecycle locks and authorizes the locked entity before allocation writes', async () => {
     const db = new ScriptedDb()
-    const revokedAuthorization = vi.fn(async () => {
-      expectAgreementLifecycleLock(db)
-      expect(db.records.some(record =>
-        record.table === 'extensions.gcs_outcome_cost_allocation_versions'
-      )).toBe(false)
-      throw new Error('fresh authorization revoked')
+    const phases: string[] = []
+    lockGcsExtensionLifecycleScopeMock.mockImplementationOnce(async () => {
+      phases.push('lifecycle-scope')
+      expect(db.records).toHaveLength(1)
+      expect(db.records[0]?.table).toBe('Funding_Case_Agreement_Profile')
     })
+    const revokedAuthorization = {
+      lockAuthState: vi.fn(async () => {
+        phases.push('auth-state')
+        expect(db.records).toEqual([])
+      }),
+      authorizeCurrentEntity: vi.fn(async () => {
+        phases.push('current-entity')
+        expectAgreementLifecycleLock(db)
+        expect(db.records.some(record =>
+          record.table === 'extensions.gcs_outcome_cost_allocation_versions'
+        )).toBe(false)
+        throw new Error('fresh authorization revoked')
+      })
+    }
 
     await expect(createDraftAllocationVersionWithExpectedScope(
       asAllocationDb(db),
@@ -1045,7 +1075,152 @@ describe('outcome allocation version lifecycle', () => {
       revokedAuthorization
     )).rejects.toThrow('fresh authorization revoked')
 
-    expect(revokedAuthorization).toHaveBeenCalledTimes(1)
+    expect(phases).toEqual(['auth-state', 'lifecycle-scope', 'current-entity'])
+    expect(revokedAuthorization.lockAuthState).toHaveBeenCalledTimes(1)
+    expect(revokedAuthorization.authorizeCurrentEntity).toHaveBeenCalledTimes(1)
+    expect(db.committedWrites).toEqual([])
+  })
+
+  it('rejects expected scope drift before acquiring the observed lifecycle scope', async () => {
+    const db = new ScriptedDb()
+    db.enqueue('select', 'Funding_Case_Agreement_Profile', [{
+      agency_id: 'agency-2',
+      stream_id: 'stream-2'
+    }])
+
+    await expect(createDraftAllocationVersionWithExpectedScope(
+      asAllocationDb(db),
+      'agreement-1',
+      expectedAgreementScope
+    )).rejects.toMatchObject({
+      code: 'GCS_OUTCOME_COST_ALLOCATION_DATABASE_CONFLICT'
+    })
+
+    expect(lockGcsExtensionLifecycleScopeMock).not.toHaveBeenCalled()
+    expect(db.records).toHaveLength(1)
+    expect(db.records[0]?.table).toBe('Funding_Case_Agreement_Profile')
+  })
+
+  it('locks auth state before save lifecycle locks and denies before saving allocations', async () => {
+    const db = new ScriptedDb()
+    const phases: string[] = []
+    lockGcsExtensionLifecycleScopeMock.mockImplementationOnce(async () => {
+      phases.push('lifecycle-scope')
+    })
+    const deniedAuthorization = {
+      lockAuthState: vi.fn(async () => {
+        phases.push('auth-state')
+        expect(db.records).toEqual([])
+      }),
+      authorizeCurrentEntity: vi.fn(async () => {
+        phases.push('current-entity')
+        expectAgreementLifecycleLock(db)
+        expect(db.records.some(record => record.operation !== 'select')).toBe(false)
+        expect(db.records.some(record =>
+          record.table === 'extensions.gcs_outcome_cost_allocation_versions'
+        )).toBe(false)
+        throw new Error('save authorization revoked')
+      })
+    }
+
+    await expect(saveAllocationsWithExpectedScope(
+      asAllocationDb(db),
+      'agreement-1',
+      'version-1',
+      [allocation],
+      expectedAgreementScope,
+      deniedAuthorization
+    )).rejects.toThrow('save authorization revoked')
+
+    expect(phases).toEqual(['auth-state', 'lifecycle-scope', 'current-entity'])
+    expect(db.committedWrites).toEqual([])
+  })
+
+  it('locks auth state before delete lifecycle locks and denies before soft deletion', async () => {
+    const db = new ScriptedDb()
+    const phases: string[] = []
+    lockGcsExtensionLifecycleScopeMock.mockImplementationOnce(async () => {
+      phases.push('lifecycle-scope')
+    })
+    const deniedAuthorization = {
+      lockAuthState: vi.fn(async () => {
+        phases.push('auth-state')
+        expect(db.records).toEqual([])
+      }),
+      authorizeCurrentEntity: vi.fn(async () => {
+        phases.push('current-entity')
+        expectAgreementLifecycleLock(db)
+        expect(db.records.some(record => record.operation !== 'select')).toBe(false)
+        expect(db.records.some(record =>
+          record.table === 'extensions.gcs_outcome_cost_allocation_versions'
+        )).toBe(false)
+        throw new Error('delete authorization revoked')
+      })
+    }
+
+    await expect(deleteDraftAllocationVersionWithExpectedScope(
+      asAllocationDb(db),
+      'agreement-1',
+      'version-1',
+      expectedAgreementScope,
+      deniedAuthorization
+    )).rejects.toThrow('delete authorization revoked')
+
+    expect(phases).toEqual(['auth-state', 'lifecycle-scope', 'current-entity'])
+    expect(db.committedWrites).toEqual([])
+  })
+
+  it('locks auth state before completion configuration and lifecycle locks and denies before replacement', async () => {
+    const db = new ScriptedDb()
+    const phases: string[] = []
+    db.enqueue('select', 'extensions.stream_configuration', [{ config: allocationConfig }])
+    lockGcsExtensionLifecycleScopeMock
+      .mockImplementationOnce(async () => {
+        phases.push('configuration-scope')
+      })
+      .mockImplementationOnce(async () => {
+        phases.push('lifecycle-scope')
+      })
+    const deniedAuthorization = {
+      lockAuthState: vi.fn(async () => {
+        phases.push('auth-state')
+        expect(db.records).toEqual([])
+        expect(lockGcsExtensionLifecycleScopeMock).not.toHaveBeenCalled()
+      }),
+      authorizeCurrentEntity: vi.fn(async () => {
+        phases.push('current-entity')
+        expect(db.records[0]?.table).toBe('extensions.stream_configuration')
+        expect(db.records[1]?.table).toBe('Funding_Case_Agreement_Profile')
+        expect(db.records[2]).toMatchObject({
+          table: 'Transfer_Payment_Stream',
+          lockedForUpdate: true
+        })
+        expect(db.records[3]?.table).toBe('Funding_Case_Agreement_Profile')
+        expect(db.records[4]?.table).toBe('Funding_Case_Agreement_Profile')
+        expect(db.records.some(record => record.operation !== 'select')).toBe(false)
+        expect(db.records.some(record =>
+          record.table === 'extensions.gcs_outcome_cost_allocation_versions'
+        )).toBe(false)
+        throw new Error('completion authorization revoked')
+      })
+    }
+
+    await expect(saveAndCompleteAllocationVersionWithCurrentConfiguration(
+      asAllocationDb(db),
+      'agreement-1',
+      'agency-1',
+      'stream-1',
+      'version-1',
+      [allocation],
+      deniedAuthorization
+    )).rejects.toThrow('completion authorization revoked')
+
+    expect(phases).toEqual([
+      'auth-state',
+      'configuration-scope',
+      'lifecycle-scope',
+      'current-entity'
+    ])
     expect(db.committedWrites).toEqual([])
   })
 
@@ -1723,6 +1898,7 @@ describe('outcome allocation version lifecycle', () => {
     })
 
     expect(db.transactionEntries).toBe(1)
+    expect(db.records.filter(record => record.table === 'Transfer_Payment_Stream')).toHaveLength(2)
     expect(db.records.filter(record =>
       record.table === 'Funding_Case_Agreement_Profile'
     )).toHaveLength(6)

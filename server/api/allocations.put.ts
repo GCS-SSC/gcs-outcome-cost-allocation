@@ -20,11 +20,11 @@ const parseSaveAllocationsBody = (value: unknown) => {
   )
 }
 
-export default defineGcsExtensionRouteHandler(async ({ params, entity, db: rawDb, readBody, authorizeFresh }) => {
+export default defineGcsExtensionRouteHandler(async ({ params, entity, db: rawDb, readBody, writeAuthorization }) => {
   const body = parseSaveAllocationsBody(await readBody())
   const agreementId = params.agreementId ?? ''
   const db = asOutcomeCostAllocationDb(rawDb)
-  if (!authorizeFresh) {
+  if (!writeAuthorization) {
     throw new Error('Fresh extension authorization is required for allocation writes.')
   }
 
@@ -32,7 +32,7 @@ export default defineGcsExtensionRouteHandler(async ({ params, entity, db: rawDb
     await saveAllocations(db, agreementId, body.allocationVersionId, body.allocations, {
       agencyId: String(entity?.agencyId ?? ''),
       streamId: String(entity?.streamId ?? '')
-    }, async trx => await authorizeFresh(trx))
+    }, writeAuthorization)
   } catch (error: unknown) {
     throwOutcomeCostAllocationDatabaseError(error)
   }

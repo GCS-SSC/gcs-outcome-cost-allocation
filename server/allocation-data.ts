@@ -1,5 +1,8 @@
 import { sql, type Transaction } from 'kysely'
-import { lockGcsExtensionLifecycleScope } from '@gcs-ssc/extensions/server'
+import {
+  lockGcsExtensionLifecycleScope,
+  type GcsExtensionWriteAuthorization
+} from '@gcs-ssc/extensions/server'
 import {
   type AllocationValidationIssue,
   type CostAllocationVersion,
@@ -86,6 +89,10 @@ export interface AgreementAllocationScope {
   streamId: string
 }
 
+interface LockedAgreementAllocationContext extends AgreementAllocationScope {
+  transferPaymentProfileId: string
+}
+
 const PAYMENT_COVERAGE_EXCLUDED_STATUSES = ['denied']
 
 const allocationCoordinateKey = (allocation: {
@@ -169,11 +176,11 @@ const getAllocationVersionForUpdate = async (
 /**
  * Serializes allocation lifecycle work for one agreement for the duration of the caller's transaction.
  */
-export const lockAgreementAllocationLifecycle = async (
+const lockAgreementAllocationLifecycleContext = async (
   db: OutcomeCostAllocationDb,
   agreementId: string,
   expectedScope?: AgreementAllocationScope
-): Promise<string> => {
+): Promise<LockedAgreementAllocationContext> => {
   const scope = await db
     .selectFrom('Funding_Case_Agreement_Profile')
     .innerJoin(
@@ -203,11 +210,49 @@ export const lockAgreementAllocationLifecycle = async (
     )
   }
 
+  const observedScope: AgreementAllocationScope = {
+    agencyId: String(scope.agency_id),
+    streamId: String(scope.stream_id)
+  }
+  if (expectedScope !== undefined
+    && (observedScope.agencyId !== expectedScope.agencyId
+      || observedScope.streamId !== expectedScope.streamId)) {
+    throw createOutcomeCostAllocationUserError(
+      'GCS_OUTCOME_COST_ALLOCATION_DATABASE_CONFLICT',
+      'agreementId'
+    )
+  }
+
   await lockOutcomeCostAllocationScope(
     db,
-    String(scope.agency_id),
-    String(scope.stream_id)
+    observedScope.agencyId,
+    observedScope.streamId
   )
+
+  const lockedStream = await db
+    .selectFrom('Transfer_Payment_Stream')
+    .innerJoin(
+      'Transfer_Payment_Profile',
+      'Transfer_Payment_Profile.id',
+      'Transfer_Payment_Stream.egcs_tp_transferpaymentprofile'
+    )
+    .where('Transfer_Payment_Stream.id', '=', observedScope.streamId)
+    .where('Transfer_Payment_Stream._deleted', '=', false)
+    .where('Transfer_Payment_Profile.egcs_tp_agency', '=', observedScope.agencyId)
+    .where('Transfer_Payment_Profile._deleted', '=', false)
+    .select([
+      'Transfer_Payment_Stream.id as stream_id',
+      'Transfer_Payment_Stream.egcs_tp_transferpaymentprofile as transfer_payment_profile_id'
+    ])
+    .forUpdate('Transfer_Payment_Stream')
+    .executeTakeFirst()
+
+  if (!lockedStream) {
+    throw createOutcomeCostAllocationUserError(
+      'GCS_OUTCOME_COST_ALLOCATION_DATABASE_CONFLICT',
+      'agreementId'
+    )
+  }
 
   const agreement = await db
     .selectFrom('Funding_Case_Agreement_Profile')
@@ -257,12 +302,13 @@ export const lockAgreementAllocationLifecycle = async (
     )
   }
 
-  const currentScope: AgreementAllocationScope = {
+  const currentScope: LockedAgreementAllocationContext = {
     agencyId: String(lockedScope.agency_id),
-    streamId: String(lockedScope.stream_id)
+    streamId: String(lockedScope.stream_id),
+    transferPaymentProfileId: String(lockedStream.transfer_payment_profile_id)
   }
-  const observedScopeChanged = currentScope.agencyId !== String(scope.agency_id)
-    || currentScope.streamId !== String(scope.stream_id)
+  const observedScopeChanged = currentScope.agencyId !== observedScope.agencyId
+    || currentScope.streamId !== observedScope.streamId
   const expectedScopeChanged = expectedScope !== undefined
     && (currentScope.agencyId !== expectedScope.agencyId
       || currentScope.streamId !== expectedScope.streamId)
@@ -273,8 +319,19 @@ export const lockAgreementAllocationLifecycle = async (
     )
   }
 
-  return currentScope.streamId
+  return currentScope
 }
+
+/**
+ * Serializes allocation lifecycle work and returns the current locked stream id.
+ */
+export const lockAgreementAllocationLifecycle = async (
+  db: OutcomeCostAllocationDb,
+  agreementId: string,
+  expectedScope?: AgreementAllocationScope
+): Promise<string> => (
+  await lockAgreementAllocationLifecycleContext(db, agreementId, expectedScope)
+).streamId
 
 /** Takes the OCA agreement advisory lock without acquiring the host agreement row. */
 export const lockAgreementAllocationAdvisory = async (
@@ -499,7 +556,7 @@ export const getAgreementBudgetYears = async (
 const lockAndGetAgreementBudgetYears = async (
   db: OutcomeCostAllocationDb,
   agreementId: string,
-  streamId: string
+  lockedContext: LockedAgreementAllocationContext
 ): Promise<AgreementBudgetYear[]> => {
   const budgetYears = await db
     .selectFrom('Funding_Case_Agreement_Budget_Fiscal_Year')
@@ -539,18 +596,10 @@ const lockAndGetAgreementBudgetYears = async (
       .execute()
   }
 
-  const stream = await db
-    .selectFrom('Transfer_Payment_Stream')
-    .where('id', '=', streamId)
-    .where('_deleted', '=', false)
-    .select(['id', 'egcs_tp_transferpaymentprofile'])
-    .forUpdate()
-    .executeTakeFirst()
-
-  if (stream && fiscalYearIds.length > 0) {
+  if (fiscalYearIds.length > 0) {
     const fiscalBudgets = await db
       .selectFrom('Transfer_Payment_Fiscal_Year_Budget')
-      .where('egcs_tp_transferpaymentprofile', '=', String(stream.egcs_tp_transferpaymentprofile))
+      .where('egcs_tp_transferpaymentprofile', '=', lockedContext.transferPaymentProfileId)
       .where('egcs_tp_fiscalyear', 'in', fiscalYearIds)
       .where('_deleted', '=', false)
       .select('id')
@@ -562,7 +611,7 @@ const lockAndGetAgreementBudgetYears = async (
     if (fiscalBudgetIds.length > 0) {
       await db
         .selectFrom('Transfer_Payment_Stream_Budget')
-        .where('egcs_tp_transferpaymentstream', '=', streamId)
+        .where('egcs_tp_transferpaymentstream', '=', lockedContext.streamId)
         .where('egcs_tp_transferpaymentbudget', 'in', fiscalBudgetIds)
         .where('_deleted', '=', false)
         .select('id')
@@ -572,7 +621,7 @@ const lockAndGetAgreementBudgetYears = async (
     }
   }
 
-  return await getAgreementBudgetYears(db, agreementId, streamId)
+  return await getAgreementBudgetYears(db, agreementId, lockedContext.streamId)
 }
 
 /**
@@ -608,10 +657,11 @@ export const createDraftAllocationVersion = async (
   db: OutcomeCostAllocationDb,
   agreementId: string,
   expectedScope: AgreementAllocationScope,
-  authorizeWrite?: (db: OutcomeCostAllocationDb) => Promise<void>
+  writeAuthorization?: GcsExtensionWriteAuthorization
 ): Promise<CostAllocationVersion> => await db.transaction().execute(async trx => {
+  await writeAuthorization?.lockAuthState(trx)
   await lockAgreementAllocationLifecycle(trx, agreementId, expectedScope)
-  await authorizeWrite?.(trx)
+  await writeAuthorization?.authorizeCurrentEntity(trx)
 
   const existingDraft = await trx
     .selectFrom('extensions.gcs_outcome_cost_allocation_versions')
@@ -679,10 +729,11 @@ export const deleteDraftAllocationVersion = async (
   agreementId: string,
   allocationVersionId: string,
   expectedScope: AgreementAllocationScope,
-  authorizeWrite?: (db: OutcomeCostAllocationDb) => Promise<void>
+  writeAuthorization?: GcsExtensionWriteAuthorization
 ) => await db.transaction().execute(async trx => {
+  await writeAuthorization?.lockAuthState(trx)
   await lockAgreementAllocationLifecycle(trx, agreementId, expectedScope)
-  await authorizeWrite?.(trx)
+  await writeAuthorization?.authorizeCurrentEntity(trx)
 
   const version = await getAllocationVersionForUpdate(
     trx,
@@ -871,17 +922,12 @@ export const getStreamCommitmentLines = async (
 /**
  * Replaces a draft version's allocations by soft-deleting old rows and inserting the new set transactionally.
  */
-const saveAllocationsInTransaction = async (
+const replaceDraftAllocations = async (
   db: OutcomeCostAllocationDb,
   agreementId: string,
   allocationVersionId: string,
-  allocations: OutcomeAllocationInput[],
-  expectedScope: AgreementAllocationScope,
-  authorizeWrite?: (db: OutcomeCostAllocationDb) => Promise<void>
+  allocations: OutcomeAllocationInput[]
 ) => {
-  await lockAgreementAllocationLifecycle(db, agreementId, expectedScope)
-  await authorizeWrite?.(db)
-
   const version = await getAllocationVersionForUpdate(
     db,
     agreementId,
@@ -919,6 +965,20 @@ const saveAllocationsInTransaction = async (
   }
 }
 
+const saveAllocationsInTransaction = async (
+  db: OutcomeCostAllocationDb,
+  agreementId: string,
+  allocationVersionId: string,
+  allocations: OutcomeAllocationInput[],
+  expectedScope: AgreementAllocationScope,
+  writeAuthorization?: GcsExtensionWriteAuthorization
+) => {
+  await writeAuthorization?.lockAuthState(db)
+  await lockAgreementAllocationLifecycle(db, agreementId, expectedScope)
+  await writeAuthorization?.authorizeCurrentEntity(db)
+  await replaceDraftAllocations(db, agreementId, allocationVersionId, allocations)
+}
+
 /**
  * Replaces one draft's saved allocations transactionally.
  */
@@ -928,7 +988,7 @@ export const saveAllocations = async (
   allocationVersionId: string,
   allocations: OutcomeAllocationInput[],
   expectedScope: AgreementAllocationScope,
-  authorizeWrite?: (db: OutcomeCostAllocationDb) => Promise<void>
+  writeAuthorization?: GcsExtensionWriteAuthorization
 ) => await db.transaction().execute(async trx =>
   await saveAllocationsInTransaction(
     trx,
@@ -936,7 +996,7 @@ export const saveAllocations = async (
     allocationVersionId,
     allocations,
     expectedScope,
-    authorizeWrite
+    writeAuthorization
   )
 )
 
@@ -1385,7 +1445,13 @@ export const completeAllocationVersionInTransaction = async (
   config: unknown,
   expectedScope: AgreementAllocationScope
 ): Promise<CostAllocationVersion> => {
-  await lockAgreementAllocationLifecycle(db, agreementId, expectedScope)
+  const lockedContext = await lockAgreementAllocationLifecycleContext(db, agreementId, expectedScope)
+  if (lockedContext.streamId !== streamId) {
+    throw createOutcomeCostAllocationUserError(
+      'GCS_OUTCOME_COST_ALLOCATION_DATABASE_CONFLICT',
+      'agreementId'
+    )
+  }
 
   const versionRow = await getAllocationVersionForUpdate(
     db,
@@ -1397,12 +1463,12 @@ export const completeAllocationVersionInTransaction = async (
   }
 
   const allocations = await getSavedAllocations(db, agreementId, allocationVersionId)
-  const budgetYears = await lockAndGetAgreementBudgetYears(db, agreementId, streamId)
+  const budgetYears = await lockAndGetAgreementBudgetYears(db, agreementId, lockedContext)
   await lockAgreementOutcomeReferences(db, agreementId)
   const issues = await validateAgreementAllocations(
     db,
     agreementId,
-    streamId,
+    lockedContext.streamId,
     allocations,
     budgetYears
   )
@@ -1413,7 +1479,7 @@ export const completeAllocationVersionInTransaction = async (
   const mappingIssues = await validateAllocationCommitmentMappings(
     db,
     agreementId,
-    streamId,
+    lockedContext.streamId,
     config,
     allocations,
     budgetYears
@@ -1434,7 +1500,7 @@ export const completeAllocationVersionInTransaction = async (
   const coverageIssues = await validateAllocationPaymentCoverage(
     db,
     agreementId,
-    streamId,
+    lockedContext.streamId,
     config,
     allocations,
     undefined,
@@ -1545,8 +1611,9 @@ export const saveAndCompleteAllocationVersionWithCurrentConfiguration = async (
   streamId: string,
   allocationVersionId: string,
   allocations: OutcomeAllocationInput[],
-  authorizeWrite?: (db: OutcomeCostAllocationDb) => Promise<void>
+  writeAuthorization?: GcsExtensionWriteAuthorization
 ): Promise<CostAllocationVersion> => await db.transaction().execute(async trx => {
+  await writeAuthorization?.lockAuthState(trx)
   const config = await lockAndGetOutcomeCostAllocationConfig(
     trx,
     agencyId,
@@ -1560,14 +1627,9 @@ export const saveAndCompleteAllocationVersionWithCurrentConfiguration = async (
   }
 
   const expectedScope = { agencyId, streamId }
-  await saveAllocationsInTransaction(
-    trx,
-    agreementId,
-    allocationVersionId,
-    allocations,
-    expectedScope,
-    authorizeWrite
-  )
+  await lockAgreementAllocationLifecycle(trx, agreementId, expectedScope)
+  await writeAuthorization?.authorizeCurrentEntity(trx)
+  await replaceDraftAllocations(trx, agreementId, allocationVersionId, allocations)
   return await completeAllocationVersionInTransaction(
     trx,
     agreementId,

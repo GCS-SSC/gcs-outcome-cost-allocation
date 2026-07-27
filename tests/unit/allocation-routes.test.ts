@@ -60,7 +60,10 @@ const createRouteContext = (
     allocationVersionId: 'version-1'
   },
   config: {},
-  authorizeFresh: vi.fn(async () => undefined),
+  writeAuthorization: {
+    lockAuthState: vi.fn(async () => undefined),
+    authorizeCurrentEntity: vi.fn(async () => undefined)
+  },
   entity: {
     agencyId: 'agency-1',
     streamId: 'stream-1'
@@ -108,7 +111,10 @@ describe('outcome allocation routes', () => {
       { wrapped: { raw: true } },
       'agreement-1',
       { agencyId: 'agency-1', streamId: 'stream-1' },
-      expect.any(Function)
+      expect.objectContaining({
+        lockAuthState: expect.any(Function),
+        authorizeCurrentEntity: expect.any(Function)
+      })
     )
   })
 
@@ -123,7 +129,10 @@ describe('outcome allocation routes', () => {
       '',
       '',
       { agencyId: 'agency-1', streamId: 'stream-1' },
-      expect.any(Function)
+      expect.objectContaining({
+        lockAuthState: expect.any(Function),
+        authorizeCurrentEntity: expect.any(Function)
+      })
     )
   })
 
@@ -203,7 +212,10 @@ describe('outcome allocation routes', () => {
         allocationValue: 25.5
       }],
       { agencyId: 'agency-1', streamId: 'stream-1' },
-      expect.any(Function)
+      expect.objectContaining({
+        lockAuthState: expect.any(Function),
+        authorizeCurrentEntity: expect.any(Function)
+      })
     )
   })
 

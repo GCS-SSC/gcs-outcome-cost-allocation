@@ -17,6 +17,7 @@ import {
   getGeneratedPaymentLines,
   getSavedAllocations,
   lockAndGetOutcomeCostAllocationConfig,
+  lockAgreementAllocationAdvisory,
   lockAgreementAllocationLifecycle,
   lockOutcomeCostAllocationScope,
   saveAllocations as saveAllocationsWithExpectedScope,
@@ -1906,6 +1907,113 @@ describe('outcome allocation PostgreSQL concurrency', () => {
     }
   })
 
+  it('rolls back the entire completion write when locked authorization is revoked while waiting', async () => {
+    const { allocation, version } = await seedDraftScenario(observerDb, 30, 130, 130, 130)
+    await sql`
+      DROP TABLE IF EXISTS extensions.gcs_outcome_cost_allocation_test_authorization;
+      CREATE TABLE extensions.gcs_outcome_cost_allocation_test_authorization (
+        id bigint PRIMARY KEY,
+        allowed boolean NOT NULL
+      );
+      INSERT INTO extensions.gcs_outcome_cost_allocation_test_authorization (id, allowed)
+      VALUES (1, true)
+    `.execute(observerDb)
+    const originalAllocation = await observerDb
+      .selectFrom('extensions.gcs_outcome_cost_allocation_allocations')
+      .where('allocation_version_id', '=', version.id)
+      .where('_deleted', '=', false)
+      .select(['id', 'allocation_value'])
+      .executeTakeFirstOrThrow()
+    const authorizationRevoked = createLatch()
+    const releaseAuthorization = createLatch()
+    const holderPid = await sql<{ pid: number }>`SELECT pg_backend_pid()::integer AS pid`
+      .execute(holderDb)
+      .then(result => result.rows[0]?.pid)
+    const completionPid = await sql<{ pid: number }>`SELECT pg_backend_pid()::integer AS pid`
+      .execute(waiterDb)
+      .then(result => result.rows[0]?.pid)
+    const revocation = holderDb.transaction().execute(async trx => {
+      await sql`
+        UPDATE extensions.gcs_outcome_cost_allocation_test_authorization
+        SET allowed = false
+        WHERE id = 1
+      `.execute(trx)
+      authorizationRevoked.release()
+      await releaseAuthorization.promise
+    })
+    let allowed = true
+    let completing: ReturnType<typeof saveAndCompleteAllocationVersionWithCurrentConfiguration> | undefined
+
+    try {
+      await waitForLatchOrTask(authorizationRevoked.promise, revocation, 'Authorization revocation')
+      completing = saveAndCompleteAllocationVersionWithCurrentConfiguration(
+        waiterDb,
+        '30',
+        '2000',
+        '2',
+        version.id,
+        [allocation],
+        {
+          lockAuthState: async trx => {
+            const result = await sql<{ allowed: boolean }>`
+              SELECT allowed
+              FROM extensions.gcs_outcome_cost_allocation_test_authorization
+              WHERE id = 1
+              FOR UPDATE
+            `.execute(trx as OutcomeCostAllocationDb)
+            allowed = result.rows[0]?.allowed === true
+          },
+          authorizeCurrentEntity: async () => {
+            if (!allowed) {
+              throw new Error('completion authorization revoked')
+            }
+          }
+        }
+      )
+      await vi.waitFor(async () => {
+        const result = await sql<{ blocker_pids: number[] }>`
+          SELECT pg_blocking_pids(${completionPid})::integer[] AS blocker_pids
+        `.execute(observerDb)
+        expect(result.rows[0]?.blocker_pids).toContain(holderPid)
+      })
+
+      releaseAuthorization.release()
+      await expect(revocation).resolves.toBeUndefined()
+      await expect(completing).rejects.toThrow('completion authorization revoked')
+
+      const persistedVersion = await observerDb
+        .selectFrom('extensions.gcs_outcome_cost_allocation_versions')
+        .where('id', '=', version.id)
+        .select(['status', 'completed_at'])
+        .executeTakeFirstOrThrow()
+      const persistedAllocations = await observerDb
+        .selectFrom('extensions.gcs_outcome_cost_allocation_allocations')
+        .where('allocation_version_id', '=', version.id)
+        .where('_deleted', '=', false)
+        .select(['id', 'allocation_value'])
+        .execute()
+      const generatedCommitmentLines = await observerDb
+        .selectFrom('extensions.gcs_outcome_cost_allocation_commitment_lines')
+        .where('allocation_version_id', '=', version.id)
+        .where('_deleted', '=', false)
+        .select('id')
+        .execute()
+
+      expect(persistedVersion).toEqual({
+        status: 'draft',
+        completed_at: null
+      })
+      expect(persistedAllocations).toEqual([originalAllocation])
+      expect(generatedCommitmentLines).toEqual([])
+    } finally {
+      releaseAuthorization.release()
+      await Promise.allSettled([revocation, ...(completing ? [completing] : [])])
+      await sql`
+        DROP TABLE IF EXISTS extensions.gcs_outcome_cost_allocation_test_authorization
+      `.execute(observerDb)
+    }
+  })
+
   it('observes a payment status committed while completion waits for coverage locks', async () => {
     const { version } = await seedDraftScenario(observerDb, 21, 121, 121, 121)
     await sql`
@@ -3461,6 +3569,124 @@ describe('outcome allocation PostgreSQL concurrency', () => {
       .select('_deleted')
       .executeTakeFirstOrThrow()
     expect(agreement._deleted).toBe(false)
+  })
+
+  it('locks the current stream before the agreement advisory lock during allocation completion', async () => {
+    await sql`
+      INSERT INTO "Funding_Case_Agreement_Profile" (id, egcs_fc_transferpaymentstream)
+      VALUES (99, 2);
+      INSERT INTO "Funding_Case_Agreement_Activity" (id, egcs_fc_fundingagreement)
+      VALUES (299, 99);
+      INSERT INTO "Transfer_Payment_Outcome" (
+        id,
+        egcs_tp_transferpaymentprofile,
+        egcs_tp_name_en,
+        egcs_tp_name_fr
+      ) VALUES (299, 200, 'Lock order outcome', 'Resultat ordre verrouillage');
+      INSERT INTO "Funding_Case_Agreement_Outcome_Activity" (egcs_fc_activity, egcs_fc_outcomes)
+      VALUES (299, 299);
+      INSERT INTO "Funding_Case_Agreement_Budget_Fiscal_Year" (
+        id,
+        egcs_fc_fundingagreement,
+        egcs_fc_fiscalyear
+      ) VALUES (299, 99, 50);
+      INSERT INTO "Funding_Case_Agreement_Budget_Line_Item" (
+        id,
+        egcs_fc_fundingagreementbudgetfiscalyear,
+        egcs_fc_programfunding
+      ) VALUES (299, 299, 100);
+      INSERT INTO "Transfer_Payment_Stream_Commitment" (
+        id,
+        egcs_tp_streambudget,
+        egcs_tp_transferpaymentstream,
+        egcs_tp_gl,
+        egcs_tp_gldescription
+      ) VALUES (299, 70, 2, 5299, 'Lock order')
+    `.execute(observerDb)
+    const version = await createDraftAllocationVersion(observerDb, '99')
+    const config = {
+      enabledCommitmentTypes: ['commitment'],
+      mappings: [{
+        commitmentType: 'commitment',
+        outcomeId: '299',
+        streamBudgetId: '70',
+        streamCommitmentId: '299'
+      }]
+    }
+    await observerDb
+      .updateTable('extensions.stream_configuration')
+      .set({ config })
+      .where('stream_id', '=', '2')
+      .where('extension_key', '=', 'gcs-outcome-cost-allocation')
+      .execute()
+    await saveAllocations(observerDb, '99', version.id, [{
+      commitmentType: 'commitment',
+      streamCommitmentId: '299',
+      agreementBudgetFiscalYearId: '299',
+      outcomeId: '299',
+      allocationMethod: 'amount',
+      allocationValue: 100
+    }])
+    const streamLocked = createLatch()
+    const continueHostWrite = createLatch()
+    const holderPid = await sql<{ pid: number }>`SELECT pg_backend_pid()::integer AS pid`
+      .execute(holderDb)
+      .then(result => result.rows[0]?.pid)
+    const completionPid = await sql<{ pid: number }>`SELECT pg_backend_pid()::integer AS pid`
+      .execute(waiterDb)
+      .then(result => result.rows[0]?.pid)
+    const hostLikeWrite = holderDb.transaction().execute(async trx => {
+      await trx
+        .selectFrom('Transfer_Payment_Stream')
+        .where('id', '=', '2')
+        .where('_deleted', '=', false)
+        .select('id')
+        .forUpdate()
+        .executeTakeFirstOrThrow()
+      streamLocked.release()
+      await continueHostWrite.promise
+      await lockAgreementAllocationAdvisory(trx, '99')
+      await trx
+        .selectFrom('Funding_Case_Agreement_Profile')
+        .where('id', '=', '99')
+        .where('_deleted', '=', false)
+        .select('id')
+        .forUpdate()
+        .executeTakeFirstOrThrow()
+      await trx
+        .updateTable('Funding_Case_Agreement_Profile')
+        .set({ egcs_fc_transferpaymentstream: '2' })
+        .where('id', '=', '99')
+        .execute()
+    })
+    let completing: ReturnType<typeof completeAllocationVersion> | undefined
+
+    try {
+      await waitForLatchOrTask(streamLocked.promise, hostLikeWrite, 'Host-like stream write')
+      completing = completeAllocationVersion(
+        waiterDb,
+        '99',
+        '2',
+        version.id,
+        config
+      )
+      await vi.waitFor(async () => {
+        const result = await sql<{ blocker_pids: number[] }>`
+          SELECT pg_blocking_pids(${completionPid})::integer[] AS blocker_pids
+        `.execute(observerDb)
+        expect(result.rows[0]?.blocker_pids).toContain(holderPid)
+      })
+
+      continueHostWrite.release()
+      await expect(hostLikeWrite).resolves.toBeUndefined()
+      await expect(completing).resolves.toMatchObject({
+        agreementId: '99',
+        status: 'active'
+      })
+    } finally {
+      continueHostWrite.release()
+      await Promise.allSettled([hostLikeWrite, ...(completing ? [completing] : [])])
+    }
   })
 
   it('refuses rollback after completed allocation history exists', async () => {

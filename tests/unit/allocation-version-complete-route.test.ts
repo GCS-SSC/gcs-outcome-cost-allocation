@@ -51,7 +51,10 @@ const buildContext = (
   config: {
     enabledCommitmentTypes: ['commitment']
   },
-  authorizeFresh: vi.fn(async () => undefined),
+  writeAuthorization: {
+    lockAuthState: vi.fn(async () => undefined),
+    authorizeCurrentEntity: vi.fn(async () => undefined)
+  },
   entity: {
     agencyId: 'agency-1',
     streamId: 'stream-1'
@@ -94,7 +97,10 @@ describe('outcome allocation version completion route', () => {
       'stream-1',
       'allocation-version-1',
       allocations,
-      expect.any(Function)
+      expect.objectContaining({
+        lockAuthState: expect.any(Function),
+        authorizeCurrentEntity: expect.any(Function)
+      })
     )
   })
 
@@ -237,7 +243,10 @@ describe('outcome allocation version completion route', () => {
       [expect.objectContaining({
         allocationValue: 900719925474.0991
       })],
-      expect.any(Function)
+      expect.objectContaining({
+        lockAuthState: expect.any(Function),
+        authorizeCurrentEntity: expect.any(Function)
+      })
     )
   })
 

@@ -56,8 +56,8 @@ export default defineGcsExtensionRouteHandler(async context => {
     db
   } = resolveCompletionContext(context)
   const body = parseCompleteAllocationBody(await context.readBody())
-  const authorizeFresh = context.authorizeFresh
-  if (!authorizeFresh) {
+  const writeAuthorization = context.writeAuthorization
+  if (!writeAuthorization) {
     throw new Error('Fresh extension authorization is required for allocation writes.')
   }
 
@@ -69,7 +69,7 @@ export default defineGcsExtensionRouteHandler(async context => {
       streamId,
       allocationVersionId,
       body.allocations,
-      async trx => await authorizeFresh(trx)
+      writeAuthorization
     )
     return {
       ok: true,
