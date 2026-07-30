@@ -96,6 +96,19 @@ describe('outcome allocation routes', () => {
     routeMocks.saveAllocations.mockResolvedValue(undefined)
   })
 
+  it('requires Agreement delete access for the allocation-version DELETE handler', async () => {
+    const extension = (await import('../../extension.config')).default
+    const deleteHandler = extension.serverHandlers?.find(handler =>
+      handler.method === 'delete'
+      && handler.route.endsWith('/allocation-versions/[allocationVersionId]')
+    )
+
+    expect(deleteHandler?.rbac).toEqual(expect.objectContaining({
+      subject: 'agreement',
+      action: 'delete'
+    }))
+  })
+
   it('creates a draft for the requested agreement', async () => {
     const route = (await import('../../server/api/allocation-versions.post')).default
 

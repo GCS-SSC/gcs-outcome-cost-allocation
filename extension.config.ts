@@ -134,7 +134,7 @@ export default defineGcsExtension({
       path: './server/api/allocation-version.delete.ts',
       rbac: {
         subject: 'agreement',
-        action: 'update',
+        action: 'delete',
         entity: {
           target: 'agreement',
           param: 'agreementId'
