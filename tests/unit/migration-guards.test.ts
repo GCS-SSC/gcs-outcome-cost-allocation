@@ -94,9 +94,26 @@ describe('outcome allocation generated-record database guards', () => {
       )
     `.execute(db)
     await sql`
+      CREATE TABLE "Funding_Case_Agreement_Budget_Version" (
+        id bigint PRIMARY KEY,
+        egcs_fc_fundingagreement bigint NOT NULL,
+        egcs_fc_iscurrent boolean NOT NULL DEFAULT false,
+        _deleted boolean NOT NULL DEFAULT false
+      )
+    `.execute(db)
+    await sql`
+      CREATE TABLE "Funding_Case_Agreement_Budget_Fiscal_Year_Identity" (
+        id bigint PRIMARY KEY,
+        egcs_fc_fundingagreement bigint NOT NULL,
+        _deleted boolean NOT NULL DEFAULT false
+      )
+    `.execute(db)
+    await sql`
       CREATE TABLE "Funding_Case_Agreement_Budget_Fiscal_Year" (
         id bigint PRIMARY KEY,
         egcs_fc_fundingagreement bigint NOT NULL,
+        egcs_fc_budgetversion bigint NOT NULL,
+        egcs_fc_budgetfiscalyearidentity bigint NOT NULL,
         egcs_fc_fiscalyear bigint NOT NULL,
         _deleted boolean NOT NULL DEFAULT false
       )
@@ -165,6 +182,8 @@ describe('outcome allocation generated-record database guards', () => {
     `.execute(db)
     managedGuardDefinition = guardFunction.rows[0]?.definition ?? ''
     await sql`INSERT INTO "Funding_Case_Agreement_Profile" (id, egcs_fc_transferpaymentstream) VALUES (1, 200)`.execute(db)
+    await sql`INSERT INTO "Funding_Case_Agreement_Budget_Version" (id, egcs_fc_fundingagreement, egcs_fc_iscurrent) VALUES (2, 1, true)`.execute(db)
+    await sql`INSERT INTO "Funding_Case_Agreement_Budget_Fiscal_Year_Identity" (id, egcs_fc_fundingagreement) VALUES (20, 1)`.execute(db)
     await sql`INSERT INTO "Transfer_Payment_Stream" (id, egcs_tp_transferpaymentprofile) VALUES (200, 300)`.execute(db)
     await sql`
       INSERT INTO "Agency_Fiscal_Year" (
@@ -199,8 +218,10 @@ describe('outcome allocation generated-record database guards', () => {
       INSERT INTO "Funding_Case_Agreement_Budget_Fiscal_Year" (
         id,
         egcs_fc_fundingagreement,
+        egcs_fc_budgetversion,
+        egcs_fc_budgetfiscalyearidentity,
         egcs_fc_fiscalyear
-      ) VALUES (20, 1, 400)
+      ) VALUES (21, 1, 2, 20, 400)
     `.execute(db)
     await sql`
       INSERT INTO "Transfer_Payment_Outcome" (

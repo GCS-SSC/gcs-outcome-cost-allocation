@@ -189,6 +189,8 @@ const seedDraftScenario = async (
   budgetYearId: number,
   budgetLineId: number
 ) => {
+  const budgetVersionId = budgetYearId + 10_000
+  const budgetYearIdentityId = budgetYearId + 20_000
   await sql`
     INSERT INTO "Funding_Case_Agreement_Profile" (
       id,
@@ -208,11 +210,26 @@ const seedDraftScenario = async (
     ) VALUES (${activityId}, 30)
   `.execute(db)
   await sql`
+    INSERT INTO "Funding_Case_Agreement_Budget_Version" (
+      id,
+      egcs_fc_fundingagreement,
+      egcs_fc_iscurrent
+    ) VALUES (${budgetVersionId}, ${agreementId}, true)
+  `.execute(db)
+  await sql`
+    INSERT INTO "Funding_Case_Agreement_Budget_Fiscal_Year_Identity" (
+      id,
+      egcs_fc_fundingagreement
+    ) VALUES (${budgetYearIdentityId}, ${agreementId})
+  `.execute(db)
+  await sql`
     INSERT INTO "Funding_Case_Agreement_Budget_Fiscal_Year" (
       id,
       egcs_fc_fundingagreement,
-      egcs_fc_fiscalyear
-    ) VALUES (${budgetYearId}, ${agreementId}, 50)
+      egcs_fc_fiscalyear,
+      egcs_fc_budgetversion,
+      egcs_fc_budgetfiscalyearidentity
+    ) VALUES (${budgetYearId}, ${agreementId}, 50, ${budgetVersionId}, ${budgetYearIdentityId})
   `.execute(db)
   await sql`
     INSERT INTO "Funding_Case_Agreement_Budget_Line_Item" (
@@ -226,7 +243,7 @@ const seedDraftScenario = async (
   const allocation = {
     commitmentType: 'commitment' as const,
     streamCommitmentId: '10',
-    agreementBudgetFiscalYearId: String(budgetYearId),
+    agreementBudgetFiscalYearId: String(budgetYearIdentityId),
     outcomeId: '30',
     allocationMethod: 'amount' as const,
     allocationValue: 100
@@ -410,6 +427,8 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         "Transfer_Payment_Fiscal_Year_Budget",
         "Funding_Case_Agreement_Budget_Line_Item",
         "Funding_Case_Agreement_Budget_Fiscal_Year",
+        "Funding_Case_Agreement_Budget_Fiscal_Year_Identity",
+        "Funding_Case_Agreement_Budget_Version",
         "Agency_Fiscal_Year",
         "Funding_Case_Agreement_Outcome_Activity",
         "Funding_Case_Agreement_Activity",
@@ -466,10 +485,27 @@ describe('outcome allocation PostgreSQL concurrency', () => {
       )
     `.execute(observerDb)
     await sql`
+      CREATE TABLE "Funding_Case_Agreement_Budget_Version" (
+        id bigint PRIMARY KEY,
+        egcs_fc_fundingagreement bigint NOT NULL,
+        egcs_fc_iscurrent boolean NOT NULL DEFAULT false,
+        _deleted boolean NOT NULL DEFAULT false
+      )
+    `.execute(observerDb)
+    await sql`
+      CREATE TABLE "Funding_Case_Agreement_Budget_Fiscal_Year_Identity" (
+        id bigint PRIMARY KEY,
+        egcs_fc_fundingagreement bigint NOT NULL,
+        _deleted boolean NOT NULL DEFAULT false
+      )
+    `.execute(observerDb)
+    await sql`
       CREATE TABLE "Funding_Case_Agreement_Budget_Fiscal_Year" (
         id bigint PRIMARY KEY,
         egcs_fc_fundingagreement bigint NOT NULL,
         egcs_fc_fiscalyear bigint NOT NULL,
+        egcs_fc_budgetversion bigint,
+        egcs_fc_budgetfiscalyearidentity bigint,
         _deleted boolean NOT NULL DEFAULT false
       )
     `.execute(observerDb)
@@ -660,16 +696,41 @@ describe('outcome allocation PostgreSQL concurrency', () => {
       ) VALUES (50, '2026-2027', 2026)
     `.execute(observerDb)
     await sql`
+      INSERT INTO "Funding_Case_Agreement_Budget_Version" (
+        id,
+        egcs_fc_fundingagreement,
+        egcs_fc_iscurrent
+      ) VALUES
+        (120, 2, true),
+        (122, 3, true),
+        (124, 4, true),
+        (126, 5, true),
+        (128, 6, true)
+    `.execute(observerDb)
+    await sql`
+      INSERT INTO "Funding_Case_Agreement_Budget_Fiscal_Year_Identity" (
+        id,
+        egcs_fc_fundingagreement
+      ) VALUES
+        (20, 2),
+        (22, 3),
+        (24, 4),
+        (26, 5),
+        (28, 6)
+    `.execute(observerDb)
+    await sql`
       INSERT INTO "Funding_Case_Agreement_Budget_Fiscal_Year" (
         id,
         egcs_fc_fundingagreement,
-        egcs_fc_fiscalyear
+        egcs_fc_fiscalyear,
+        egcs_fc_budgetversion,
+        egcs_fc_budgetfiscalyearidentity
       ) VALUES
-        (20, 2, 50),
-        (22, 3, 50),
-        (24, 4, 50),
-        (26, 5, 50),
-        (28, 6, 50)
+        (20, 2, 50, 120, 20),
+        (22, 3, 50, 122, 22),
+        (24, 4, 50, 124, 24),
+        (26, 5, 50, 126, 26),
+        (28, 6, 50, 128, 28)
     `.execute(observerDb)
     await sql`
       INSERT INTO "Funding_Case_Agreement_Budget_Line_Item" (
