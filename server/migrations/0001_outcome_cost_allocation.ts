@@ -44,7 +44,7 @@ export default defineGcsExtensionMigration({
       .addColumn('agreement_id', 'bigint', col => col.notNull().references('Funding_Case_Agreement_Profile.id').onDelete('restrict'))
       .addColumn('commitment_type', 'varchar(20)', col => col.notNull())
       .addColumn('stream_commitment_id', 'bigint', col => col.notNull().references('Transfer_Payment_Stream_Commitment.id').onDelete('restrict'))
-      .addColumn('agreement_budget_fiscal_year_id', 'bigint', col => col.notNull().references('Funding_Case_Agreement_Budget_Fiscal_Year_Identity.id').onDelete('restrict'))
+      .addColumn('agreement_budget_fiscal_year_id', sql`uuid`, col => col.notNull().references('Funding_Case_Agreement_Budget_Fiscal_Year.id').onDelete('restrict'))
       .addColumn('outcome_id', 'bigint', col => col.notNull().references('Transfer_Payment_Outcome.id').onDelete('restrict'))
       .addColumn('allocation_method', 'varchar(20)', col => col.notNull())
       .addColumn('allocation_value', 'numeric(19, 4)', col => col.notNull())
@@ -85,7 +85,7 @@ export default defineGcsExtensionMigration({
       .addColumn('generated_commitment_id', 'bigint', col => col.notNull().references('Funding_Case_Agreement_Commitment.id').onDelete('restrict'))
       .addColumn('commitment_line_id', 'bigint', col => col.notNull().references('Funding_Case_Agreement_Commitment_Line.id').onDelete('restrict'))
       .addColumn('agreement_id', 'bigint', col => col.notNull().references('Funding_Case_Agreement_Profile.id').onDelete('restrict'))
-      .addColumn('agreement_budget_fiscal_year_id', 'bigint', col => col.notNull().references('Funding_Case_Agreement_Budget_Fiscal_Year_Identity.id').onDelete('restrict'))
+      .addColumn('agreement_budget_fiscal_year_id', sql`uuid`, col => col.notNull().references('Funding_Case_Agreement_Budget_Fiscal_Year.id').onDelete('restrict'))
       .addColumn('outcome_id', 'bigint', col => col.notNull().references('Transfer_Payment_Outcome.id').onDelete('restrict'))
       .addColumn('stream_commitment_id', 'bigint', col => col.notNull().references('Transfer_Payment_Stream_Commitment.id').onDelete('restrict'))
       .addColumn('generated_amount', 'numeric(19, 2)', col => col.notNull())
@@ -376,7 +376,7 @@ export default defineGcsExtensionMigration({
             ON stream.id = agreement.egcs_fc_transferpaymentstream
             AND stream._deleted = false
           INNER JOIN "Funding_Case_Agreement_Budget_Fiscal_Year" agreement_year
-            ON agreement_year.egcs_fc_budgetfiscalyearidentity = NEW.agreement_budget_fiscal_year_id
+            ON COALESCE(agreement_year.egcs_fc_originalbudgetfiscalyear, agreement_year.id) = NEW.agreement_budget_fiscal_year_id
             AND agreement_year.egcs_fc_fundingagreement = agreement.id
             AND agreement_year._deleted = false
           INNER JOIN "Funding_Case_Agreement_Budget_Version" agreement_budget_version
@@ -895,7 +895,7 @@ export default defineGcsExtensionMigration({
             AND version.status = 'active'
             AND version._deleted = false
           INNER JOIN "Funding_Case_Agreement_Budget_Fiscal_Year" agreement_budget
-            ON agreement_budget.egcs_fc_budgetfiscalyearidentity = allocation.agreement_budget_fiscal_year_id
+            ON COALESCE(agreement_budget.egcs_fc_originalbudgetfiscalyear, agreement_budget.id) = allocation.agreement_budget_fiscal_year_id
             AND agreement_budget._deleted = false
           INNER JOIN "Funding_Case_Agreement_Budget_Version" agreement_budget_version
             ON agreement_budget_version.id = agreement_budget.egcs_fc_budgetversion
