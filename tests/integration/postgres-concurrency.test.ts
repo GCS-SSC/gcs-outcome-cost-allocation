@@ -176,6 +176,9 @@ const managedMutation = async <T>(
   return await mutate(trx)
 })
 
+const budgetYearStableId = (budgetYearId: number): string =>
+  `00000000-0000-4000-8000-${String(budgetYearId).padStart(12, '0')}`
+
 const applyMigrationsUp = async (db: Kysely<OutcomeCostAllocationHostDatabase>) => {
   await migration0001.up(db)
   await migration0002.up(db)
@@ -189,6 +192,8 @@ const seedDraftScenario = async (
   budgetYearId: number,
   budgetLineId: number
 ) => {
+  const budgetVersionId = budgetYearId + 10_000
+  const stableBudgetYearId = budgetYearStableId(budgetYearId)
   await sql`
     INSERT INTO "Funding_Case_Agreement_Profile" (
       id,
@@ -208,25 +213,33 @@ const seedDraftScenario = async (
     ) VALUES (${activityId}, 30)
   `.execute(db)
   await sql`
+    INSERT INTO "Funding_Case_Agreement_Budget_Version" (
+      id,
+      egcs_fc_fundingagreement,
+      egcs_fc_iscurrent
+    ) VALUES (${budgetVersionId}, ${agreementId}, true)
+  `.execute(db)
+  await sql`
     INSERT INTO "Funding_Case_Agreement_Budget_Fiscal_Year" (
       id,
       egcs_fc_fundingagreement,
-      egcs_fc_fiscalyear
-    ) VALUES (${budgetYearId}, ${agreementId}, 50)
+      egcs_fc_fiscalyear,
+      egcs_fc_budgetversion
+    ) VALUES (${stableBudgetYearId}, ${agreementId}, 50, ${budgetVersionId})
   `.execute(db)
   await sql`
     INSERT INTO "Funding_Case_Agreement_Budget_Line_Item" (
       id,
       egcs_fc_fundingagreementbudgetfiscalyear,
       egcs_fc_programfunding
-    ) VALUES (${budgetLineId}, ${budgetYearId}, 100)
+    ) VALUES (${budgetLineId}, ${stableBudgetYearId}, 100)
   `.execute(db)
 
   const version = await createDraftAllocationVersion(db, String(agreementId))
   const allocation = {
     commitmentType: 'commitment' as const,
     streamCommitmentId: '10',
-    agreementBudgetFiscalYearId: String(budgetYearId),
+    agreementBudgetFiscalYearId: stableBudgetYearId,
     outcomeId: '30',
     allocationMethod: 'amount' as const,
     allocationValue: 100
@@ -410,6 +423,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         "Transfer_Payment_Fiscal_Year_Budget",
         "Funding_Case_Agreement_Budget_Line_Item",
         "Funding_Case_Agreement_Budget_Fiscal_Year",
+        "Funding_Case_Agreement_Budget_Version",
         "Agency_Fiscal_Year",
         "Funding_Case_Agreement_Outcome_Activity",
         "Funding_Case_Agreement_Activity",
@@ -466,17 +480,27 @@ describe('outcome allocation PostgreSQL concurrency', () => {
       )
     `.execute(observerDb)
     await sql`
-      CREATE TABLE "Funding_Case_Agreement_Budget_Fiscal_Year" (
+      CREATE TABLE "Funding_Case_Agreement_Budget_Version" (
         id bigint PRIMARY KEY,
         egcs_fc_fundingagreement bigint NOT NULL,
+        egcs_fc_iscurrent boolean NOT NULL DEFAULT false,
+        _deleted boolean NOT NULL DEFAULT false
+      )
+    `.execute(observerDb)
+    await sql`
+      CREATE TABLE "Funding_Case_Agreement_Budget_Fiscal_Year" (
+        id uuid PRIMARY KEY,
+        egcs_fc_fundingagreement bigint NOT NULL,
         egcs_fc_fiscalyear bigint NOT NULL,
+        egcs_fc_budgetversion bigint,
+        egcs_fc_originalbudgetfiscalyear uuid,
         _deleted boolean NOT NULL DEFAULT false
       )
     `.execute(observerDb)
     await sql`
       CREATE TABLE "Funding_Case_Agreement_Budget_Line_Item" (
         id bigint PRIMARY KEY,
-        egcs_fc_fundingagreementbudgetfiscalyear bigint NOT NULL,
+        egcs_fc_fundingagreementbudgetfiscalyear uuid NOT NULL,
         egcs_fc_programfunding numeric(19, 2) NOT NULL,
         _deleted boolean NOT NULL DEFAULT false
       )
@@ -538,7 +562,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
       CREATE TABLE "Funding_Case_Agreement_Payment" (
         id bigint PRIMARY KEY,
         egcs_fc_fundingagreementcommitment bigint NOT NULL,
-        egcs_fc_fiscalyear bigint NOT NULL,
+        egcs_fc_fiscalyear uuid NOT NULL,
         egcs_fc_paymentamount numeric(19, 2) NOT NULL,
         egcs_fc_status text NOT NULL,
         _deleted boolean NOT NULL DEFAULT false
@@ -660,16 +684,29 @@ describe('outcome allocation PostgreSQL concurrency', () => {
       ) VALUES (50, '2026-2027', 2026)
     `.execute(observerDb)
     await sql`
+      INSERT INTO "Funding_Case_Agreement_Budget_Version" (
+        id,
+        egcs_fc_fundingagreement,
+        egcs_fc_iscurrent
+      ) VALUES
+        (120, 2, true),
+        (122, 3, true),
+        (124, 4, true),
+        (126, 5, true),
+        (128, 6, true)
+    `.execute(observerDb)
+    await sql`
       INSERT INTO "Funding_Case_Agreement_Budget_Fiscal_Year" (
         id,
         egcs_fc_fundingagreement,
-        egcs_fc_fiscalyear
+        egcs_fc_fiscalyear,
+        egcs_fc_budgetversion
       ) VALUES
-        (20, 2, 50),
-        (22, 3, 50),
-        (24, 4, 50),
-        (26, 5, 50),
-        (28, 6, 50)
+        ('00000000-0000-4000-8000-000000000020', 2, 50, 120),
+        ('00000000-0000-4000-8000-000000000022', 3, 50, 122),
+        ('00000000-0000-4000-8000-000000000024', 4, 50, 124),
+        ('00000000-0000-4000-8000-000000000026', 5, 50, 126),
+        ('00000000-0000-4000-8000-000000000028', 6, 50, 128)
     `.execute(observerDb)
     await sql`
       INSERT INTO "Funding_Case_Agreement_Budget_Line_Item" (
@@ -677,11 +714,11 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         egcs_fc_fundingagreementbudgetfiscalyear,
         egcs_fc_programfunding
       ) VALUES
-        (21, 20, 100),
-        (23, 22, 100),
-        (25, 24, 100),
-        (27, 26, 100),
-        (29, 28, 100)
+        (21, '00000000-0000-4000-8000-000000000020', 100),
+        (23, '00000000-0000-4000-8000-000000000022', 100),
+        (25, '00000000-0000-4000-8000-000000000024', 100),
+        (27, '00000000-0000-4000-8000-000000000026', 100),
+        (29, '00000000-0000-4000-8000-000000000028', 100)
     `.execute(observerDb)
     await sql`
       INSERT INTO "Transfer_Payment_Stream" (
@@ -926,7 +963,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
           agreement_id: '4',
           commitment_type: 'commitment',
           stream_commitment_id: '12',
-          agreement_budget_fiscal_year_id: '24',
+          agreement_budget_fiscal_year_id: budgetYearStableId(24),
           outcome_id: '32',
           allocation_method: 'amount',
           allocation_value: 100
@@ -1136,7 +1173,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         agreement_id: '5',
         commitment_type: 'commitment',
         stream_commitment_id: '13',
-        agreement_budget_fiscal_year_id: '26',
+        agreement_budget_fiscal_year_id: budgetYearStableId(26),
         outcome_id: '33',
         allocation_method: 'amount',
         allocation_value: 100
@@ -1162,7 +1199,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         agreement_id: '5',
         commitment_type: 'paye',
         stream_commitment_id: '13',
-        agreement_budget_fiscal_year_id: '26',
+        agreement_budget_fiscal_year_id: budgetYearStableId(26),
         outcome_id: '33',
         allocation_method: 'amount',
         allocation_value: 0
@@ -1189,7 +1226,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         agreement_id: '6',
         commitment_type: 'paye',
         stream_commitment_id: '13',
-        agreement_budget_fiscal_year_id: '26',
+        agreement_budget_fiscal_year_id: budgetYearStableId(26),
         outcome_id: '33',
         allocation_method: 'amount',
         allocation_value: 0
@@ -1205,7 +1242,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         agreement_id: '5',
         commitment_type: 'paye',
         stream_commitment_id: '14',
-        agreement_budget_fiscal_year_id: '28',
+        agreement_budget_fiscal_year_id: budgetYearStableId(28),
         outcome_id: '34',
         allocation_method: 'amount',
         allocation_value: 0
@@ -1381,7 +1418,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         generated_commitment_id: '101',
         commitment_line_id: '101',
         agreement_id: '5',
-        agreement_budget_fiscal_year_id: '26',
+        agreement_budget_fiscal_year_id: budgetYearStableId(26),
         outcome_id: '33',
         stream_commitment_id: '13',
         generated_amount: 100,
@@ -1398,7 +1435,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         generated_commitment_id: '102',
         commitment_line_id: '102',
         agreement_id: '5',
-        agreement_budget_fiscal_year_id: '26',
+        agreement_budget_fiscal_year_id: budgetYearStableId(26),
         outcome_id: '33',
         stream_commitment_id: '13',
         generated_amount: 99,
@@ -1415,7 +1452,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         generated_commitment_id: '100',
         commitment_line_id: '100',
         agreement_id: '5',
-        agreement_budget_fiscal_year_id: '26',
+        agreement_budget_fiscal_year_id: budgetYearStableId(26),
         outcome_id: '33',
         stream_commitment_id: '13',
         generated_amount: 100,
@@ -1433,7 +1470,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         generated_commitment_id: '100',
         commitment_line_id: '100',
         agreement_id: '5',
-        agreement_budget_fiscal_year_id: '26',
+        agreement_budget_fiscal_year_id: budgetYearStableId(26),
         outcome_id: '33',
         stream_commitment_id: '13',
         generated_amount: 100,
@@ -2163,7 +2200,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
           agreement_id: '12',
           commitment_type: 'commitment',
           stream_commitment_id: '20',
-          agreement_budget_fiscal_year_id: '35',
+          agreement_budget_fiscal_year_id: budgetYearStableId(35),
           outcome_id: '38',
           allocation_method: 'amount',
           allocation_value: 100,
@@ -2188,7 +2225,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
           generated_commitment_id: '190',
           commitment_line_id: '190',
           agreement_id: '12',
-          agreement_budget_fiscal_year_id: '35',
+          agreement_budget_fiscal_year_id: budgetYearStableId(35),
           outcome_id: '38',
           stream_commitment_id: '20',
           generated_amount: 100
@@ -2834,7 +2871,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
           agreement_id: '2',
           commitment_type: 'commitment',
           stream_commitment_id: '10',
-          agreement_budget_fiscal_year_id: '20',
+          agreement_budget_fiscal_year_id: budgetYearStableId(20),
           outcome_id: '30',
           allocation_method: 'amount',
           allocation_value: 100
@@ -3058,7 +3095,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
           agreement_id: '10',
           commitment_type: 'commitment',
           stream_commitment_id: '17',
-          agreement_budget_fiscal_year_id: '32',
+          agreement_budget_fiscal_year_id: budgetYearStableId(32),
           outcome_id: '36',
           allocation_method: 'amount',
           allocation_value: 100
@@ -3259,7 +3296,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
             agreement_id: '11',
             commitment_type: 'commitment',
             stream_commitment_id: '18',
-            agreement_budget_fiscal_year_id: '34',
+            agreement_budget_fiscal_year_id: budgetYearStableId(34),
             outcome_id: '37',
             allocation_method: 'amount',
             allocation_value: 50,
@@ -3276,7 +3313,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
             agreement_id: '11',
             commitment_type: 'commitment',
             stream_commitment_id: '19',
-            agreement_budget_fiscal_year_id: '34',
+            agreement_budget_fiscal_year_id: budgetYearStableId(34),
             outcome_id: '37',
             allocation_method: 'amount',
             allocation_value: 50,
@@ -3307,7 +3344,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
             generated_commitment_id: '180',
             commitment_line_id: '181',
             agreement_id: '11',
-            agreement_budget_fiscal_year_id: '34',
+            agreement_budget_fiscal_year_id: budgetYearStableId(34),
             outcome_id: '37',
             stream_commitment_id: '19',
             generated_amount: 50
@@ -3317,7 +3354,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
             generated_commitment_id: '180',
             commitment_line_id: '179',
             agreement_id: '11',
-            agreement_budget_fiscal_year_id: '34',
+            agreement_budget_fiscal_year_id: budgetYearStableId(34),
             outcome_id: '37',
             stream_commitment_id: '18',
             generated_amount: 50
@@ -3364,7 +3401,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
           agreement_id: '3',
           commitment_type: 'commitment',
           stream_commitment_id: '11',
-          agreement_budget_fiscal_year_id: '22',
+          agreement_budget_fiscal_year_id: budgetYearStableId(22),
           outcome_id: '31',
           allocation_method: 'amount',
           allocation_value: 100
