@@ -778,6 +778,26 @@ describe('outcome allocation data reads', () => {
     }))).toEqual([
       {
         kind: 'inner',
+        table: 'Funding_Case_Agreement_Budget_Version',
+        predicates: [
+          [
+            'onRef',
+            'Funding_Case_Agreement_Budget_Version.id',
+            '=',
+            'Funding_Case_Agreement_Budget_Fiscal_Year.egcs_fc_budgetversion'
+          ],
+          [
+            'onRef',
+            'Funding_Case_Agreement_Budget_Version.egcs_fc_fundingagreement',
+            '=',
+            'Funding_Case_Agreement_Budget_Fiscal_Year.egcs_fc_fundingagreement'
+          ],
+          ['on', 'Funding_Case_Agreement_Budget_Version.egcs_fc_iscurrent', '=', true],
+          ['on', 'Funding_Case_Agreement_Budget_Version._deleted', '=', false]
+        ]
+      },
+      {
+        kind: 'inner',
         table: 'Agency_Fiscal_Year',
         predicates: [[
           'onRef',

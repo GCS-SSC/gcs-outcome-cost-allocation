@@ -939,7 +939,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
   it('uses only the requested stream profile fiscal-year budget when profiles share a fiscal year', async () => {
     const budgetYears = await getAgreementBudgetYears(observerDb, '4', '4')
     expect(budgetYears).toEqual([{
-      id: '24',
+      id: budgetYearStableId(24),
       fiscal_year_id: '50',
       fiscal_year_display: '2026-2027',
       program_funding: 100,
@@ -1039,11 +1039,46 @@ describe('outcome allocation PostgreSQL concurrency', () => {
     `.execute(observerDb)
   })
 
+  it('loads only current budget-version funding under the stable original fiscal-year identity', async () => {
+    const historicalYearId = budgetYearStableId(9801)
+    const currentCopyId = budgetYearStableId(9802)
+    await sql`INSERT INTO "Funding_Case_Agreement_Profile" (id, egcs_fc_transferpaymentstream) VALUES (98, 4)`.execute(observerDb)
+    await sql`
+      INSERT INTO "Funding_Case_Agreement_Budget_Version" (
+        id, egcs_fc_fundingagreement, egcs_fc_iscurrent
+      ) VALUES (9801, 98, false), (9802, 98, true)
+    `.execute(observerDb)
+    await sql`
+      INSERT INTO "Funding_Case_Agreement_Budget_Fiscal_Year" (
+        id,
+        egcs_fc_fundingagreement,
+        egcs_fc_fiscalyear,
+        egcs_fc_budgetversion,
+        egcs_fc_originalbudgetfiscalyear
+      ) VALUES
+        (${historicalYearId}, 98, 50, 9801, NULL),
+        (${currentCopyId}, 98, 50, 9802, ${historicalYearId})
+    `.execute(observerDb)
+    await sql`
+      INSERT INTO "Funding_Case_Agreement_Budget_Line_Item" (
+        id, egcs_fc_fundingagreementbudgetfiscalyear, egcs_fc_programfunding
+      ) VALUES (9801, ${historicalYearId}, 25), (9802, ${currentCopyId}, 175)
+    `.execute(observerDb)
+
+    await expect(getAgreementBudgetYears(observerDb, '98', '4')).resolves.toEqual([{
+      id: historicalYearId,
+      fiscal_year_id: '50',
+      fiscal_year_display: '2026-2027',
+      program_funding: 175,
+      stream_budget_id: '72'
+    }])
+  })
+
   it('locks one funding view through validation and snapshot under READ COMMITTED', async () => {
     const allocation = {
       commitmentType: 'commitment' as const,
       streamCommitmentId: '12',
-      agreementBudgetFiscalYearId: '24',
+      agreementBudgetFiscalYearId: budgetYearStableId(24),
       outcomeId: '32',
       allocationMethod: 'percentage' as const,
       allocationValue: 100
@@ -1097,7 +1132,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
           id,
           egcs_fc_fundingagreementbudgetfiscalyear,
           egcs_fc_programfunding
-        ) VALUES (250, 24, 50)
+        ) VALUES (250, '00000000-0000-4000-8000-000000000024', 50)
       `.execute(inserterDb)
 
       await vi.waitFor(async () => {
@@ -2078,7 +2113,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         egcs_fc_fiscalyear,
         egcs_fc_paymentamount,
         egcs_fc_status
-      ) VALUES (210, 210, 121, 100.02, 'denied')
+      ) VALUES (210, 210, ${budgetYearStableId(121)}, 100.02, 'denied')
     `.execute(observerDb)
     await sql`
       INSERT INTO "Funding_Case_Agreement_Payment_Line" (
@@ -2150,11 +2185,17 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         egcs_tp_name_en,
         egcs_tp_name_fr
       ) VALUES (38, 1200, 'Outcome 8', 'Resultat 8');
+      INSERT INTO "Funding_Case_Agreement_Budget_Version" (
+        id,
+        egcs_fc_fundingagreement,
+        egcs_fc_iscurrent
+      ) VALUES (12035, 12, true);
       INSERT INTO "Funding_Case_Agreement_Budget_Fiscal_Year" (
         id,
         egcs_fc_fundingagreement,
-        egcs_fc_fiscalyear
-      ) VALUES (35, 12, 50);
+        egcs_fc_fiscalyear,
+        egcs_fc_budgetversion
+      ) VALUES ('00000000-0000-4000-8000-000000000035', 12, 50, 12035);
       INSERT INTO "Transfer_Payment_Fiscal_Year_Budget" (
         id,
         egcs_tp_transferpaymentprofile,
@@ -2236,7 +2277,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         .values({
           id: '190',
           egcs_fc_fundingagreementcommitment: '190',
-          egcs_fc_fiscalyear: '35',
+          egcs_fc_fiscalyear: budgetYearStableId(35),
           egcs_fc_paymentamount: 60,
           egcs_fc_status: 'draft'
         })
@@ -2267,7 +2308,15 @@ describe('outcome allocation PostgreSQL concurrency', () => {
       .then(result => result.rows[0]?.pid)
     const creatingPayment = holderDb.transaction().execute(async trx => {
       await lockAgreementAllocationLifecycle(trx, '12')
-      const generated = await getGeneratedPaymentLines(trx, '12', '12', '190', '35', 50, {})
+      const generated = await getGeneratedPaymentLines(
+        trx,
+        '12',
+        '12',
+        '190',
+        budgetYearStableId(35),
+        50,
+        {}
+      )
       if (generated.status !== 'handled' || generated.issues.length > 0 || generated.lines.length !== 1) {
         throw new Error('Expected one valid generated payment line before resurrection.')
       }
@@ -2276,7 +2325,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         .values({
           id: '191',
           egcs_fc_fundingagreementcommitment: '190',
-          egcs_fc_fiscalyear: '35',
+          egcs_fc_fiscalyear: budgetYearStableId(35),
           egcs_fc_paymentamount: 50,
           egcs_fc_status: 'draft'
         })
@@ -2421,7 +2470,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         egcs_fc_fiscalyear,
         egcs_fc_paymentamount,
         egcs_fc_status
-      ) VALUES (240, 240, 124, 100, 'approved')
+      ) VALUES (240, 240, ${budgetYearStableId(124)}, 100, 'approved')
     `.execute(observerDb)
     await sql`
       INSERT INTO "Funding_Case_Agreement_Payment_Line" (
@@ -2749,7 +2798,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
     const allocation = {
       commitmentType: 'commitment' as const,
       streamCommitmentId: '12',
-      agreementBudgetFiscalYearId: '24',
+      agreementBudgetFiscalYearId: budgetYearStableId(24),
       outcomeId: '32',
       allocationMethod: 'amount' as const,
       allocationValue: 100
@@ -3049,16 +3098,22 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         egcs_fc_activity,
         egcs_fc_outcomes
       ) VALUES (46, 36);
+      INSERT INTO "Funding_Case_Agreement_Budget_Version" (
+        id,
+        egcs_fc_fundingagreement,
+        egcs_fc_iscurrent
+      ) VALUES (10032, 10, true);
       INSERT INTO "Funding_Case_Agreement_Budget_Fiscal_Year" (
         id,
         egcs_fc_fundingagreement,
-        egcs_fc_fiscalyear
-      ) VALUES (32, 10, 50);
+        egcs_fc_fiscalyear,
+        egcs_fc_budgetversion
+      ) VALUES ('00000000-0000-4000-8000-000000000032', 10, 50, 10032);
       INSERT INTO "Funding_Case_Agreement_Budget_Line_Item" (
         id,
         egcs_fc_fundingagreementbudgetfiscalyear,
         egcs_fc_programfunding
-      ) VALUES (33, 32, 100);
+      ) VALUES (33, '00000000-0000-4000-8000-000000000032', 100);
       INSERT INTO "Transfer_Payment_Fiscal_Year_Budget" (
         id,
         egcs_tp_transferpaymentprofile,
@@ -3238,11 +3293,17 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         egcs_tp_name_en,
         egcs_tp_name_fr
       ) VALUES (37, 900, 'Outcome 7', 'Resultat 7');
+      INSERT INTO "Funding_Case_Agreement_Budget_Version" (
+        id,
+        egcs_fc_fundingagreement,
+        egcs_fc_iscurrent
+      ) VALUES (11034, 11, true);
       INSERT INTO "Funding_Case_Agreement_Budget_Fiscal_Year" (
         id,
         egcs_fc_fundingagreement,
-        egcs_fc_fiscalyear
-      ) VALUES (34, 11, 50);
+        egcs_fc_fiscalyear,
+        egcs_fc_budgetversion
+      ) VALUES ('00000000-0000-4000-8000-000000000034', 11, 50, 11034);
       INSERT INTO "Transfer_Payment_Fiscal_Year_Budget" (
         id,
         egcs_tp_transferpaymentprofile,
@@ -3369,7 +3430,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         '11',
         '11',
         '180',
-        '34',
+        budgetYearStableId(34),
         0.01,
         {}
       )
@@ -3622,16 +3683,22 @@ describe('outcome allocation PostgreSQL concurrency', () => {
       ) VALUES (299, 200, 'Lock order outcome', 'Resultat ordre verrouillage');
       INSERT INTO "Funding_Case_Agreement_Outcome_Activity" (egcs_fc_activity, egcs_fc_outcomes)
       VALUES (299, 299);
+      INSERT INTO "Funding_Case_Agreement_Budget_Version" (
+        id,
+        egcs_fc_fundingagreement,
+        egcs_fc_iscurrent
+      ) VALUES (990299, 99, true);
       INSERT INTO "Funding_Case_Agreement_Budget_Fiscal_Year" (
         id,
         egcs_fc_fundingagreement,
-        egcs_fc_fiscalyear
-      ) VALUES (299, 99, 50);
+        egcs_fc_fiscalyear,
+        egcs_fc_budgetversion
+      ) VALUES ('00000000-0000-4000-8000-000000000299', 99, 50, 990299);
       INSERT INTO "Funding_Case_Agreement_Budget_Line_Item" (
         id,
         egcs_fc_fundingagreementbudgetfiscalyear,
         egcs_fc_programfunding
-      ) VALUES (299, 299, 100);
+      ) VALUES (299, '00000000-0000-4000-8000-000000000299', 100);
       INSERT INTO "Transfer_Payment_Stream_Commitment" (
         id,
         egcs_tp_streambudget,
@@ -3659,7 +3726,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
     await saveAllocations(observerDb, '99', version.id, [{
       commitmentType: 'commitment',
       streamCommitmentId: '299',
-      agreementBudgetFiscalYearId: '299',
+      agreementBudgetFiscalYearId: budgetYearStableId(299),
       outcomeId: '299',
       allocationMethod: 'amount',
       allocationValue: 100

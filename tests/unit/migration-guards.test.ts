@@ -351,6 +351,50 @@ describe('outcome allocation generated-record database guards', () => {
     expect(managedGuardDefinition).toContain('current_setting')
   })
 
+  it('rejects negative allocations and percentages above one hundred at the database boundary', async () => {
+    const insertInvalidAllocation = async (
+      versionId: number,
+      method: 'amount' | 'percentage',
+      value: number
+    ) => await managedMutation(db, '1', async trx => {
+      await sql`
+        INSERT INTO extensions.gcs_outcome_cost_allocation_versions (
+          id, agreement_id, version_number, status
+        ) VALUES (${versionId}, 1, ${versionId}, 'draft')
+      `.execute(trx)
+      await sql`
+        INSERT INTO extensions.gcs_outcome_cost_allocation_allocations (
+          allocation_version_id,
+          agreement_id,
+          commitment_type,
+          stream_commitment_id,
+          agreement_budget_fiscal_year_id,
+          outcome_id,
+          allocation_method,
+          allocation_value
+        ) VALUES (
+          ${versionId},
+          1,
+          'commitment',
+          10,
+          '00000000-0000-4000-8000-000000000020',
+          30,
+          ${method},
+          ${value}
+        )
+      `.execute(trx)
+    })
+
+    await expectGuardConstraint(
+      insertInvalidAllocation(98, 'amount', -0.0001),
+      'gcs_outcome_cost_allocation_value_range'
+    )
+    await expectGuardConstraint(
+      insertInvalidAllocation(97, 'percentage', 100.0001),
+      'gcs_outcome_cost_allocation_value_range'
+    )
+  })
+
   it('requires the managed agreement lock for valid PGlite mutations', async () => {
     await expectGuardConstraint(
       sql`

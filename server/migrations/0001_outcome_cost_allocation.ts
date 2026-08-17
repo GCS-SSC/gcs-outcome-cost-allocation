@@ -17,6 +17,10 @@ export default defineGcsExtensionMigration({
         'gcs_outcome_cost_allocation_version_status',
         sql`status IN ('draft', 'active', 'inactive')`
       )
+      .addCheckConstraint(
+        'gcs_outcome_cost_allocation_version_funding_nonnegative',
+        sql`funding_basis_amount IS NULL OR funding_basis_amount >= 0`
+      )
       .execute()
 
     await sql`
@@ -64,6 +68,15 @@ export default defineGcsExtensionMigration({
         'gcs_outcome_cost_allocation_method',
         sql`allocation_method IN ('amount', 'percentage')`
       )
+      .addCheckConstraint(
+        'gcs_outcome_cost_allocation_value_range',
+        sql`allocation_value >= 0 AND (allocation_method <> 'percentage' OR allocation_value <= 100)`
+      )
+      .addCheckConstraint(
+        'gcs_outcome_cost_allocation_economics_nonnegative',
+        sql`(resolved_amount IS NULL OR resolved_amount >= 0)
+          AND (funding_basis_amount IS NULL OR funding_basis_amount >= 0)`
+      )
       .execute()
 
     await sql`
@@ -90,6 +103,10 @@ export default defineGcsExtensionMigration({
       .addColumn('stream_commitment_id', 'bigint', col => col.notNull().references('Transfer_Payment_Stream_Commitment.id').onDelete('restrict'))
       .addColumn('generated_amount', 'numeric(19, 2)', col => col.notNull())
       .addColumn('_deleted', 'boolean', col => col.defaultTo(false).notNull())
+      .addCheckConstraint(
+        'gcs_outcome_cost_allocation_generated_amount_nonnegative',
+        sql`generated_amount >= 0`
+      )
       .execute()
 
     await sql`

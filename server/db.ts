@@ -29,6 +29,14 @@ export interface OutcomeCostAllocationHostDatabase {
     id: string
     egcs_fc_fundingagreement: string
     egcs_fc_fiscalyear: string
+    egcs_fc_budgetversion: string
+    egcs_fc_originalbudgetfiscalyear: string | null
+    _deleted: boolean
+  }
+  'Funding_Case_Agreement_Budget_Version': {
+    id: string
+    egcs_fc_fundingagreement: string
+    egcs_fc_iscurrent: boolean
     _deleted: boolean
   }
   'Funding_Case_Agreement_Budget_Line_Item': {
