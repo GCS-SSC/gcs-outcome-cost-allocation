@@ -291,7 +291,8 @@ export const validateAllocationTotals = (
   activeOutcomeIds: Set<string>
 ): AllocationValidationIssue[] => {
   const issues: AllocationValidationIssue[] = validateAllocationReferences(allocations, yearTotals, activeOutcomeIds)
-  const allocatedTotalCents = resolveAllocationAmounts(allocations, yearTotals)
+  const resolvedAllocations = resolveAllocationAmounts(allocations, yearTotals)
+  const allocatedTotalCents = resolvedAllocations
     .reduce((sum, allocation) => sum + BigInt(toCents(allocation.amount)), BIGINT_ZERO)
   const agreementBudgetTotalCents = yearTotals
     .reduce((sum, total) => sum + BigInt(toCents(total.programFunding)), BIGINT_ZERO)
@@ -306,6 +307,18 @@ export const validateAllocationTotals = (
       message: 'apiErrors.extensions.outcome_cost_allocation.total_invalid'
     })
   }
+  for (const total of yearTotals) {
+    const allocatedYearCents = resolvedAllocations
+      .filter(allocation => allocation.agreementBudgetFiscalYearId === total.agreementBudgetFiscalYearId)
+      .reduce((sum, allocation) => sum + BigInt(toCents(allocation.amount)), BIGINT_ZERO)
+    if (allocatedYearCents !== BigInt(toCents(total.programFunding))) {
+      issues.push({
+        code: 'GCS_OUTCOME_COST_ALLOCATION_YEAR_TOTAL_INVALID',
+        path: `allocations.${total.agreementBudgetFiscalYearId}`,
+        message: 'apiErrors.extensions.outcome_cost_allocation.year_total_invalid'
+      })
+    }
+  }
   if (agreementBudgetScale4Units > BigInt(Number.MAX_SAFE_INTEGER)) {
     issues.push({
       code: 'GCS_OUTCOME_COST_ALLOCATION_TOTAL_INVALID',
@@ -315,6 +328,26 @@ export const validateAllocationTotals = (
   }
 
   return issues
+}
+
+/** Rejects draft values whose resolved total exceeds any individual fiscal-year budget. */
+export const validateAllocationYearLimits = (
+  allocations: OutcomeAllocationInput[],
+  yearTotals: YearFundingTotal[]
+): AllocationValidationIssue[] => {
+  const resolvedAllocations = resolveAllocationAmounts(allocations, yearTotals)
+  return yearTotals.flatMap(total => {
+    const allocatedCents = resolvedAllocations
+      .filter(allocation => allocation.agreementBudgetFiscalYearId === total.agreementBudgetFiscalYearId)
+      .reduce((sum, allocation) => sum + BigInt(toCents(allocation.amount)), BIGINT_ZERO)
+    return allocatedCents > BigInt(toCents(total.programFunding))
+      ? [{
+          code: 'GCS_OUTCOME_COST_ALLOCATION_YEAR_TOTAL_EXCEEDED',
+          path: `allocations.${total.agreementBudgetFiscalYearId}`,
+          message: 'apiErrors.extensions.outcome_cost_allocation.year_total_exceeded'
+        }]
+      : []
+  })
 }
 
 const stableAllocationCoordinate = (

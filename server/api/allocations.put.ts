@@ -32,7 +32,7 @@ export default defineGcsExtensionRouteHandler(async ({ params, entity, db: rawDb
     await saveAllocations(db, agreementId, body.allocationVersionId, body.allocations, {
       agencyId: String(entity?.agencyId ?? ''),
       streamId: String(entity?.streamId ?? '')
-    }, writeAuthorization)
+    }, writeAuthorization, true)
   } catch (error: unknown) {
     throwOutcomeCostAllocationDatabaseError(error)
   }

@@ -65,7 +65,7 @@ describe('allocation version lifecycle adapter', () => {
     const context = { transaction: makeDb() }
     const target = { entityType: 'gcs-outcome-cost-allocation:allocation-version', entityId: 'version-1' } as const
 
-    await expect(adapter.registerIdentity(context as never, target)).resolves.toBeUndefined()
+    await expect(adapter.registerIdentity()).resolves.toBeUndefined()
     await expect(adapter.resolveOwner(context as never, target)).resolves.toMatchObject({
       owner: 'agreement', ownerId: 'agreement-1', agencyId: 'agency-1', streamId: 'stream-1'
     })

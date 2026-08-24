@@ -448,12 +448,22 @@ const ensureAllocation = (association: ConfiguredAssociationRow) => {
 
 const setAllocationMethod = (association: ConfiguredAssociationRow, allocationMethod: AllocationMethod) => {
   const allocation = ensureAllocation(association)
+  if (allocation.allocationMethod === allocationMethod) {
+    return
+  }
+  const resolvedAmount = getAllocationAmount(association)
   allocation.allocationMethod = allocationMethod
+  const convertedValue = allocationMethod === 'percentage'
+    ? association.programFunding > 0
+      ? resolvedAmount / association.programFunding * 100
+      : 0
+    : resolvedAmount
+  allocation.allocationValue = Math.min(convertedValue, getAllocationValueMaximum(association))
 }
 
 const setAllocationValue = (association: ConfiguredAssociationRow, value: string | number) => {
   const allocation = ensureAllocation(association)
-  allocation.allocationValue = Number(value || 0)
+  allocation.allocationValue = Math.min(Math.max(Number(value || 0), 0), getAllocationValueMaximum(association))
 }
 
 const updateAllocationMethod = (association: ConfiguredAssociationRow, value: string | number) => {
@@ -598,6 +608,14 @@ const validationMessage = computed(() => {
       en: 'The full agreement budget must be allocated.',
       fr: 'Le budget complet de l entente doit etre reparti.'
     },
+    GCS_OUTCOME_COST_ALLOCATION_YEAR_TOTAL_INVALID: {
+      en: 'Each fiscal year must be fully allocated to its own budget value.',
+      fr: 'Chaque exercice doit etre entierement reparti selon sa propre valeur budgetaire.'
+    },
+    GCS_OUTCOME_COST_ALLOCATION_YEAR_TOTAL_EXCEEDED: {
+      en: 'An allocation cannot exceed its fiscal-year budget value.',
+      fr: 'Une repartition ne peut pas depasser la valeur budgetaire de son exercice.'
+    },
     GCS_OUTCOME_COST_ALLOCATION_STALE_OUTCOME: {
       en: 'One saved allocation references an outcome that is no longer used by agreement activities.',
       fr: 'Une repartition enregistree reference un resultat qui n est plus utilise par les activites de l entente.'
@@ -627,6 +645,24 @@ const getFiscalYearAmountTotal = (commitmentType: CommitmentType, yearId: string
     row.commitmentType === commitmentType && row.yearId === yearId
   ))
 
+const getFiscalYearAllocatedTotal = (yearId: string) => getGroupAmountTotal(
+  displayedAssociationRows.value.filter((row: ConfiguredAssociationRow) => row.yearId === yearId)
+)
+
+const getFiscalYearUnallocated = (yearId: string) =>
+  toMoney(getProgramFunding(yearId) - getFiscalYearAllocatedTotal(yearId))
+
+const getAllocationValueMaximum = (association: ConfiguredAssociationRow) => {
+  const allocation = getAllocation(association) ?? createAllocation(association)
+  const currentAmount = getAllocationAmount(association)
+  const remainingIncludingCurrent = Math.max(0, toMoney(getFiscalYearUnallocated(association.yearId) + currentAmount))
+  if (allocation.allocationMethod === 'percentage') {
+    const funding = getProgramFunding(association.yearId)
+    return funding > 0 ? Math.min(100, remainingIncludingCurrent / funding * 100) : 0
+  }
+  return Math.min(EXACT_NUMERIC_19_4_MAX, remainingIncludingCurrent)
+}
+
 const getAmountForRow = (row: AllocationTableRow) => {
   if (row.rowType === 'commitmentType' && row.commitmentType) {
     return getCommitmentTypeAmountTotal(row.commitmentType)
@@ -640,8 +676,12 @@ const getAmountForRow = (row: AllocationTableRow) => {
 }
 
 const getUnallocatedForRow = (row: AllocationTableRow): number | null => {
-  if (row.rowType === 'commitmentType' || row.rowType === 'fiscalYear') {
+  if (row.rowType === 'commitmentType') {
     return getVersionUnallocated(selectedVersionId.value)
+  }
+
+  if (row.rowType === 'fiscalYear') {
+    return getFiscalYearUnallocated(row.yearId)
   }
 
   return null
@@ -1184,7 +1224,7 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
                 :model-value="getAllocation(row.original.association)?.allocationValue ?? 0"
                 type="number"
                 min="0"
-                :max="getAllocation(row.original.association)?.allocationMethod === 'percentage' ? 100 : EXACT_NUMERIC_19_4_MAX"
+                :max="getAllocationValueMaximum(row.original.association)"
                 step="0.01"
                 class="w-full min-w-0"
                 :disabled="!canEditSelectedVersion || hasPendingDraftMutation"

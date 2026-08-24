@@ -7,6 +7,7 @@ import {
   validateGeneratedCommitmentLinePaymentCoverage,
   validateAllocationReferences,
   validateAllocationTotals,
+  validateAllocationYearLimits,
   validateCommitmentMappings
 } from '../../shared/allocation'
 
@@ -131,7 +132,7 @@ describe('outcome cost allocation logic', () => {
     ], years, activeOutcomes)).toEqual([])
   })
 
-  it('allows the full agreement budget to be allocated in one budget year', () => {
+  it('rejects shifting another fiscal year budget into one year', () => {
     expect(validateAllocationTotals([
       {
         streamCommitmentId: 'stream-commitment-1',
@@ -140,7 +141,16 @@ describe('outcome cost allocation logic', () => {
         allocationMethod: 'amount',
         allocationValue: 1333.33
       }
-    ], years, activeOutcomes)).toEqual([])
+    ], years, activeOutcomes).map(issue => issue.code)).toContain('GCS_OUTCOME_COST_ALLOCATION_YEAR_TOTAL_INVALID')
+    expect(validateAllocationYearLimits([
+      {
+        streamCommitmentId: 'stream-commitment-1',
+        agreementBudgetFiscalYearId: 'year-1',
+        outcomeId: 'outcome-1',
+        allocationMethod: 'amount',
+        allocationValue: 1333.33
+      }
+    ], years).map(issue => issue.code)).toContain('GCS_OUTCOME_COST_ALLOCATION_YEAR_TOTAL_EXCEEDED')
   })
 
   it('validates the agreement total across all commitment types combined', () => {

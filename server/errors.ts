@@ -41,6 +41,14 @@ const errorMessages: Record<string, GcsExtensionLocalizedMessage> = {
     en: 'The full agreement budget must be allocated.',
     fr: 'Le budget complet de l entente doit etre reparti.'
   },
+  GCS_OUTCOME_COST_ALLOCATION_YEAR_TOTAL_INVALID: {
+    en: 'Each fiscal year must be fully allocated to its own budget value.',
+    fr: 'Chaque exercice doit etre entierement reparti selon sa propre valeur budgetaire.'
+  },
+  GCS_OUTCOME_COST_ALLOCATION_YEAR_TOTAL_EXCEEDED: {
+    en: 'An allocation cannot exceed its fiscal-year budget value.',
+    fr: 'Une repartition ne peut pas depasser la valeur budgetaire de son exercice.'
+  },
   GCS_OUTCOME_COST_ALLOCATION_ACTIVE_REQUIRED: {
     en: 'Complete and activate a cost allocation before creating this commitment.',
     fr: 'Terminez et activez une repartition des couts avant de creer cet engagement.'

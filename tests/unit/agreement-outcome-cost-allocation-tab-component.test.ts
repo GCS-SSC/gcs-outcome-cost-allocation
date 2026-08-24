@@ -592,7 +592,7 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
     wrapper.unmount()
   })
 
-  it('shows the combined agreement residual for commitment-type and fiscal-year groups', async () => {
+  it('shows the agreement residual for commitment types and each fiscal-year residual for year groups', async () => {
     const combinedResponse = {
       ...allocationResponse,
       allocations: [
@@ -640,7 +640,7 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
       .filter(Boolean)
 
     expect(groupResiduals.length).toBeGreaterThan(1)
-    expect(new Set(groupResiduals)).toEqual(new Set(['$0.00']))
+    expect(new Set(groupResiduals)).toEqual(new Set(['$0.00', '-$20.00', '$20.00']))
 
     wrapper.unmount()
   })

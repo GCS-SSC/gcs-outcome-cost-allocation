@@ -25,6 +25,7 @@ import {
   validateGeneratedCommitmentLinePaymentCoverage,
   validateAllocationReferences,
   validateAllocationTotals,
+  validateAllocationYearLimits,
   validateCommitmentMappings
 } from '../shared/allocation.ts'
 import type { OutcomeCostAllocationDb } from './db.ts'
@@ -1072,11 +1073,22 @@ const saveAllocationsInTransaction = async (
   allocationVersionId: string,
   allocations: OutcomeAllocationInput[],
   expectedScope: AgreementAllocationScope,
-  writeAuthorization?: GcsExtensionWriteAuthorization
+  writeAuthorization?: GcsExtensionWriteAuthorization,
+  enforceYearLimits = false
 ) => {
   await writeAuthorization?.lockAuthState(db)
   await lockAgreementAllocationLifecycle(db, agreementId, expectedScope)
   await writeAuthorization?.authorizeCurrentEntity(db)
+  if (enforceYearLimits) {
+    const budgetYears = await getAgreementBudgetYears(db, agreementId, expectedScope.streamId)
+    const yearLimitIssues = validateAllocationYearLimits(allocations, budgetYears.map(year => ({
+      agreementBudgetFiscalYearId: String(year.id),
+      programFunding: Number(year.program_funding)
+    })))
+    if (yearLimitIssues[0]) {
+      throw createOutcomeCostAllocationUserError(yearLimitIssues[0].code, yearLimitIssues[0].path)
+    }
+  }
   await replaceDraftAllocations(db, agreementId, allocationVersionId, allocations)
 }
 
@@ -1089,7 +1101,8 @@ export const saveAllocations = async (
   allocationVersionId: string,
   allocations: OutcomeAllocationInput[],
   expectedScope: AgreementAllocationScope,
-  writeAuthorization?: GcsExtensionWriteAuthorization
+  writeAuthorization?: GcsExtensionWriteAuthorization,
+  enforceYearLimits = false
 ) => await db.transaction().execute(async trx =>
   await saveAllocationsInTransaction(
     trx,
@@ -1097,7 +1110,8 @@ export const saveAllocations = async (
     allocationVersionId,
     allocations,
     expectedScope,
-    writeAuthorization
+    writeAuthorization,
+    enforceYearLimits
   )
 )
 

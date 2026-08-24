@@ -232,7 +232,8 @@ describe('outcome allocation routes', () => {
       expect.objectContaining({
         lockAuthState: expect.any(Function),
         authorizeCurrentEntity: expect.any(Function)
-      })
+      }),
+      true
     )
   })
 
