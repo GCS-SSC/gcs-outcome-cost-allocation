@@ -287,10 +287,9 @@ export default defineGcsExtensionMigration({
         -- The host lifecycle engine owns this status FK and advances it when a
         -- Completion materializes Workflow evidence. Domain allocation data
         -- remains frozen while orchestration is in progress.
-        IF OLD.status = 'draft'
-          AND OLD._deleted = false
-          AND NEW.status = 'draft'
+        IF OLD._deleted = false
           AND NEW._deleted = false
+          AND NEW.status IS NOT DISTINCT FROM OLD.status
           AND NEW.completed_at IS NOT DISTINCT FROM OLD.completed_at
           AND NEW.funding_basis_amount IS NOT DISTINCT FROM OLD.funding_basis_amount
           AND NEW.lifecycle_status_id IS DISTINCT FROM OLD.lifecycle_status_id

@@ -65,6 +65,7 @@ describe('allocation version lifecycle adapter', () => {
     const context = { transaction: makeDb() }
     const target = { entityType: 'gcs-outcome-cost-allocation:allocation-version', entityId: 'version-1' } as const
 
+    await expect(adapter.registerIdentity(context as never, target)).resolves.toBeUndefined()
     await expect(adapter.resolveOwner(context as never, target)).resolves.toMatchObject({
       owner: 'agreement', ownerId: 'agreement-1', agencyId: 'agency-1', streamId: 'stream-1'
     })
@@ -93,6 +94,10 @@ describe('allocation version lifecycle adapter', () => {
     await expect(adapter.validateCompletion(context as never, { lockedEntity } as never)).rejects.toMatchObject({
       code: 'GCS_OUTCOME_COST_ALLOCATION_TOTAL_INVALID'
     })
+
+    completeMock.mockRejectedValueOnce(new Error('unexpected completion failure'))
+    await expect(adapter.validateCompletion(context as never, { lockedEntity } as never))
+      .rejects.toThrow('unexpected completion failure')
   })
 
   it('delegates status mutation and positive terminus activation', async () => {

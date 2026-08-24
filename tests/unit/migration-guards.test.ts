@@ -718,6 +718,12 @@ describe('outcome allocation generated-record database guards', () => {
   })
 
   it('keeps active provenance immutable', async () => {
+    await expect(managedMutation(db, '1', async trx => await sql`
+      UPDATE extensions.gcs_outcome_cost_allocation_versions
+      SET lifecycle_status_id = 4
+      WHERE id = 60
+    `.execute(trx))).resolves.toBeDefined()
+
     await expectGuardConstraint(
       sql`
         UPDATE extensions.gcs_outcome_cost_allocation_commitment_lines
