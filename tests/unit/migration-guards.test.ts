@@ -183,21 +183,6 @@ describe('outcome allocation generated-record database guards', () => {
         _deleted boolean NOT NULL DEFAULT false
       )
     `.execute(db)
-    await sql`CREATE TABLE "Common_User" (
-      id bigint PRIMARY KEY,
-      egcs_cn_email text NOT NULL,
-      _deleted boolean NOT NULL DEFAULT false
-    )`.execute(db)
-    await sql`CREATE TABLE "Common_Completion" (
-      id bigserial PRIMARY KEY,
-      egcs_cn_entitytype text NOT NULL,
-      egcs_cn_entityid bigint NOT NULL,
-      egcs_cn_comments text,
-      egcs_cn_user bigint NOT NULL,
-      egcs_cn_disposition text NOT NULL,
-      egcs_cn_completedat timestamptz NOT NULL,
-      _deleted boolean NOT NULL DEFAULT false
-    )`.execute(db)
     await sql`
       CREATE TABLE "Funding_Case_Agreement_Commitment_Line" (
         id bigserial PRIMARY KEY,
@@ -906,12 +891,13 @@ describe('outcome allocation generated-record database guards', () => {
       INSERT INTO "Funding_Case_Agreement_Commitment_Line"
         (id, egcs_fc_commitment, egcs_fc_commitmentlinenumber, egcs_fc_transferpaymentstreamchartofaccount, egcs_fc_amount)
         VALUES (510011, 510001, 1, 311, 60), (510012, 510001, 2, 312, 15);
-      INSERT INTO "Common_User" (id, egcs_cn_email) VALUES (51, 'root@example.com');
       END;
       $showcase$;
     `.execute(db)
 
-    await migration0004.up(db)
+    await db.transaction().execute(async trx => {
+      await migration0004.up(trx)
+    })
 
     const version = await sql<{ status: string, funding_basis_amount: string }>`
       SELECT status, funding_basis_amount::text FROM extensions.gcs_outcome_cost_allocation_versions

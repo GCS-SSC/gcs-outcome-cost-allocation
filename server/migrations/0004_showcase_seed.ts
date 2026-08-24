@@ -3,8 +3,8 @@ import { defineGcsExtensionMigration } from '@gcs-ssc/extensions/server'
 
 /** Adds outcome-allocation provenance only for the unmistakable demo showcase Agreement. */
 export default defineGcsExtensionMigration({
-  up: async db => await db.transaction().execute(async trx => {
-    const showcase = await trx.selectFrom('Funding_Case_Agreement_Profile')
+  up: async db => {
+    const showcase = await db.selectFrom('Funding_Case_Agreement_Profile')
       .select('id')
       .where('id', '=', '51')
       .where('egcs_fc_title_en', '=', 'Health Canada Cost Agreement 1 - Showcase')
@@ -12,8 +12,8 @@ export default defineGcsExtensionMigration({
       .executeTakeFirst()
     if (!showcase) return
 
-    await sql`SELECT extensions.gcs_outcome_cost_allocation_lock_agreement(51)`.execute(trx)
-    const version = await trx.insertInto('extensions.gcs_outcome_cost_allocation_versions')
+    await sql`SELECT extensions.gcs_outcome_cost_allocation_lock_agreement(51)`.execute(db)
+    const version = await db.insertInto('extensions.gcs_outcome_cost_allocation_versions')
       .values({ agreement_id: '51', version_number: 1, status: 'draft' })
       .returning('id')
       .executeTakeFirstOrThrow()
@@ -76,9 +76,9 @@ export default defineGcsExtensionMigration({
       JOIN outcomes ON outcomes.ordinal = budget_lines.ordinal
       CROSS JOIN commitment_type
       JOIN "Agency_Fiscal_Year" fiscal_year ON fiscal_year.id = budget_lines.egcs_fc_fiscalyear
-    `.execute(trx)
+    `.execute(db)
 
-    const activeStatus = await trx.selectFrom('Common_Status')
+    const activeStatus = await db.selectFrom('Common_Status')
       .innerJoin('Transfer_Payment_Profile', 'Transfer_Payment_Profile.egcs_tp_agency', 'Common_Status.egcs_cn_agency')
       .innerJoin('Transfer_Payment_Stream', 'Transfer_Payment_Stream.egcs_tp_transferpaymentprofile', 'Transfer_Payment_Profile.id')
       .select('Common_Status.id')
@@ -86,24 +86,12 @@ export default defineGcsExtensionMigration({
       .where('Common_Status.egcs_cn_name_en', '=', 'Active')
       .where('Common_Status._deleted', '=', false)
       .executeTakeFirstOrThrow()
-    await trx.updateTable('extensions.gcs_outcome_cost_allocation_versions')
+    await db.updateTable('extensions.gcs_outcome_cost_allocation_versions')
       .set({ lifecycle_status_id: String(activeStatus.id) })
       .where('id', '=', String(version.id)).execute()
-    await trx.updateTable('extensions.gcs_outcome_cost_allocation_versions')
+    await db.updateTable('extensions.gcs_outcome_cost_allocation_versions')
       .set({ status: 'active', completed_at: new Date('2026-07-16T00:00:00Z'), funding_basis_amount: 165 })
       .where('id', '=', String(version.id)).execute()
-
-    const actor = await trx.selectFrom('Common_User').select('id')
-      .where('egcs_cn_email', '=', 'root@example.com').where('_deleted', '=', false).executeTakeFirstOrThrow()
-    await trx.insertInto('Common_Completion').values({
-      egcs_cn_entitytype: 'gcs-outcome-cost-allocation:allocation-version',
-      egcs_cn_entityid: String(version.id),
-      egcs_cn_comments: 'Showcase allocation completed before commitment and payment generation.',
-      egcs_cn_user: String(actor.id),
-      egcs_cn_disposition: 'no_workflow',
-      egcs_cn_completedat: new Date('2026-07-16T00:00:00Z'),
-      _deleted: false
-    }).execute()
 
     await sql`
       INSERT INTO extensions.gcs_outcome_cost_allocation_commitment_lines (
@@ -124,6 +112,6 @@ export default defineGcsExtensionMigration({
       WHERE commitment.egcs_fc_fundingagreement = 51
         AND commitment.egcs_fc_financialsystemnumber = '510001'
         AND commitment._deleted = false
-    `.execute(trx)
-  })
+    `.execute(db)
+  }
 })
