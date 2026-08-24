@@ -67,7 +67,7 @@ const budgetYears = [
 const allocations: FakeDbState['allocations'] = [
   {
     allocation_version_id: 'version-1',
-    commitment_type: 'commitment',
+    commitment_type: '1',
     stream_commitment_id: 'stream-commitment-1',
     agreement_budget_fiscal_year_id: 'budget-year-1',
     outcome_id: 'outcome-1',
@@ -76,7 +76,7 @@ const allocations: FakeDbState['allocations'] = [
   },
   {
     allocation_version_id: 'version-1',
-    commitment_type: 'commitment',
+    commitment_type: '1',
     stream_commitment_id: 'stream-commitment-2',
     agreement_budget_fiscal_year_id: 'budget-year-1',
     outcome_id: 'outcome-2',
@@ -179,7 +179,7 @@ class FakeQuery {
       ]
     }
 
-    if (this.table === 'Transfer_Payment_Stream_Commitment') {
+    if (this.table === 'Transfer_Payment_Stream_Chart_of_Account') {
       this.state.currentReferenceReads += 1
       return [
         { id: 'stream-commitment-1', stream_budget_id: 'stream-budget-1' },
@@ -200,7 +200,7 @@ class FakeQuery {
 
     if (this.table === 'Funding_Case_Agreement_Commitment_Line') {
       const commitmentId = this.findWhereValue('egcs_fc_commitment')
-      const streamCommitmentIds = this.findWhereValue('egcs_fc_transferpaymentstreamcommitment') as string[]
+      const streamCommitmentIds = this.findWhereValue('egcs_fc_transferpaymentstreamchartofaccount') as string[]
       return this.state.commitmentLines
         .filter(line => line.commitmentId === commitmentId)
         .filter(line => streamCommitmentIds.includes(line.streamCommitmentId))
@@ -294,16 +294,16 @@ const toAllocationInputs = (
 }))
 
 const config = {
-  enabledCommitmentTypes: ['commitment'],
+  enabledCommitmentTypes: ['1'],
   mappings: [
     {
-      commitmentType: 'commitment',
+      commitmentType: '1',
       outcomeId: 'outcome-1',
       streamBudgetId: 'stream-budget-1',
       streamCommitmentId: 'stream-commitment-1'
     },
     {
-      commitmentType: 'commitment',
+      commitmentType: '1',
       outcomeId: 'outcome-2',
       streamBudgetId: 'stream-budget-1',
       streamCommitmentId: 'stream-commitment-2'
@@ -318,12 +318,12 @@ const createState = (): FakeDbState => ({
     {
       id: 'commitment-1',
       agreementId: 'agreement-1',
-      type: 'commitment'
+      type: '1'
     },
     {
       id: 'paye-1',
       agreementId: 'agreement-1',
-      type: 'paye'
+      type: '2'
     }
   ],
   commitmentLines: [
@@ -413,7 +413,7 @@ describe('outcome cost allocation payment generation', () => {
       'budget-year-1',
       50,
       {
-        enabledCommitmentTypes: ['commitment'],
+        enabledCommitmentTypes: ['1'],
         mappings: [
           config.mappings[0],
           {
@@ -509,7 +509,7 @@ describe('outcome cost allocation payment generation', () => {
       'budget-year-1',
       50,
       {
-        enabledCommitmentTypes: ['commitment'],
+        enabledCommitmentTypes: ['1'],
         mappings: [
           {
             ...config.mappings[0],
@@ -604,7 +604,7 @@ describe('outcome cost allocation payment generation', () => {
       'budget-year-1',
       50,
       {
-        enabledCommitmentTypes: ['commitment'],
+        enabledCommitmentTypes: ['1'],
         mappings: [
           {
             ...config.mappings[0],
@@ -728,7 +728,7 @@ describe('outcome cost allocation payment generation', () => {
       'budget-year-1',
       50,
       {
-        enabledCommitmentTypes: ['commitment'],
+        enabledCommitmentTypes: ['1'],
         mappings: [
           {
             ...config.mappings[0],
@@ -757,7 +757,7 @@ describe('outcome cost allocation payment generation', () => {
     state.allocations = [
       {
         allocation_version_id: 'version-1',
-        commitment_type: 'commitment',
+        commitment_type: '1',
         stream_commitment_id: 'stream-commitment-1',
         agreement_budget_fiscal_year_id: 'budget-year-1',
         outcome_id: 'outcome-1',
@@ -766,7 +766,7 @@ describe('outcome cost allocation payment generation', () => {
       },
       {
         allocation_version_id: 'version-1',
-        commitment_type: 'paye',
+        commitment_type: '2',
         stream_commitment_id: 'stream-commitment-2',
         agreement_budget_fiscal_year_id: 'budget-year-1',
         outcome_id: 'outcome-2',
@@ -791,7 +791,7 @@ describe('outcome cost allocation payment generation', () => {
       'budget-year-1',
       30,
       {
-        enabledCommitmentTypes: ['commitment', 'paye'],
+        enabledCommitmentTypes: ['1', '2'],
         mappings: config.mappings
       }
     )
@@ -818,7 +818,7 @@ describe('outcome cost allocation payment generation', () => {
     state.allocations = [
       {
         allocation_version_id: 'version-1',
-        commitment_type: 'commitment',
+        commitment_type: '1',
         stream_commitment_id: 'stream-commitment-1',
         agreement_budget_fiscal_year_id: 'budget-year-1',
         outcome_id: 'outcome-1',

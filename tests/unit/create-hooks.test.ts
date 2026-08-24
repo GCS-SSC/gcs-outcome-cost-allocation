@@ -86,7 +86,7 @@ class WriteDb {
   commitment = {
     id: 'commitment-1',
     egcs_fc_fundingagreement: 'agreement-1',
-    egcs_fc_type: 'commitment',
+    egcs_fc_type: '1',
     egcs_fc_status: 'inprogress',
     egcs_fc_financialsystemnumber: null
   }
@@ -163,8 +163,11 @@ class WriteDb {
           const includesGeneratedDestination = Array.isArray(requestedIds)
             && requestedIds.some(id => this.generatedPaymentIds.has(String(id)))
           return this.generatedPayment || includesGeneratedDestination
-            ? { id: 'payment-1', egcs_fc_status: this.currentPaymentStatus }
+            ? { id: 'payment-1', egcs_fc_status: this.currentPaymentStatus, status_terminal: true }
             : undefined
+        }
+        if (table === 'Common_Status') {
+          return { egcs_cn_terminal: false }
         }
         if (table === 'extensions.gcs_outcome_cost_allocation_commitment_lines') {
           const generated = wheres.some(where => where[0] === 'generated_commitment_id')
@@ -244,10 +247,10 @@ const createContext = (
     agencyId: 'agency-1'
   },
   config: {
-    enabledCommitmentTypes: ['commitment']
+    enabledCommitmentTypes: ['1']
   },
   validatedBody: {
-    egcs_fc_type: 'commitment'
+    egcs_fc_type: '1'
   },
   ...overrides
 })
@@ -290,7 +293,7 @@ const createGeneratedCommitmentLine = (
   allocationVersionId,
   streamCommitmentId: `stream-commitment-${suffix}`,
   allocation: {
-    commitmentType: 'commitment',
+    commitmentType: '1',
     streamCommitmentId: `stream-commitment-${suffix}`,
     agreementBudgetFiscalYearId: 'year-1',
     outcomeId: `outcome-${suffix}`,
@@ -309,7 +312,7 @@ beforeEach(() => {
     status: 'continue'
   })
   allocationDataMocks.lockAndGetOutcomeCostAllocationConfig.mockResolvedValue({
-    enabledCommitmentTypes: ['commitment']
+    enabledCommitmentTypes: ['1']
   })
   allocationDataMocks.lockAgreementAllocationLifecycle.mockImplementation(async (db: WriteDb) => {
     db.agreementLifecycleLocked = true
@@ -414,8 +417,8 @@ describe('outcome cost allocation create hooks', () => {
       db: db as unknown as Transaction<unknown>,
       agreementId: 'agreement-1',
       paymentId: 'payment-1',
-      currentStatus: 'denied',
-      nextStatus: 'pendingapproval'
+      currentStatusId: 'denied',
+      nextStatusId: 'pendingapproval'
     })).rejects.toMatchObject({
       code: 'GCS_OUTCOME_COST_ALLOCATION_PAYMENT_EXCEEDS_REMAINING',
       statusCode: 409
@@ -438,8 +441,8 @@ describe('outcome cost allocation create hooks', () => {
       db: db as unknown as Transaction<unknown>,
       agreementId: 'agreement-1',
       paymentId: 'payment-1',
-      currentStatus: 'inprogress',
-      nextStatus: 'pendingapproval'
+      currentStatusId: 'inprogress',
+      nextStatusId: 'pendingapproval'
     })).rejects.toMatchObject({
       code: 'GCS_OUTCOME_COST_ALLOCATION_PAYMENT_EXCEEDS_REMAINING',
       statusCode: 409
@@ -499,8 +502,8 @@ describe('outcome cost allocation create hooks', () => {
       db: generatedDb as unknown as Transaction<unknown>,
       agreementId: 'agreement-1',
       paymentId: 'payment-1',
-      currentStatus: 'denied',
-      nextStatus: 'pendingapproval'
+      currentStatusId: 'denied',
+      nextStatusId: 'pendingapproval'
     })).resolves.toBeUndefined()
     expect(allocationDataMocks.generatedPaymentStatusResurrectionExceedsCoverage).toHaveBeenCalledWith(
       generatedDb,
@@ -705,9 +708,9 @@ describe('outcome cost allocation create hooks', () => {
       db,
       'agreement-1',
       'stream-1',
-      'commitment',
+      '1',
       {
-        enabledCommitmentTypes: ['commitment']
+        enabledCommitmentTypes: ['1']
       }
     )
     expect(allocationDataMocks.lockAgreementAllocationLifecycle).toHaveBeenCalledWith(
@@ -727,7 +730,7 @@ describe('outcome cost allocation create hooks', () => {
     allocationDataMocks.lockAndGetOutcomeCostAllocationConfig.mockResolvedValue(null)
     const payload = createPayload(
       'agreement.commitments.create',
-      createContext(db)
+      createContext(db, { phase: 'after-create', createdRecord: db.commitment })
     )
 
     await commitment(payload)
@@ -867,29 +870,19 @@ describe('outcome cost allocation create hooks', () => {
     })
     const payload = createPayload(
       'agreement.commitments.create',
-      createContext(db)
+      createContext(db, { phase: 'after-create', createdRecord: db.commitment })
     )
 
     await commitment(payload)
 
+    expect(allocationDataMocks.getGeneratedCommitmentLines).toHaveBeenCalled()
     expect(payload.results).toEqual([{
       extensionKey: EXTENSION_KEY,
       result: {
-        status: 'handled',
-        response: db.commitment
+        status: 'continue'
       }
     }])
     expect(db.records).toEqual([
-      expect.objectContaining({
-        operation: 'insert',
-        table: 'Funding_Case_Agreement_Commitment',
-        values: {
-          egcs_fc_fundingagreement: 'agreement-1',
-          egcs_fc_type: 'commitment',
-          egcs_fc_status: 'inprogress',
-          egcs_fc_financialsystemnumber: null
-        }
-      }),
       expect.objectContaining({
         operation: 'insert',
         table: 'Funding_Case_Agreement_Commitment_Line',
@@ -897,13 +890,13 @@ describe('outcome cost allocation create hooks', () => {
           {
             egcs_fc_commitment: 'commitment-1',
             egcs_fc_commitmentlinenumber: 1,
-            egcs_fc_transferpaymentstreamcommitment: 'stream-commitment-1',
+            egcs_fc_transferpaymentstreamchartofaccount: 'stream-commitment-1',
             egcs_fc_amount: 60
           },
           {
             egcs_fc_commitment: 'commitment-1',
             egcs_fc_commitmentlinenumber: 2,
-            egcs_fc_transferpaymentstreamcommitment: 'stream-commitment-2',
+            egcs_fc_transferpaymentstreamchartofaccount: 'stream-commitment-2',
             egcs_fc_amount: 40
           }
         ]
@@ -952,7 +945,7 @@ describe('outcome cost allocation create hooks', () => {
 
     await commitment(createPayload(
       'agreement.commitments.create',
-      createContext(db)
+      createContext(db, { phase: 'after-create', createdRecord: db.commitment })
     ))
 
     expect(db.records.find(record =>
@@ -1087,7 +1080,7 @@ describe('outcome cost allocation create hooks', () => {
     expect(db.records).toEqual([])
   })
 
-  it('inserts generated payment lines and advances the draft payment status', async () => {
+  it('inserts generated payment lines while leaving host status ownership unchanged', async () => {
     const { payment } = await loadHooks()
     const db = new WriteDb()
     allocationDataMocks.getGeneratedPaymentLines.mockResolvedValue({
@@ -1119,7 +1112,7 @@ describe('outcome cost allocation create hooks', () => {
       'year-1',
       25,
       {
-        enabledCommitmentTypes: ['commitment']
+        enabledCommitmentTypes: ['1']
       }
     )
     expect(allocationDataMocks.lockAgreementAllocationLifecycle).toHaveBeenCalledWith(
@@ -1148,18 +1141,6 @@ describe('outcome cost allocation create hooks', () => {
           }
         ],
         wheres: []
-      },
-      {
-        operation: 'update',
-        table: 'Funding_Case_Agreement_Payment',
-        update: {
-          egcs_fc_status: 'inprogress'
-        },
-        wheres: [
-          ['id', '=', 'payment-1'],
-          ['egcs_fc_status', '=', 'draft'],
-          ['_deleted', '=', false]
-        ]
       }
     ])
     expect(payload.results[0]?.result).toEqual({

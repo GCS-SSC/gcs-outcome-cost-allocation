@@ -1,5 +1,5 @@
 import { sql } from 'kysely'
-import { defineGcsExtensionMigration } from '@gcs-ssc/extensions/server'
+import { attachGcsLifecycleEntityIdentity, defineGcsExtensionMigration } from '@gcs-ssc/extensions/server'
 
 export default defineGcsExtensionMigration({
   up: async (db) => {
@@ -9,6 +9,7 @@ export default defineGcsExtensionMigration({
       .addColumn('agreement_id', 'bigint', col => col.notNull().references('Funding_Case_Agreement_Profile.id').onDelete('restrict'))
       .addColumn('version_number', 'integer', col => col.notNull())
       .addColumn('status', 'varchar(20)', col => col.notNull())
+      .addColumn('lifecycle_status_id', 'bigint', col => col.notNull().references('Common_Status.id').onDelete('restrict'))
       .addColumn('created_at', 'timestamp', col => col.defaultTo(sql`now()`).notNull())
       .addColumn('completed_at', 'timestamp')
       .addColumn('funding_basis_amount', 'numeric(19, 2)')
@@ -22,6 +23,52 @@ export default defineGcsExtensionMigration({
         sql`funding_basis_amount IS NULL OR funding_basis_amount >= 0`
       )
       .execute()
+
+    await attachGcsLifecycleEntityIdentity(db, {
+      extensionKey: 'gcs-outcome-cost-allocation',
+      localType: 'allocation-version',
+      table: 'gcs_outcome_cost_allocation_versions'
+    })
+
+    await sql`
+      CREATE OR REPLACE FUNCTION extensions.gcs_outcome_cost_allocation_resolve_draft_status()
+      RETURNS trigger AS $$
+      BEGIN
+        SELECT status.id INTO NEW.lifecycle_status_id
+        FROM "Funding_Case_Agreement_Profile" agreement
+        JOIN "Transfer_Payment_Stream" stream
+          ON stream.id = agreement.egcs_fc_transferpaymentstream
+        JOIN "Transfer_Payment_Profile" profile
+          ON profile.id = stream.egcs_tp_transferpaymentprofile
+        JOIN "Common_Status" status
+          ON status.egcs_cn_agency = profile.egcs_tp_agency
+         AND status.egcs_cn_isdraft = true
+         AND status._deleted = false
+        WHERE agreement.id = NEW.agreement_id
+          AND agreement._deleted = false
+        ORDER BY status.id ASC
+        LIMIT 1;
+        IF NEW.lifecycle_status_id IS NULL THEN
+          RAISE EXCEPTION 'Outcome cost allocation requires an Agency draft status.';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql
+    `.execute(db)
+    await sql`
+      CREATE TRIGGER gcs_outcome_cost_allocation_resolve_draft_status
+      BEFORE INSERT ON extensions.gcs_outcome_cost_allocation_versions
+      FOR EACH ROW EXECUTE FUNCTION extensions.gcs_outcome_cost_allocation_resolve_draft_status()
+    `.execute(db)
+
+    await sql`
+      CREATE TRIGGER gcs_outcome_cost_allocation_soft_delete_identity
+      AFTER UPDATE OF _deleted
+      ON extensions.gcs_outcome_cost_allocation_versions
+      FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete_entity_assignments(
+        'gcs-outcome-cost-allocation:allocation-version'
+      )
+    `.execute(db)
 
     await sql`
       CREATE UNIQUE INDEX gcs_outcome_cost_allocation_unique_version
@@ -46,8 +93,8 @@ export default defineGcsExtensionMigration({
       .addColumn('id', 'bigserial', col => col.primaryKey())
       .addColumn('allocation_version_id', 'bigint', col => col.notNull().references('extensions.gcs_outcome_cost_allocation_versions.id').onDelete('restrict'))
       .addColumn('agreement_id', 'bigint', col => col.notNull().references('Funding_Case_Agreement_Profile.id').onDelete('restrict'))
-      .addColumn('commitment_type', 'varchar(20)', col => col.notNull())
-      .addColumn('stream_commitment_id', 'bigint', col => col.notNull().references('Transfer_Payment_Stream_Commitment.id').onDelete('restrict'))
+      .addColumn('commitment_type', 'bigint', col => col.notNull().references('Transfer_Payment_Stream_Commitment_Type.id').onDelete('restrict'))
+      .addColumn('stream_commitment_id', 'bigint', col => col.notNull().references('Transfer_Payment_Stream_Chart_of_Account.id').onDelete('restrict'))
       .addColumn('agreement_budget_fiscal_year_id', sql`uuid`, col => col.notNull().references('Funding_Case_Agreement_Budget_Fiscal_Year.id').onDelete('restrict'))
       .addColumn('outcome_id', 'bigint', col => col.notNull().references('Transfer_Payment_Outcome.id').onDelete('restrict'))
       .addColumn('allocation_method', 'varchar(20)', col => col.notNull())
@@ -60,10 +107,6 @@ export default defineGcsExtensionMigration({
       .addColumn('commitment_label_fr', 'text')
       .addColumn('fiscal_year_display', 'varchar(50)')
       .addColumn('_deleted', 'boolean', col => col.defaultTo(false).notNull())
-      .addCheckConstraint(
-        'gcs_outcome_cost_allocation_commitment_type',
-        sql`commitment_type IN ('commitment', 'paye', 'paye2', 'pyp')`
-      )
       .addCheckConstraint(
         'gcs_outcome_cost_allocation_method',
         sql`allocation_method IN ('amount', 'percentage')`
@@ -100,7 +143,7 @@ export default defineGcsExtensionMigration({
       .addColumn('agreement_id', 'bigint', col => col.notNull().references('Funding_Case_Agreement_Profile.id').onDelete('restrict'))
       .addColumn('agreement_budget_fiscal_year_id', sql`uuid`, col => col.notNull().references('Funding_Case_Agreement_Budget_Fiscal_Year.id').onDelete('restrict'))
       .addColumn('outcome_id', 'bigint', col => col.notNull().references('Transfer_Payment_Outcome.id').onDelete('restrict'))
-      .addColumn('stream_commitment_id', 'bigint', col => col.notNull().references('Transfer_Payment_Stream_Commitment.id').onDelete('restrict'))
+      .addColumn('stream_commitment_id', 'bigint', col => col.notNull().references('Transfer_Payment_Stream_Chart_of_Account.id').onDelete('restrict'))
       .addColumn('generated_amount', 'numeric(19, 2)', col => col.notNull())
       .addColumn('_deleted', 'boolean', col => col.defaultTo(false).notNull())
       .addCheckConstraint(
@@ -238,6 +281,32 @@ export default defineGcsExtensionMigration({
         PERFORM extensions.gcs_outcome_cost_allocation_assert_managed_mutation(OLD.agreement_id);
 
         IF NEW IS NOT DISTINCT FROM OLD THEN
+          RETURN NEW;
+        END IF;
+
+        -- The host lifecycle engine owns this status FK and advances it when a
+        -- Completion materializes Workflow evidence. Domain allocation data
+        -- remains frozen while orchestration is in progress.
+        IF OLD.status = 'draft'
+          AND OLD._deleted = false
+          AND NEW.status = 'draft'
+          AND NEW._deleted = false
+          AND NEW.completed_at IS NOT DISTINCT FROM OLD.completed_at
+          AND NEW.funding_basis_amount IS NOT DISTINCT FROM OLD.funding_basis_amount
+          AND NEW.lifecycle_status_id IS DISTINCT FROM OLD.lifecycle_status_id
+        THEN
+          RETURN NEW;
+        END IF;
+
+        IF OLD.status = 'draft'
+          AND OLD._deleted = false
+          AND NEW.status = 'draft'
+          AND NEW._deleted = false
+          AND NEW.completed_at IS NOT DISTINCT FROM OLD.completed_at
+          AND OLD.funding_basis_amount IS NULL
+          AND NEW.funding_basis_amount IS NOT NULL
+          AND NEW.lifecycle_status_id IS NOT DISTINCT FROM OLD.lifecycle_status_id
+        THEN
           RETURN NEW;
         END IF;
 
@@ -405,10 +474,14 @@ export default defineGcsExtensionMigration({
             ON outcome.id = NEW.outcome_id
             AND outcome.egcs_tp_transferpaymentprofile = stream.egcs_tp_transferpaymentprofile
             AND outcome._deleted = false
-          INNER JOIN "Transfer_Payment_Stream_Commitment" stream_commitment
+          INNER JOIN "Transfer_Payment_Stream_Chart_of_Account" stream_commitment
             ON stream_commitment.id = NEW.stream_commitment_id
             AND stream_commitment.egcs_tp_transferpaymentstream = stream.id
             AND stream_commitment._deleted = false
+          INNER JOIN "Transfer_Payment_Stream_Commitment_Type" commitment_type
+            ON commitment_type.id = NEW.commitment_type
+            AND commitment_type.egcs_tp_transferpaymentstream = stream.id
+            AND commitment_type._deleted = false
           INNER JOIN "Transfer_Payment_Stream_Budget" stream_budget
             ON stream_budget.id = stream_commitment.egcs_tp_streambudget
             AND stream_budget.egcs_tp_transferpaymentstream = stream.id
@@ -579,8 +652,8 @@ export default defineGcsExtensionMigration({
 
         IF TG_OP = 'UPDATE'
           AND old_generated_agreement_id IS NOT NULL
-          AND OLD.egcs_fc_status::text = 'draft'
-          AND NEW.egcs_fc_status::text <> 'draft'
+          AND COALESCE((SELECT status.egcs_cn_isdraft FROM "Common_Status" status WHERE status.id = OLD.egcs_fc_status), false)
+          AND NOT COALESCE((SELECT status.egcs_cn_isdraft FROM "Common_Status" status WHERE status.id = NEW.egcs_fc_status), false)
         THEN
           SELECT COUNT(*), COALESCE(SUM(payment_line.egcs_fc_amount), 0)
           INTO active_line_count, active_line_total
@@ -654,7 +727,7 @@ export default defineGcsExtensionMigration({
         old_generated_agreement_id bigint;
         new_generated_agreement_id bigint;
         exact_generated_agreement_id bigint;
-        new_payment_status text;
+        new_payment_is_draft boolean;
       BEGIN
         IF TG_OP <> 'INSERT' THEN
           SELECT provenance.agreement_id
@@ -667,9 +740,10 @@ export default defineGcsExtensionMigration({
         END IF;
 
         IF TG_OP <> 'DELETE' THEN
-          SELECT provenance.agreement_id, payment.egcs_fc_status::text
-          INTO new_generated_agreement_id, new_payment_status
+          SELECT provenance.agreement_id, status.egcs_cn_isdraft
+          INTO new_generated_agreement_id, new_payment_is_draft
           FROM "Funding_Case_Agreement_Payment" payment
+          INNER JOIN "Common_Status" status ON status.id = payment.egcs_fc_status
           INNER JOIN extensions.gcs_outcome_cost_allocation_commitment_lines provenance
             ON provenance.generated_commitment_id = payment.egcs_fc_fundingagreementcommitment
           WHERE payment.id = NEW.egcs_fc_fundingagreementpayment
@@ -678,7 +752,7 @@ export default defineGcsExtensionMigration({
 
         IF TG_OP = 'INSERT'
           AND new_generated_agreement_id IS NOT NULL
-          AND new_payment_status = 'draft'
+          AND new_payment_is_draft = true
         THEN
           SELECT provenance.agreement_id
           INTO exact_generated_agreement_id
@@ -777,12 +851,12 @@ export default defineGcsExtensionMigration({
           INNER JOIN "Funding_Case_Agreement_Commitment" commitment
             ON commitment.id = NEW.generated_commitment_id
             AND commitment.egcs_fc_fundingagreement = version.agreement_id
-            AND commitment.egcs_fc_type::text = allocation.commitment_type
+            AND commitment.egcs_fc_type = allocation.commitment_type
             AND commitment._deleted = false
           INNER JOIN "Funding_Case_Agreement_Commitment_Line" commitment_line
             ON commitment_line.id = NEW.commitment_line_id
             AND commitment_line.egcs_fc_commitment = commitment.id
-            AND commitment_line.egcs_fc_transferpaymentstreamcommitment = NEW.stream_commitment_id
+            AND commitment_line.egcs_fc_transferpaymentstreamchartofaccount = NEW.stream_commitment_id
             AND commitment_line.egcs_fc_amount = NEW.generated_amount
             AND commitment_line._deleted = false
           WHERE version.id = NEW.allocation_version_id
@@ -859,11 +933,11 @@ export default defineGcsExtensionMigration({
     ]) {
       await sql.raw(`DROP TRIGGER IF EXISTS gcs_outcome_cost_allocation_guard_active_budget_mapping ON "${tableName}"`).execute(db)
     }
-    await sql`DROP TRIGGER IF EXISTS gcs_outcome_cost_allocation_guard_stream_commitment_delete ON "Transfer_Payment_Stream_Commitment"`.execute(db)
+    await sql`DROP TRIGGER IF EXISTS gcs_outcome_cost_allocation_guard_stream_commitment_delete ON "Transfer_Payment_Stream_Chart_of_Account"`.execute(db)
     await sql`
       CREATE TRIGGER gcs_outcome_cost_allocation_guard_stream_commitment_delete
       BEFORE UPDATE OR DELETE
-      ON "Transfer_Payment_Stream_Commitment"
+      ON "Transfer_Payment_Stream_Chart_of_Account"
       FOR EACH ROW
       EXECUTE FUNCTION extensions.gcs_outcome_cost_allocation_guard_stream_commitment_delete();
     `.execute(db)
@@ -1002,7 +1076,7 @@ export default defineGcsExtensionMigration({
     ]) {
       await sql.raw(`DROP TRIGGER IF EXISTS gcs_outcome_cost_allocation_guard_active_budget_mapping ON "${tableName}"`).execute(db)
     }
-    await sql`DROP TRIGGER IF EXISTS gcs_outcome_cost_allocation_guard_stream_commitment_delete ON "Transfer_Payment_Stream_Commitment"`.execute(db)
+    await sql`DROP TRIGGER IF EXISTS gcs_outcome_cost_allocation_guard_stream_commitment_delete ON "Transfer_Payment_Stream_Chart_of_Account"`.execute(db)
     await sql`DROP TRIGGER IF EXISTS gcs_outcome_cost_allocation_guard_payment_line ON "Funding_Case_Agreement_Payment_Line"`.execute(db)
     await sql`DROP TRIGGER IF EXISTS gcs_outcome_cost_allocation_guard_payment_change ON "Funding_Case_Agreement_Payment"`.execute(db)
     await sql`DROP TRIGGER IF EXISTS gcs_outcome_cost_allocation_guard_payment_insert ON "Funding_Case_Agreement_Payment"`.execute(db)

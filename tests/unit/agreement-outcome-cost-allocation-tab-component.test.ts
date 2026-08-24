@@ -161,16 +161,16 @@ const allocationResponse = {
 }
 
 const config: GcsExtensionJsonConfig = {
-  enabledCommitmentTypes: ['commitment'],
+  enabledCommitmentTypes: ['1'],
   mappings: [
     {
-      commitmentType: 'commitment',
+      commitmentType: '1',
       outcomeId: 'outcome-1',
       streamBudgetId: 'stream-budget-1',
       streamCommitmentId: 'stream-commitment-1'
     },
     {
-      commitmentType: 'commitment',
+      commitmentType: '1',
       outcomeId: 'outcome-1',
       streamBudgetId: 'stream-budget-2',
       streamCommitmentId: 'stream-commitment-2'
@@ -199,7 +199,12 @@ const mountTab = async (
   componentConfig: GcsExtensionJsonConfig = config,
   initialLocale = 'en'
 ) => {
-  vi.stubGlobal('fetch', fetchMock)
+  vi.stubGlobal('fetch', (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).includes('/api/completions/runtime')) {
+      return jsonResponse({ item: null })
+    }
+    return await fetchMock(input, init)
+  }) as typeof fetch)
   vi.stubGlobal('computed', computed)
   vi.stubGlobal('ref', ref)
   vi.stubGlobal('watch', watch)
@@ -317,7 +322,7 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
       }],
       allocations: [{
         allocationVersionId: 'version-1',
-        commitmentType: 'commitment',
+        commitmentType: '1',
         streamCommitmentId: 'stream-commitment-1',
         agreementBudgetFiscalYearId: '1',
         outcomeId: 'outcome-1',
@@ -348,7 +353,7 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
       allocations: [
         {
           allocationVersionId: 'version-1',
-          commitmentType: 'commitment',
+          commitmentType: '1',
           streamCommitmentId: 'stream-commitment-2',
           agreementBudgetFiscalYearId: '2',
           outcomeId: 'outcome-1',
@@ -357,7 +362,7 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
         },
         {
           allocationVersionId: 'version-1',
-          commitmentType: 'paye',
+          commitmentType: '2',
           streamCommitmentId: 'stream-commitment-1',
           agreementBudgetFiscalYearId: '1',
           outcomeId: 'outcome-1',
@@ -381,9 +386,9 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
       })
     })
     const wrapper = await mountTab(fetchMock as typeof fetch, {
-      enabledCommitmentTypes: ['commitment'],
+      enabledCommitmentTypes: ['1'],
       mappings: [{
-        commitmentType: 'commitment',
+        commitmentType: '1',
         outcomeId: 'outcome-1',
         streamBudgetId: 'stream-budget-2',
         streamCommitmentId: 'stream-commitment-2'
@@ -400,7 +405,7 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
 
     expect(savedAllocations).toEqual([
       expect.objectContaining({
-        commitmentType: 'commitment',
+        commitmentType: '1',
         agreementBudgetFiscalYearId: '2',
         outcomeId: 'outcome-1'
       })
@@ -430,7 +435,7 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
       streamCommitments,
       allocations: [{
         allocationVersionId: 'version-1',
-        commitmentType: 'commitment',
+        commitmentType: '1',
         streamCommitmentId: 'stream-commitment-1',
         agreementBudgetFiscalYearId: '1',
         outcomeId: 'outcome-1',
@@ -451,9 +456,9 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
       })
     })
     const wrapper = await mountTab(fetchMock as typeof fetch, {
-      enabledCommitmentTypes: ['commitment'],
+      enabledCommitmentTypes: ['1'],
       mappings: [{
-        commitmentType: 'commitment',
+        commitmentType: '1',
         outcomeId: 'outcome-1',
         streamBudgetId: 'stream-budget-1',
         streamCommitmentId: 'stream-commitment-1'
@@ -486,7 +491,7 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
       }],
       allocations: [{
         allocationVersionId: 'version-1',
-        commitmentType: 'commitment',
+        commitmentType: '1',
         streamCommitmentId: 'stream-commitment-1',
         agreementBudgetFiscalYearId: '1',
         outcomeId: 'outcome-1',
@@ -534,7 +539,7 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
       allocations: [
         {
           allocationVersionId: 'version-1',
-          commitmentType: 'commitment',
+          commitmentType: '1',
           streamCommitmentId: 'stream-commitment-1',
           agreementBudgetFiscalYearId: '1',
           outcomeId: 'outcome-1',
@@ -543,7 +548,7 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
         },
         {
           allocationVersionId: 'version-1',
-          commitmentType: 'commitment',
+          commitmentType: '1',
           streamCommitmentId: 'stream-commitment-1',
           agreementBudgetFiscalYearId: '1',
           outcomeId: 'outcome-2',
@@ -553,16 +558,16 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
       ]
     }
     const splitConfig: GcsExtensionJsonConfig = {
-      enabledCommitmentTypes: ['commitment'],
+      enabledCommitmentTypes: ['1'],
       mappings: [
         {
-          commitmentType: 'commitment',
+          commitmentType: '1',
           outcomeId: 'outcome-1',
           streamBudgetId: 'stream-budget-1',
           streamCommitmentId: 'stream-commitment-1'
         },
         {
-          commitmentType: 'commitment',
+          commitmentType: '1',
           outcomeId: 'outcome-2',
           streamBudgetId: 'stream-budget-1',
           streamCommitmentId: 'stream-commitment-1'
@@ -593,7 +598,7 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
       allocations: [
         {
           allocationVersionId: 'version-1',
-          commitmentType: 'commitment',
+          commitmentType: '1',
           streamCommitmentId: 'stream-commitment-1',
           agreementBudgetFiscalYearId: '1',
           outcomeId: 'outcome-1',
@@ -602,7 +607,7 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
         },
         {
           allocationVersionId: 'version-1',
-          commitmentType: 'paye',
+          commitmentType: '2',
           streamCommitmentId: 'stream-commitment-2',
           agreementBudgetFiscalYearId: '2',
           outcomeId: 'outcome-1',
@@ -612,16 +617,16 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
       ]
     }
     const combinedConfig: GcsExtensionJsonConfig = {
-      enabledCommitmentTypes: ['commitment', 'paye'],
+      enabledCommitmentTypes: ['1', '2'],
       mappings: [
         {
-          commitmentType: 'commitment',
+          commitmentType: '1',
           outcomeId: 'outcome-1',
           streamBudgetId: 'stream-budget-1',
           streamCommitmentId: 'stream-commitment-1'
         },
         {
-          commitmentType: 'paye',
+          commitmentType: '2',
           outcomeId: 'outcome-1',
           streamBudgetId: 'stream-budget-2',
           streamCommitmentId: 'stream-commitment-2'
@@ -670,7 +675,7 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
       }],
       allocations: [{
         allocationVersionId: 'version-1',
-        commitmentType: 'commitment',
+        commitmentType: '1',
         streamCommitmentId: 'stream-commitment-1',
         agreementBudgetFiscalYearId: '1',
         outcomeId: 'outcome-1',
@@ -713,7 +718,7 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
       ...allocationResponse,
       allocations: [{
         allocationVersionId: 'version-1',
-        commitmentType: 'commitment',
+        commitmentType: '1',
         streamCommitmentId: 'stream-commitment-1',
         agreementBudgetFiscalYearId: '1',
         outcomeId: 'outcome-1',
@@ -721,7 +726,7 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
         allocationValue: 100
       }, {
         allocationVersionId: 'version-1',
-        commitmentType: 'paye',
+        commitmentType: '2',
         streamCommitmentId: 'stream-commitment-1',
         agreementBudgetFiscalYearId: '1',
         outcomeId: 'outcome-1',
@@ -773,7 +778,7 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
 
     const generateButton = findButton(wrapper, 'Generate rows')
     const saveButton = findButton(wrapper, 'Save')
-    const completeButton = findButton(wrapper, 'Complete')
+    const completeButton = findButton(wrapper, 'Submit for approval')
     expect(generateButton.attributes()).toHaveProperty('disabled')
     expect(saveButton.attributes()).toHaveProperty('disabled')
     expect(completeButton.attributes()).toHaveProperty('disabled')

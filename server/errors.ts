@@ -323,3 +323,15 @@ export const bilingualAllocationIssues = (
   message: getOutcomeCostAllocationErrorMessages(issue.code),
   code: issue.code
 }))
+
+/** Converts domain validation issues from host lifecycle adapters to a stable user error. */
+export const createAllocationValidationUserError = (
+  issues: AllocationValidationIssue[]
+) => {
+  const code = issues[0]?.code ?? 'GCS_OUTCOME_COST_ALLOCATION_INVALID'
+  return createLocalizedUserError({
+    code,
+    message: getOutcomeCostAllocationErrorMessages(code),
+    details: bilingualAllocationIssues(issues)
+  })
+}

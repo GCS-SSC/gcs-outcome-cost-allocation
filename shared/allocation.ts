@@ -1,7 +1,9 @@
 export const EXTENSION_KEY = 'gcs-outcome-cost-allocation'
 
-export const COMMITMENT_TYPES = ['commitment', 'paye', 'paye2', 'pyp'] as const
-export type CommitmentType = typeof COMMITMENT_TYPES[number]
+/** Stream-owned commitment-type identity. */
+export type CommitmentType = string
+/** @deprecated UI options are loaded from the stream-owned commitment-type API. */
+export const COMMITMENT_TYPES: CommitmentType[] = []
 
 export const ALLOCATION_METHODS = ['amount', 'percentage'] as const
 export type AllocationMethod = typeof ALLOCATION_METHODS[number]
@@ -143,7 +145,7 @@ const PERCENTAGE_DENOMINATOR = BigInt(1_000_000)
  * Checks whether a value is one of the commitment types supported by allocation generation.
  */
 export const isCommitmentType = (value: unknown): value is CommitmentType =>
-  typeof value === 'string' && COMMITMENT_TYPES.includes(value as CommitmentType)
+  typeof value === 'string' && /^\d+$/.test(value)
 
 /**
  * Converts a finite decimal number to a rounded scaled integer without binary half-cent drift.
@@ -319,7 +321,7 @@ const stableAllocationCoordinate = (
   allocation: OutcomeAllocationInput | undefined
 ): string => allocation
   ? [
-      allocation.commitmentType ?? 'commitment',
+      allocation.commitmentType ?? '',
       allocation.agreementBudgetFiscalYearId,
       allocation.outcomeId,
       allocation.streamCommitmentId

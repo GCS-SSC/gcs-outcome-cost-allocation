@@ -13,6 +13,7 @@ const routeMocks = vi.hoisted(() => ({
   getAllocationVersions: vi.fn(),
   getSavedAllocations: vi.fn(),
   getStreamCommitmentLines: vi.fn(),
+  getStreamCommitmentTypes: vi.fn(),
   saveAllocations: vi.fn()
 }))
 
@@ -43,6 +44,7 @@ vi.mock('../../server/allocation-data', () => ({
   getAllocationVersions: routeMocks.getAllocationVersions,
   getSavedAllocations: routeMocks.getSavedAllocations,
   getStreamCommitmentLines: routeMocks.getStreamCommitmentLines,
+  getStreamCommitmentTypes: routeMocks.getStreamCommitmentTypes,
   saveAllocations: routeMocks.saveAllocations
 }))
 
@@ -93,6 +95,7 @@ describe('outcome allocation routes', () => {
     routeMocks.getAllocationVersions.mockResolvedValue([])
     routeMocks.getSavedAllocations.mockResolvedValue([])
     routeMocks.getStreamCommitmentLines.mockResolvedValue([])
+    routeMocks.getStreamCommitmentTypes.mockResolvedValue([])
     routeMocks.saveAllocations.mockResolvedValue(undefined)
   })
 
@@ -164,6 +167,7 @@ describe('outcome allocation routes', () => {
     await expect(invokeRoute(route, createRouteContext())).resolves.toEqual({
       outcomes: [{ id: 'outcome-1' }],
       budgetYears: [{ id: 'year-1' }],
+      commitmentTypes: [],
       versions,
       allocations: [{ outcomeId: 'outcome-1' }],
       streamCommitments: [{ id: 'line-1' }]
@@ -201,7 +205,7 @@ describe('outcome allocation routes', () => {
       readBody: createReadBody({
         allocationVersionId: 'version-1',
         allocations: [{
-          commitmentType: 'commitment',
+          commitmentType: '1',
           streamCommitmentId: 'stream-commitment-1',
           agreementBudgetFiscalYearId: 'year-1',
           outcomeId: 'outcome-1',
@@ -217,7 +221,7 @@ describe('outcome allocation routes', () => {
       'agreement-1',
       'version-1',
       [{
-        commitmentType: 'commitment',
+        commitmentType: '1',
         streamCommitmentId: 'stream-commitment-1',
         agreementBudgetFiscalYearId: 'year-1',
         outcomeId: 'outcome-1',
@@ -244,7 +248,7 @@ describe('outcome allocation routes', () => {
       body: {
         allocationVersionId: 'version-1',
         allocations: [{
-          commitmentType: 'commitment',
+          commitmentType: '1',
           agreementBudgetFiscalYearId: 'year-1',
           outcomeId: 'outcome-1',
           allocationMethod: 'amount',
@@ -257,7 +261,7 @@ describe('outcome allocation routes', () => {
       body: {
         allocationVersionId: 'version-1',
         allocations: [{
-          commitmentType: 'commitment',
+          commitmentType: '1',
           streamCommitmentId: 'stream-commitment-1',
           agreementBudgetFiscalYearId: 'year-1',
           outcomeId: 'outcome-1',
@@ -271,7 +275,7 @@ describe('outcome allocation routes', () => {
       body: {
         allocationVersionId: 'version-1',
         allocations: [{
-          commitmentType: 'commitment',
+          commitmentType: '1',
           streamCommitmentId: 'stream-commitment-1',
           agreementBudgetFiscalYearId: 'year-1',
           outcomeId: 'outcome-1',
@@ -285,7 +289,7 @@ describe('outcome allocation routes', () => {
       body: {
         allocationVersionId: 'version-1',
         allocations: [{
-          commitmentType: 'commitment',
+          commitmentType: '1',
           streamCommitmentId: 'stream-commitment-1',
           agreementBudgetFiscalYearId: 'year-1',
           outcomeId: 'outcome-1',

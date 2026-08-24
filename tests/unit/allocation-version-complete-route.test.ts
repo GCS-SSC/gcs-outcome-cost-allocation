@@ -27,7 +27,7 @@ vi.mock('../../server/allocation-data', () => ({
 }))
 
 const allocations = [{
-  commitmentType: 'commitment' as const,
+  commitmentType: '1' as const,
   streamCommitmentId: 'stream-commitment-1',
   agreementBudgetFiscalYearId: 'year-1',
   outcomeId: 'outcome-1',
@@ -49,7 +49,7 @@ const buildContext = (
     allocationVersionId: 'allocation-version-1'
   },
   config: {
-    enabledCommitmentTypes: ['commitment']
+    enabledCommitmentTypes: ['1']
   },
   writeAuthorization: {
     lockAuthState: vi.fn(async () => undefined),

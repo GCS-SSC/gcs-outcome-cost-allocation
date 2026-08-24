@@ -15,15 +15,14 @@ import {
   ExtensionSaveButton,
   ExtensionSelect,
   ExtensionSelectMenu,
-  ExtensionStatusBadge,
   ExtensionTable,
+  useHostApi,
   useExtensionApi,
   useExtensionConfirmDialog,
   useExtensionI18n,
   useExtensionToast
 } from '@gcs-ssc/extensions/ui'
 import {
-  COMMITMENT_TYPES,
   EXACT_NUMERIC_19_4_MAX,
   type AllocationMethod,
   type AllocationVersionStatus,
@@ -37,8 +36,6 @@ import {
 } from '../shared/allocation'
 import {
   buildOutcomeAllocationRows,
-  completeOutcomeAllocationSelectedVersion,
-  completeOutcomeAllocationVersionRequest,
   deleteOutcomeAllocationDraftVersionRequest,
   type AllocationTableRow,
   type ConfiguredAssociationRow,
@@ -69,9 +66,12 @@ interface AllocationResponse {
     id: string
     stream_budget_id: string
     fiscal_year_display: string
-    gl: number
-    gl_description: string
+    label_en?: string
+    label_fr?: string
+    gl?: number
+    gl_description?: string
   }>
+  commitmentTypes: Array<{ id: string, label_en: string, label_fr: string }>
 }
 
 type AllocationOutcome = AllocationResponse['outcomes'][number]
@@ -100,13 +100,15 @@ const deletingVersionId: Ref<string> = ref('')
 const saveError: Ref<string> = ref('')
 const expandedRows: Ref<Record<string, boolean>> = ref({})
 const isGenerateModalOpen: Ref<boolean> = ref(false)
-const generationCommitmentType: Ref<CommitmentType> = ref('commitment')
+const generationCommitmentType: Ref<CommitmentType> = ref('')
 const generationYearIds: Ref<string[]> = ref([])
 const confirm = useExtensionConfirmDialog()
 const api = useExtensionApi(extensionKey)
+const hostApi = useHostApi()
 
 const endpoint = computed(() => `/agreements/${context.agreementId}/allocations`)
 const data: Ref<AllocationResponse | null> = ref(null)
+const selectedVersionHasCompletion: Ref<boolean> = ref(false)
 const status: Ref<'idle' | 'pending' | 'success' | 'error'> = ref('idle')
 const refresh = async () => {
   try {
@@ -135,10 +137,33 @@ const budgetYears = computed<AllocationBudgetYear[]>(() => data.value?.budgetYea
 const streamCommitments = computed<AllocationStreamCommitment[]>(() => data.value?.streamCommitments ?? [])
 const versions = computed<CostAllocationVersion[]>(() => data.value?.versions ?? [])
 const selectedVersion = computed<CostAllocationVersion | null>(() => versions.value.find((version: CostAllocationVersion) => version.id === selectedVersionId.value) ?? null)
-const canEditSelectedVersion = computed(() => selectedVersion.value?.status === 'draft')
+const canEditSelectedVersion = computed(() => selectedVersion.value?.status === 'draft' && !selectedVersionHasCompletion.value)
 const hasDraftVersion = computed(() => versions.value.some((version: CostAllocationVersion) => version.status === 'draft'))
 const isLoading = computed(() => status.value === 'pending')
 const streamConfig = computed(() => parseOutcomeCostAllocationConfig(config))
+
+const refreshSelectedCompletion = async () => {
+  const requestedVersionId = selectedVersionId.value
+  if (!requestedVersionId) {
+    selectedVersionHasCompletion.value = false
+    return
+  }
+  selectedVersionHasCompletion.value = true
+  try {
+    const query = new URLSearchParams({
+      entityType: 'gcs-outcome-cost-allocation:allocation-version',
+      entityId: requestedVersionId
+    })
+    const response = await hostApi.get<{ item: unknown | null }>(`/api/completions/runtime?${query.toString()}`)
+    if (requestedVersionId !== selectedVersionId.value) return
+    selectedVersionHasCompletion.value = response.item != null
+  } catch {
+    if (requestedVersionId !== selectedVersionId.value) return
+    selectedVersionHasCompletion.value = true
+  }
+}
+
+watch(selectedVersionId, refreshSelectedCompletion, { immediate: true })
 
 const methodOptions = computed(() => [
   { label: locale.value === 'fr' ? 'Montant' : 'Amount', value: 'amount' },
@@ -160,13 +185,6 @@ const generationYearOptions = computed(() => fundedBudgetYears.value.map((year: 
 const getOutcomeLabel = (outcome: AllocationOutcome) => locale.value === 'fr'
   ? outcome.label_fr
   : outcome.label_en
-
-const commitmentTypeLabels: Record<CommitmentType, { en: string, fr: string }> = {
-  commitment: { en: 'Commitment', fr: 'Engagement' },
-  paye: { en: 'PAYE', fr: 'CAFE' },
-  paye2: { en: 'PAYE 2', fr: 'CAFE 2' },
-  pyp: { en: 'PYP', fr: 'PAE' }
-}
 
 const allocationColumns = computed(() => [
   {
@@ -237,8 +255,10 @@ const getStatusColor = (statusValue: AllocationVersionStatus): BadgeColor => {
   return colors[statusValue]
 }
 
-const getCommitmentTypeLabel = (commitmentType: CommitmentType) =>
-  locale.value === 'fr' ? commitmentTypeLabels[commitmentType].fr : commitmentTypeLabels[commitmentType].en
+const getCommitmentTypeLabel = (commitmentType: CommitmentType) => {
+  const type = data.value?.commitmentTypes?.find(item => String(item.id) === commitmentType)
+  return type ? (locale.value === 'fr' ? type.label_fr : type.label_en) : commitmentType
+}
 
 const getOutcomeName = (outcomeId: string) => {
   const outcome = outcomes.value.find((item: AllocationOutcome) => String(item.id) === outcomeId)
@@ -247,7 +267,9 @@ const getOutcomeName = (outcomeId: string) => {
 
 const getCommitmentLineLabel = (streamCommitmentId: string) => {
   const commitment = streamCommitments.value.find((item: AllocationStreamCommitment) => String(item.id) === streamCommitmentId)
-  return commitment ? `GL ${commitment.gl} - ${commitment.gl_description}` : streamCommitmentId
+  if (!commitment) return streamCommitmentId
+  const localizedLabel = locale.value === 'fr' ? commitment.label_fr : commitment.label_en
+  return localizedLabel || (commitment.gl_description ? `GL ${commitment.gl ?? ''} - ${commitment.gl_description}` : streamCommitmentId)
 }
 
 const getYearForStreamBudget = (streamBudgetId: string) =>
@@ -284,7 +306,7 @@ const configuredAssociationRows = computed<ConfiguredAssociationRow[]>(() => str
     outcomeLabel: getOutcomeName(mapping.outcomeId)
   }]
 }).sort((a, b) => {
-  const typeCompare = COMMITMENT_TYPES.indexOf(a.commitmentType) - COMMITMENT_TYPES.indexOf(b.commitmentType)
+  const typeCompare = getCommitmentTypeLabel(a.commitmentType).localeCompare(getCommitmentTypeLabel(b.commitmentType))
   if (typeCompare !== 0) {
     return typeCompare
   }
@@ -305,7 +327,7 @@ const getAllocationKey = (allocation: {
   agreementBudgetFiscalYearId: string
   outcomeId: string
 }) => [
-  allocation.commitmentType ?? 'commitment',
+  allocation.commitmentType ?? '',
   allocation.agreementBudgetFiscalYearId,
   allocation.streamCommitmentId,
   allocation.outcomeId
@@ -351,8 +373,8 @@ const createHistoricalAssociationRow = (
 
   return {
     id: `historical:${allocation.allocationVersionId}:${getAllocationKey(allocation)}`,
-    commitmentType: allocation.commitmentType ?? 'commitment',
-    commitmentTypeLabel: getCommitmentTypeLabel(allocation.commitmentType ?? 'commitment'),
+    commitmentType: allocation.commitmentType ?? '',
+    commitmentTypeLabel: getCommitmentTypeLabel(allocation.commitmentType ?? ''),
     yearId: allocation.agreementBudgetFiscalYearId,
     yearLabel: useSnapshot && allocation.fiscalYearDisplay
       ? allocation.fiscalYearDisplay
@@ -397,7 +419,7 @@ const allocationRows = computed<AllocationTableRow[]>(() => buildOutcomeAllocati
 
 const getAllocation = (association: ConfiguredAssociationRow): VersionedOutcomeAllocationInput | null => allocations.value.find(allocation =>
   allocation.allocationVersionId === selectedVersionId.value
-  && allocation.commitmentType === association.commitmentType
+  && (allocation.commitmentType ?? '') === (association.commitmentType ?? '')
   && allocation.streamCommitmentId === association.streamCommitmentId
   && allocation.agreementBudgetFiscalYearId === association.yearId
   && allocation.outcomeId === association.outcomeId
@@ -645,7 +667,7 @@ const openGenerateRows = () => {
     return
   }
 
-  generationCommitmentType.value = streamConfig.value.enabledCommitmentTypes[0] ?? 'commitment'
+  generationCommitmentType.value = streamConfig.value.enabledCommitmentTypes[0] ?? ''
   generationYearIds.value = fundedBudgetYears.value.map((year: AllocationBudgetYear) => String(year.id))
   isGenerateModalOpen.value = true
 }
@@ -720,21 +742,31 @@ const save = async () => {
   }
 }
 
-const completeSelectedVersion = async () => completeOutcomeAllocationSelectedVersion({
-  isCompleting,
-  hasPendingMutation: hasPendingDraftMutation.value,
-  canEditSelectedVersion: canEditSelectedVersion.value,
-  selectedVersionId: selectedVersionId.value,
-  validationIssueCount: validationIssues.value.length,
-  validationMessage: validationMessage.value,
-  locale: locale.value,
-  saveError,
-  allocations: activeAllocations.value.map(allocation => ({ ...allocation })),
-  refresh,
-  buildCompleteRequestUrl: versionId => api.path(`${getOutcomeAllocationVersionEndpoint(endpoint.value, versionId)}/complete`),
-  toast,
-  completeRequest: completeOutcomeAllocationVersionRequest
-})
+const completeSelectedVersion = async () => {
+  if (isCompleting.value || hasPendingDraftMutation.value || !canEditSelectedVersion.value || !selectedVersionId.value) return
+  if (validationIssues.value.length > 0) {
+    toast.add({ title: getOutcomeAllocationToastText(locale.value, 'error').title, description: validationMessage.value, color: 'error' })
+    return
+  }
+  try {
+    isCompleting.value = true
+    saveError.value = ''
+    await saveOutcomeAllocationsRequest(api.path(endpoint.value), selectedVersionId.value, activeAllocations.value)
+    await hostApi.post('/api/completions/complete', {
+      entityType: 'gcs-outcome-cost-allocation:allocation-version',
+      entityId: selectedVersionId.value,
+      comments: null
+    })
+    selectedVersionHasCompletion.value = true
+    await refresh()
+    toast.add({ ...getOutcomeAllocationToastText(locale.value, 'submitted'), color: 'success' })
+  } catch (error: unknown) {
+    saveError.value = error instanceof Error ? error.message : String(error)
+    toast.add({ title: getOutcomeAllocationToastText(locale.value, 'error').title, description: saveError.value, color: 'error' })
+  } finally {
+    isCompleting.value = false
+  }
+}
 
 const createDraftVersion = async () => {
   if (isCreatingDraft.value) {
@@ -879,8 +911,8 @@ const text = {
     fr: 'Nouveau brouillon'
   },
   complete: {
-    en: 'Complete',
-    fr: 'Terminer'
+    en: 'Submit for approval',
+    fr: 'Soumettre pour approbation'
   },
   view: {
     en: 'View',
@@ -999,7 +1031,9 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
                 </div>
               </th>
               <td class="px-4 py-4">
-                <ExtensionStatusBadge enum-name="statuses" :status="version.status" />
+                <ExtensionBadge :color="getStatusColor(version.status)" variant="subtle">
+                  {{ getStatusLabel(version.status) }}
+                </ExtensionBadge>
               </td>
               <td class="px-4 py-4 font-semibold">
                 <span>

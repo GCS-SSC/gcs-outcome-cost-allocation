@@ -12,7 +12,6 @@ import {
   useExtensionI18n
 } from '@gcs-ssc/extensions/ui'
 import {
-  COMMITMENT_TYPES,
   type CommitmentType,
   type OutcomeCostAllocationConfig,
   type StreamCommitmentMapping,
@@ -42,9 +41,14 @@ interface StreamBudgetItem {
 interface StreamCommitmentItem {
   id: string
   egcs_tp_streambudget: string
-  egcs_tp_gl: number
-  egcs_tp_gldescription: string
+  egcs_tp_accountingdimensions: Array<{ label_en: string, label_fr: string, value: string }>
   fiscal_year_display: string
+}
+
+interface CommitmentTypeItem {
+  id: string
+  egcs_tp_name_en: string
+  egcs_tp_name_fr: string
 }
 
 interface AssociationDraft {
@@ -79,6 +83,7 @@ const isAssociationModalOpen: Ref<boolean> = ref(false)
 const outcomesResponse: Ref<ListResponse<OutcomeItem> | null> = ref(null)
 const budgetsResponse: Ref<ListResponse<StreamBudgetItem> | null> = ref(null)
 const commitmentsResponse: Ref<ListResponse<StreamCommitmentItem> | null> = ref(null)
+const commitmentTypesResponse: Ref<ListResponse<CommitmentTypeItem> | null> = ref(null)
 type FetchList = <T>(url: string) => Promise<ListResponse<T>>
 const fetchList: FetchList = async url => {
   try {
@@ -92,25 +97,28 @@ const refreshLookups = async () => {
     return
   }
 
-  const [outcomeItems, budgetItems, commitmentItems] = await Promise.all([
+  const [outcomeItems, budgetItems, commitmentItems, commitmentTypeItems] = await Promise.all([
     fetchList<OutcomeItem>(`/api/transfer-payments/${transferPaymentId}/outcomes?page=1&limit=100`),
     fetchList<StreamBudgetItem>(`/api/transfer-payments/${transferPaymentId}/streams/${streamId}/budgets?page=1&limit=100`),
-    fetchList<StreamCommitmentItem>(`/api/transfer-payments/${transferPaymentId}/streams/${streamId}/commitments?page=1&limit=100`)
+    fetchList<StreamCommitmentItem>(`/api/transfer-payments/${transferPaymentId}/streams/${streamId}/chart-of-accounts?page=1&limit=100`),
+    fetchList<CommitmentTypeItem>(`/api/transfer-payments/${transferPaymentId}/streams/${streamId}/commitment-types?page=1&limit=100`)
   ])
   outcomesResponse.value = outcomeItems
   budgetsResponse.value = budgetItems
   commitmentsResponse.value = commitmentItems
+  commitmentTypesResponse.value = commitmentTypeItems
 }
 await refreshLookups()
 
 const outcomes = computed<OutcomeItem[]>(() => outcomesResponse.value?.items ?? [])
 const budgets = computed<StreamBudgetItem[]>(() => budgetsResponse.value?.items ?? [])
 const commitments = computed<StreamCommitmentItem[]>(() => commitmentsResponse.value?.items ?? [])
+const commitmentTypes = computed<CommitmentTypeItem[]>(() => commitmentTypesResponse.value?.items ?? [])
 const isFrench = computed(() => locale.value === 'fr')
 
-const commitmentTypeOptions = computed(() => COMMITMENT_TYPES.map(type => ({
-  label: isFrench.value ? commitmentTypeLabels[type].fr : commitmentTypeLabels[type].en,
-  value: type
+const commitmentTypeOptions = computed(() => commitmentTypes.value.map(type => ({
+  label: isFrench.value ? type.egcs_tp_name_fr : type.egcs_tp_name_en,
+  value: String(type.id)
 })))
 
 const outcomeOptions = computed(() => outcomes.value.map((outcome: OutcomeItem) => ({
@@ -140,8 +148,14 @@ const mappingColumns = computed(() => [
   }
 ])
 
-const getCommitmentLineLabel = (commitment: StreamCommitmentItem) =>
-  `GL ${commitment.egcs_tp_gl} - ${commitment.egcs_tp_gldescription}`
+const getCommitmentLineLabel = (commitment: StreamCommitmentItem) => commitment.egcs_tp_accountingdimensions
+  .map(dimension => `${isFrench.value ? dimension.label_fr : dimension.label_en}: ${dimension.value}`)
+  .join(' · ')
+
+const getCommitmentTypeLabel = (typeId: string) => {
+  const type = commitmentTypes.value.find(item => String(item.id) === typeId)
+  return type ? (isFrench.value ? type.egcs_tp_name_fr : type.egcs_tp_name_en) : typeId
+}
 
 const outcomeLabel = (outcome: OutcomeItem) => isFrench.value
   ? outcome.egcs_tp_name_fr
@@ -157,9 +171,7 @@ const getBudgetDisplay = (streamBudgetId: string) =>
 
 const associationRows = computed<StreamOutcomeAssociationTableRow[]>(() => localConfig.value.mappings.map(mapping => {
   const commitment = findCommitment(mapping.streamCommitmentId)
-  const commitmentTypeLabel = isFrench.value
-    ? commitmentTypeLabels[mapping.commitmentType].fr
-    : commitmentTypeLabels[mapping.commitmentType].en
+  const commitmentTypeLabel = getCommitmentTypeLabel(mapping.commitmentType)
 
   return {
     id: `${mapping.commitmentType}:${mapping.streamBudgetId}:${mapping.outcomeId}:${mapping.streamCommitmentId}`,
@@ -173,7 +185,7 @@ const associationRows = computed<StreamOutcomeAssociationTableRow[]>(() => local
     outcomeLabel: getOutcomeName(mapping.outcomeId)
   }
 }).sort((a, b) => {
-  const typeCompare = COMMITMENT_TYPES.indexOf(a.commitmentType) - COMMITMENT_TYPES.indexOf(b.commitmentType)
+  const typeCompare = getCommitmentTypeLabel(a.commitmentType).localeCompare(getCommitmentTypeLabel(b.commitmentType))
   if (typeCompare !== 0) {
     return typeCompare
   }
@@ -205,12 +217,12 @@ const findCommitment = (streamCommitmentId: string) =>
   commitments.value.find((commitment: StreamCommitmentItem) => String(commitment.id) === streamCommitmentId) ?? null
 
 const syncEnabledCommitmentTypes = (mappings: StreamCommitmentMapping[]) =>
-  COMMITMENT_TYPES.filter(type => mappings.some(mapping => mapping.commitmentType === type))
+  [...new Set(mappings.map(mapping => mapping.commitmentType))]
 
 const openCreateAssociation = (streamCommitmentId = '') => {
   selectedAssociation.value = {
     streamCommitmentId: streamCommitmentId || String(commitments.value[0]?.id ?? ''),
-    commitmentType: COMMITMENT_TYPES[0],
+    commitmentType: String(commitmentTypes.value[0]?.id ?? ''),
     outcomeId: String(outcomes.value[0]?.id ?? '')
   }
   isAssociationModalOpen.value = true
@@ -238,9 +250,9 @@ const saveAssociation = () => {
   }
   const mappings = [
     ...localConfig.value.mappings.filter(mapping =>
-      mapping.commitmentType !== nextMapping.commitmentType
+      mapping.streamCommitmentId !== nextMapping.streamCommitmentId
+      || mapping.commitmentType !== nextMapping.commitmentType
       || mapping.outcomeId !== nextMapping.outcomeId
-      || mapping.streamBudgetId !== nextMapping.streamBudgetId
     ),
     nextMapping
   ]
@@ -296,13 +308,6 @@ watch(config, value => {
   lastSyncedConfigJson.value = nextConfigJson
   localConfig.value = nextConfig
 }, { deep: true })
-
-const commitmentTypeLabels: Record<CommitmentType, { en: string, fr: string }> = {
-  commitment: { en: 'Commitment', fr: 'Engagement' },
-  paye: { en: 'PAYE', fr: 'CAFE' },
-  paye2: { en: 'PAYE 2', fr: 'CAFE 2' },
-  pyp: { en: 'PYP', fr: 'PAE' }
-}
 
 const text = {
   title: {
@@ -448,7 +453,7 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
         </template>
       </ExtensionTable>
       <div class="border-t border-zinc-200 px-4 py-3 text-xs font-bold tracking-widest text-zinc-400 uppercase dark:border-zinc-800">
-        {{ tableRows.length }} {{ tLocal('records') }}
+        {{ localConfig.mappings.length }} {{ tLocal('records') }}
       </div>
     </div>
 

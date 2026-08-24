@@ -1,4 +1,4 @@
-import { COMMITMENT_TYPES, type CommitmentType } from './allocation'
+import type { CommitmentType } from './allocation'
 
 export interface StreamOutcomeAssociationTableRow {
   id: string
@@ -46,7 +46,7 @@ export const buildStreamOutcomeAllocationTableRows = (
 ): StreamOutcomeHierarchyTableRow[] => {
   const rows: StreamOutcomeHierarchyTableRow[] = []
 
-  for (const commitmentType of COMMITMENT_TYPES) {
+  for (const commitmentType of [...new Set(associations.map(row => row.commitmentType))]) {
     const typeRows = associations.filter(row => row.commitmentType === commitmentType)
     if (typeRows.length === 0) {
       continue

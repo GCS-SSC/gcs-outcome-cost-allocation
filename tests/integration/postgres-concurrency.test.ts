@@ -237,7 +237,7 @@ const seedDraftScenario = async (
 
   const version = await createDraftAllocationVersion(db, String(agreementId))
   const allocation = {
-    commitmentType: 'commitment' as const,
+    commitmentType: '1' as const,
     streamCommitmentId: '10',
     agreementBudgetFiscalYearId: stableBudgetYearId,
     outcomeId: '30',
@@ -253,9 +253,9 @@ const seedDraftScenario = async (
 }
 
 const streamTwoAllocationConfig = {
-  enabledCommitmentTypes: ['commitment'],
+  enabledCommitmentTypes: ['1'],
   mappings: [{
-    commitmentType: 'commitment',
+    commitmentType: '1',
     outcomeId: '30',
     streamBudgetId: '70',
     streamCommitmentId: '10'
@@ -417,7 +417,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         "Funding_Case_Agreement_Payment",
         "Funding_Case_Agreement_Commitment_Line",
         "Funding_Case_Agreement_Commitment",
-        "Transfer_Payment_Stream_Commitment",
+        "Transfer_Payment_Stream_Chart_of_Account",
         "Transfer_Payment_Stream_Budget",
         "Transfer_Payment_Stream",
         "Transfer_Payment_Fiscal_Year_Budget",
@@ -529,7 +529,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
       )
     `.execute(observerDb)
     await sql`
-      CREATE TABLE "Transfer_Payment_Stream_Commitment" (
+      CREATE TABLE "Transfer_Payment_Stream_Chart_of_Account" (
         id bigint PRIMARY KEY,
         egcs_tp_streambudget bigint NOT NULL,
         egcs_tp_transferpaymentstream bigint NOT NULL,
@@ -553,7 +553,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         id bigint PRIMARY KEY,
         egcs_fc_commitment bigint NOT NULL,
         egcs_fc_commitmentlinenumber smallint NOT NULL,
-        egcs_fc_transferpaymentstreamcommitment bigint NOT NULL,
+        egcs_fc_transferpaymentstreamchartofaccount bigint NOT NULL,
         egcs_fc_amount numeric(19, 2) NOT NULL,
         _deleted boolean NOT NULL DEFAULT false
       )
@@ -757,7 +757,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         (74, 64, 6)
     `.execute(observerDb)
     await sql`
-      INSERT INTO "Transfer_Payment_Stream_Commitment" (
+      INSERT INTO "Transfer_Payment_Stream_Chart_of_Account" (
         id,
         egcs_tp_streambudget,
         egcs_tp_transferpaymentstream,
@@ -798,9 +798,9 @@ describe('outcome allocation PostgreSQL concurrency', () => {
           'gcs-outcome-cost-allocation',
           true,
           ${JSON.stringify({
-            enabledCommitmentTypes: ['commitment'],
+            enabledCommitmentTypes: ['1'],
             mappings: [{
-              commitmentType: 'commitment',
+              commitmentType: '1',
               outcomeId: '34',
               streamBudgetId: '74',
               streamCommitmentId: '14'
@@ -857,7 +857,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         ADD CONSTRAINT test_tp_stream_budget_stream_fk
         FOREIGN KEY (egcs_tp_transferpaymentstream)
         REFERENCES "Transfer_Payment_Stream" (id) ON DELETE RESTRICT;
-      ALTER TABLE "Transfer_Payment_Stream_Commitment"
+      ALTER TABLE "Transfer_Payment_Stream_Chart_of_Account"
         ADD CONSTRAINT test_tp_stream_commitment_budget_fk
         FOREIGN KEY (egcs_tp_streambudget)
         REFERENCES "Transfer_Payment_Stream_Budget" (id) ON DELETE RESTRICT,
@@ -873,8 +873,8 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         FOREIGN KEY (egcs_fc_commitment)
         REFERENCES "Funding_Case_Agreement_Commitment" (id) ON DELETE RESTRICT,
         ADD CONSTRAINT test_fc_commitment_line_stream_commitment_fk
-        FOREIGN KEY (egcs_fc_transferpaymentstreamcommitment)
-        REFERENCES "Transfer_Payment_Stream_Commitment" (id) ON DELETE RESTRICT;
+        FOREIGN KEY (egcs_fc_transferpaymentstreamchartofaccount)
+        REFERENCES "Transfer_Payment_Stream_Chart_of_Account" (id) ON DELETE RESTRICT;
       ALTER TABLE "Funding_Case_Agreement_Payment"
         ADD CONSTRAINT test_fc_payment_commitment_fk
         FOREIGN KEY (egcs_fc_fundingagreementcommitment)
@@ -961,7 +961,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         .values({
           allocation_version_id: String(createdVersion.id),
           agreement_id: '4',
-          commitment_type: 'commitment',
+          commitment_type: '1',
           stream_commitment_id: '12',
           agreement_budget_fiscal_year_id: budgetYearStableId(24),
           outcome_id: '32',
@@ -978,9 +978,9 @@ describe('outcome allocation PostgreSQL concurrency', () => {
       '4',
       String(version.id),
       {
-        enabledCommitmentTypes: ['commitment'],
+        enabledCommitmentTypes: ['1'],
         mappings: [{
-          commitmentType: 'commitment',
+          commitmentType: '1',
           outcomeId: '32',
           streamBudgetId: '72',
           streamCommitmentId: '12'
@@ -1011,11 +1011,11 @@ describe('outcome allocation PostgreSQL concurrency', () => {
       observerDb,
       '4',
       '4',
-      'commitment',
+      '1',
       {
-        enabledCommitmentTypes: ['commitment'],
+        enabledCommitmentTypes: ['1'],
         mappings: [{
-          commitmentType: 'commitment',
+          commitmentType: '1',
           outcomeId: '32',
           streamBudgetId: '72',
           streamCommitmentId: '12'
@@ -1076,7 +1076,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
 
   it('locks one funding view through validation and snapshot under READ COMMITTED', async () => {
     const allocation = {
-      commitmentType: 'commitment' as const,
+      commitmentType: '1' as const,
       streamCommitmentId: '12',
       agreementBudgetFiscalYearId: budgetYearStableId(24),
       outcomeId: '32',
@@ -1084,9 +1084,9 @@ describe('outcome allocation PostgreSQL concurrency', () => {
       allocationValue: 100
     }
     const config = {
-      enabledCommitmentTypes: ['commitment'],
+      enabledCommitmentTypes: ['1'],
       mappings: [{
-        commitmentType: 'commitment',
+        commitmentType: '1',
         outcomeId: '32',
         streamBudgetId: '72',
         streamCommitmentId: '12'
@@ -1206,7 +1206,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
       .values({
         allocation_version_id: String(version.id),
         agreement_id: '5',
-        commitment_type: 'commitment',
+        commitment_type: '1',
         stream_commitment_id: '13',
         agreement_budget_fiscal_year_id: budgetYearStableId(26),
         outcome_id: '33',
@@ -1232,7 +1232,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
       .values({
         allocation_version_id: String(version.id),
         agreement_id: '5',
-        commitment_type: 'paye',
+        commitment_type: '2',
         stream_commitment_id: '13',
         agreement_budget_fiscal_year_id: budgetYearStableId(26),
         outcome_id: '33',
@@ -1259,7 +1259,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
       .values({
         allocation_version_id: String(version.id),
         agreement_id: '6',
-        commitment_type: 'paye',
+        commitment_type: '2',
         stream_commitment_id: '13',
         agreement_budget_fiscal_year_id: budgetYearStableId(26),
         outcome_id: '33',
@@ -1275,7 +1275,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
       .values({
         allocation_version_id: String(version.id),
         agreement_id: '5',
-        commitment_type: 'paye',
+        commitment_type: '2',
         stream_commitment_id: '14',
         agreement_budget_fiscal_year_id: budgetYearStableId(28),
         outcome_id: '34',
@@ -1384,7 +1384,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
       .values({
         id: '100',
         egcs_fc_fundingagreement: '5',
-        egcs_fc_type: 'commitment',
+        egcs_fc_type: '1',
         egcs_fc_status: 'draft',
         egcs_fc_financialsystemnumber: null,
         _deleted: false
@@ -1396,7 +1396,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         id: '100',
         egcs_fc_commitment: '100',
         egcs_fc_commitmentlinenumber: 1,
-        egcs_fc_transferpaymentstreamcommitment: '13',
+        egcs_fc_transferpaymentstreamchartofaccount: '13',
         egcs_fc_amount: 100,
         _deleted: false
       })
@@ -1406,7 +1406,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
       .values({
         id: '102',
         egcs_fc_fundingagreement: '5',
-        egcs_fc_type: 'commitment',
+        egcs_fc_type: '1',
         egcs_fc_status: 'draft',
         egcs_fc_financialsystemnumber: null,
         _deleted: false
@@ -1418,7 +1418,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         id: '102',
         egcs_fc_commitment: '102',
         egcs_fc_commitmentlinenumber: 1,
-        egcs_fc_transferpaymentstreamcommitment: '13',
+        egcs_fc_transferpaymentstreamchartofaccount: '13',
         egcs_fc_amount: 99,
         _deleted: false
       })
@@ -1428,7 +1428,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
       .values({
         id: '101',
         egcs_fc_fundingagreement: '6',
-        egcs_fc_type: 'commitment',
+        egcs_fc_type: '1',
         egcs_fc_status: 'draft',
         egcs_fc_financialsystemnumber: null,
         _deleted: false
@@ -1440,7 +1440,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         id: '101',
         egcs_fc_commitment: '101',
         egcs_fc_commitmentlinenumber: 1,
-        egcs_fc_transferpaymentstreamcommitment: '14',
+        egcs_fc_transferpaymentstreamchartofaccount: '14',
         egcs_fc_amount: 100,
         _deleted: false
       })
@@ -1646,7 +1646,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
             .values({
               id: '250',
               egcs_fc_fundingagreement: '25',
-              egcs_fc_type: 'commitment',
+              egcs_fc_type: '1',
               egcs_fc_status: 'draft',
               egcs_fc_financialsystemnumber: null,
               _deleted: false
@@ -2095,14 +2095,14 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         egcs_fc_type,
         egcs_fc_status,
         egcs_fc_financialsystemnumber
-      ) VALUES (210, 21, 'commitment', 'draft', NULL)
+      ) VALUES (210, 21, '1', 'draft', NULL)
     `.execute(observerDb)
     await sql`
       INSERT INTO "Funding_Case_Agreement_Commitment_Line" (
         id,
         egcs_fc_commitment,
         egcs_fc_commitmentlinenumber,
-        egcs_fc_transferpaymentstreamcommitment,
+        egcs_fc_transferpaymentstreamchartofaccount,
         egcs_fc_amount
       ) VALUES (210, 210, 1, 10, 100)
     `.execute(observerDb)
@@ -2206,7 +2206,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         egcs_tp_transferpaymentbudget,
         egcs_tp_transferpaymentstream
       ) VALUES (78, 68, 12);
-      INSERT INTO "Transfer_Payment_Stream_Commitment" (
+      INSERT INTO "Transfer_Payment_Stream_Chart_of_Account" (
         id,
         egcs_tp_streambudget,
         egcs_tp_transferpaymentstream,
@@ -2218,12 +2218,12 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         egcs_fc_fundingagreement,
         egcs_fc_type,
         egcs_fc_status
-      ) VALUES (190, 12, 'commitment', 'inprogress');
+      ) VALUES (190, 12, '1', 'inprogress');
       INSERT INTO "Funding_Case_Agreement_Commitment_Line" (
         id,
         egcs_fc_commitment,
         egcs_fc_commitmentlinenumber,
-        egcs_fc_transferpaymentstreamcommitment,
+        egcs_fc_transferpaymentstreamchartofaccount,
         egcs_fc_amount
       ) VALUES (190, 190, 1, 20, 100)
     `.execute(observerDb)
@@ -2239,7 +2239,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         .values({
           allocation_version_id: String(version.id),
           agreement_id: '12',
-          commitment_type: 'commitment',
+          commitment_type: '1',
           stream_commitment_id: '20',
           agreement_budget_fiscal_year_id: budgetYearStableId(35),
           outcome_id: '38',
@@ -2358,8 +2358,8 @@ describe('outcome allocation PostgreSQL concurrency', () => {
           db: trx as unknown as GcsExtensionAgreementPaymentMutationGuardHookPayload['db'],
           agreementId: '12',
           paymentId: '190',
-          currentStatus: 'inprogress',
-          nextStatus: 'pendingapproval'
+          currentStatusId: 'inprogress',
+          nextStatusId: 'pendingapproval'
         })
         await trx
           .updateTable('Funding_Case_Agreement_Payment')
@@ -2452,14 +2452,14 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         egcs_fc_type,
         egcs_fc_status,
         egcs_fc_financialsystemnumber
-      ) VALUES (240, 24, 'commitment', 'draft', NULL)
+      ) VALUES (240, 24, '1', 'draft', NULL)
     `.execute(observerDb)
     await sql`
       INSERT INTO "Funding_Case_Agreement_Commitment_Line" (
         id,
         egcs_fc_commitment,
         egcs_fc_commitmentlinenumber,
-        egcs_fc_transferpaymentstreamcommitment,
+        egcs_fc_transferpaymentstreamchartofaccount,
         egcs_fc_amount
       ) VALUES (240, 240, 1, 10, 100)
     `.execute(observerDb)
@@ -2634,8 +2634,8 @@ describe('outcome allocation PostgreSQL concurrency', () => {
     const description = 'Long allocation commitment description '.repeat(20)
     try {
       await observerDb
-        .updateTable('Transfer_Payment_Stream_Commitment')
-        .set({ egcs_tp_gldescription: description })
+        .updateTable('Transfer_Payment_Stream_Chart_of_Account')
+        .set({ egcs_tp_accountingdimensions: [{ label_en: 'G/L', label_fr: 'G/L', value: '5000' }, { label_en: 'Description', label_fr: 'Description', value: description }] })
         .where('id', '=', '10')
         .execute()
       await expect(completeAllocationVersion(
@@ -2659,8 +2659,8 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         .where('status', '=', 'active')
         .execute())
       await observerDb
-        .updateTable('Transfer_Payment_Stream_Commitment')
-        .set({ egcs_tp_gldescription: 'Program' })
+        .updateTable('Transfer_Payment_Stream_Chart_of_Account')
+        .set({ egcs_tp_accountingdimensions: [{ label_en: 'G/L', label_fr: 'G/L', value: '5000' }] })
         .where('id', '=', '10')
         .execute()
     }
@@ -2787,16 +2787,16 @@ describe('outcome allocation PostgreSQL concurrency', () => {
 
   it('serializes draft edits and deletion against completion without lock inversion', async () => {
     const allocationConfig = {
-      enabledCommitmentTypes: ['commitment'],
+      enabledCommitmentTypes: ['1'],
       mappings: [{
-        commitmentType: 'commitment',
+        commitmentType: '1',
         outcomeId: '32',
         streamBudgetId: '72',
         streamCommitmentId: '12'
       }]
     }
     const allocation = {
-      commitmentType: 'commitment' as const,
+      commitmentType: '1' as const,
       streamCommitmentId: '12',
       agreementBudgetFiscalYearId: budgetYearStableId(24),
       outcomeId: '32',
@@ -2918,7 +2918,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         .values({
           allocation_version_id: String(createdVersion.id),
           agreement_id: '2',
-          commitment_type: 'commitment',
+          commitment_type: '1',
           stream_commitment_id: '10',
           agreement_budget_fiscal_year_id: budgetYearStableId(20),
           outcome_id: '30',
@@ -2930,16 +2930,16 @@ describe('outcome allocation PostgreSQL concurrency', () => {
     })
 
     const allocationConfig = {
-      enabledCommitmentTypes: ['commitment'],
+      enabledCommitmentTypes: ['1'],
       mappings: [{
-        commitmentType: 'commitment',
+        commitmentType: '1',
         outcomeId: '30',
         streamBudgetId: '70',
         streamCommitmentId: '10'
       }]
     }
     await observerDb
-      .updateTable('Transfer_Payment_Stream_Commitment')
+      .updateTable('Transfer_Payment_Stream_Chart_of_Account')
       .set({ egcs_tp_streambudget: '71' })
       .where('id', '=', '10')
       .execute()
@@ -2955,7 +2955,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
       }]
     })
     await observerDb
-      .updateTable('Transfer_Payment_Stream_Commitment')
+      .updateTable('Transfer_Payment_Stream_Chart_of_Account')
       .set({ egcs_tp_streambudget: '70' })
       .where('id', '=', '10')
       .execute()
@@ -2974,7 +2974,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
 
     const deleting = holderDb.transaction().execute(async trx => {
       await trx
-        .updateTable('Transfer_Payment_Stream_Commitment')
+        .updateTable('Transfer_Payment_Stream_Chart_of_Account')
         .set({ _deleted: true })
         .where('id', '=', '10')
         .execute()
@@ -3014,7 +3014,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
       expect(rejectedVersion.status).toBe('draft')
 
       await observerDb
-        .updateTable('Transfer_Payment_Stream_Commitment')
+        .updateTable('Transfer_Payment_Stream_Chart_of_Account')
         .set({ _deleted: false })
         .where('id', '=', '10')
         .execute()
@@ -3029,7 +3029,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
       })
 
       await expect(observerDb
-        .updateTable('Transfer_Payment_Stream_Commitment')
+        .updateTable('Transfer_Payment_Stream_Chart_of_Account')
         .set({ egcs_tp_streambudget: '71' })
         .where('id', '=', '10')
         .execute()).rejects.toMatchObject({
@@ -3037,8 +3037,8 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         constraint: 'gcs_outcome_cost_allocation_active_stream_commitment_guard'
       })
       await expect(observerDb
-        .updateTable('Transfer_Payment_Stream_Commitment')
-        .set({ egcs_tp_gldescription: 'Updated program description' })
+        .updateTable('Transfer_Payment_Stream_Chart_of_Account')
+        .set({ egcs_tp_accountingdimensions: [{ label_en: 'G/L', label_fr: 'G/L', value: '5000' }, { label_en: 'Description', label_fr: 'Description', value: 'Updated program description' }] })
         .where('id', '=', '10')
         .execute()).resolves.toBeDefined()
       await observerDb
@@ -3065,7 +3065,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
       ])
 
       await expect(observerDb
-        .updateTable('Transfer_Payment_Stream_Commitment')
+        .updateTable('Transfer_Payment_Stream_Chart_of_Account')
         .set({ _deleted: true })
         .where('id', '=', '10')
         .execute()).rejects.toMatchObject({
@@ -3124,7 +3124,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         egcs_tp_transferpaymentbudget,
         egcs_tp_transferpaymentstream
       ) VALUES (76, 66, 10);
-      INSERT INTO "Transfer_Payment_Stream_Commitment" (
+      INSERT INTO "Transfer_Payment_Stream_Chart_of_Account" (
         id,
         egcs_tp_streambudget,
         egcs_tp_transferpaymentstream,
@@ -3148,7 +3148,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         .values({
           allocation_version_id: String(createdVersion.id),
           agreement_id: '10',
-          commitment_type: 'commitment',
+          commitment_type: '1',
           stream_commitment_id: '17',
           agreement_budget_fiscal_year_id: budgetYearStableId(32),
           outcome_id: '36',
@@ -3159,9 +3159,9 @@ describe('outcome allocation PostgreSQL concurrency', () => {
       return createdVersion
     })
     const config = {
-      enabledCommitmentTypes: ['commitment'],
+      enabledCommitmentTypes: ['1'],
       mappings: [{
-        commitmentType: 'commitment',
+        commitmentType: '1',
         outcomeId: '36',
         streamBudgetId: '76',
         streamCommitmentId: '17'
@@ -3314,7 +3314,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         egcs_tp_transferpaymentbudget,
         egcs_tp_transferpaymentstream
       ) VALUES (77, 67, 11);
-      INSERT INTO "Transfer_Payment_Stream_Commitment" (
+      INSERT INTO "Transfer_Payment_Stream_Chart_of_Account" (
         id,
         egcs_tp_streambudget,
         egcs_tp_transferpaymentstream,
@@ -3328,12 +3328,12 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         egcs_fc_fundingagreement,
         egcs_fc_type,
         egcs_fc_status
-      ) VALUES (180, 11, 'commitment', 'inprogress');
+      ) VALUES (180, 11, '1', 'inprogress');
       INSERT INTO "Funding_Case_Agreement_Commitment_Line" (
         id,
         egcs_fc_commitment,
         egcs_fc_commitmentlinenumber,
-        egcs_fc_transferpaymentstreamcommitment,
+        egcs_fc_transferpaymentstreamchartofaccount,
         egcs_fc_amount
       ) VALUES
         (181, 180, 2, 19, 50),
@@ -3355,7 +3355,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
           {
             allocation_version_id: String(version.id),
             agreement_id: '11',
-            commitment_type: 'commitment',
+            commitment_type: '1',
             stream_commitment_id: '18',
             agreement_budget_fiscal_year_id: budgetYearStableId(34),
             outcome_id: '37',
@@ -3372,7 +3372,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
           {
             allocation_version_id: String(version.id),
             agreement_id: '11',
-            commitment_type: 'commitment',
+            commitment_type: '1',
             stream_commitment_id: '19',
             agreement_budget_fiscal_year_id: budgetYearStableId(34),
             outcome_id: '37',
@@ -3460,7 +3460,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         .values({
           allocation_version_id: String(createdVersion.id),
           agreement_id: '3',
-          commitment_type: 'commitment',
+          commitment_type: '1',
           stream_commitment_id: '11',
           agreement_budget_fiscal_year_id: budgetYearStableId(22),
           outcome_id: '31',
@@ -3490,9 +3490,9 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         '3',
         String(version.id),
         {
-          enabledCommitmentTypes: ['commitment'],
+          enabledCommitmentTypes: ['1'],
           mappings: [{
-            commitmentType: 'commitment',
+            commitmentType: '1',
             outcomeId: '31',
             streamBudgetId: '71',
             streamCommitmentId: '11'
@@ -3507,7 +3507,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
     try {
       await waitForLatchOrTask(activationReady.promise, activating, 'Allocation activation')
       deleting = waiterDb
-        .updateTable('Transfer_Payment_Stream_Commitment')
+        .updateTable('Transfer_Payment_Stream_Chart_of_Account')
         .set({ _deleted: true })
         .where('id', '=', '11')
         .execute()
@@ -3699,7 +3699,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         egcs_fc_fundingagreementbudgetfiscalyear,
         egcs_fc_programfunding
       ) VALUES (299, '00000000-0000-4000-8000-000000000299', 100);
-      INSERT INTO "Transfer_Payment_Stream_Commitment" (
+      INSERT INTO "Transfer_Payment_Stream_Chart_of_Account" (
         id,
         egcs_tp_streambudget,
         egcs_tp_transferpaymentstream,
@@ -3709,9 +3709,9 @@ describe('outcome allocation PostgreSQL concurrency', () => {
     `.execute(observerDb)
     const version = await createDraftAllocationVersion(observerDb, '99')
     const config = {
-      enabledCommitmentTypes: ['commitment'],
+      enabledCommitmentTypes: ['1'],
       mappings: [{
-        commitmentType: 'commitment',
+        commitmentType: '1',
         outcomeId: '299',
         streamBudgetId: '70',
         streamCommitmentId: '299'
@@ -3724,7 +3724,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
       .where('extension_key', '=', 'gcs-outcome-cost-allocation')
       .execute()
     await saveAllocations(observerDb, '99', version.id, [{
-      commitmentType: 'commitment',
+      commitmentType: '1',
       streamCommitmentId: '299',
       agreementBudgetFiscalYearId: budgetYearStableId(299),
       outcomeId: '299',

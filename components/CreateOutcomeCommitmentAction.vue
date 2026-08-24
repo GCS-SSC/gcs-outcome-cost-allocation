@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type { Ref } from 'vue'
 import type {
   ExtensionEntityTabContext,
@@ -16,16 +16,14 @@ import {
   useExtensionI18n,
   useExtensionToast
 } from '@gcs-ssc/extensions/ui'
-import {
-  COMMITMENT_TYPES,
-  type CommitmentType
-} from '../shared/allocation'
+import { type CommitmentType, parseOutcomeCostAllocationConfig } from '../shared/allocation'
 
 const {
   agreementId,
   label,
   icon = 'i-lucide-plus',
-  onCreated
+  onCreated,
+  config
 } = defineProps<{
   extensionKey: string
   operation: GcsExtensionCreateOperation
@@ -46,20 +44,28 @@ const toast = useExtensionToast()
 const hostApi = useHostApi()
 const isOpen: Ref<boolean> = ref(false)
 const isSaving: Ref<boolean> = ref(false)
-const selectedType: Ref<CommitmentType> = ref('commitment')
+const parsedConfig = parseOutcomeCostAllocationConfig(config)
+const configuredTypes = computed(() => parsedConfig.enabledCommitmentTypes)
+const selectedType: Ref<CommitmentType> = ref(parsedConfig.enabledCommitmentTypes[0] ?? '')
 const errorMessage: Ref<string> = ref('')
+const commitmentTypes: Ref<Array<{ id: string, label_en: string, label_fr: string }>> = ref([])
 
-const commitmentTypeLabels: Record<CommitmentType, { en: string, fr: string }> = {
-  commitment: { en: 'Commitment', fr: 'Engagement' },
-  paye: { en: 'PAYE', fr: 'CAFE' },
-  paye2: { en: 'PAYE 2', fr: 'CAFE 2' },
-  pyp: { en: 'PYP', fr: 'PAE' }
-}
-
-const typeOptions = computed(() => COMMITMENT_TYPES.map(type => ({
-  label: locale.value === 'fr' ? commitmentTypeLabels[type].fr : commitmentTypeLabels[type].en,
+const typeOptions = computed(() => configuredTypes.value.map(type => ({
+  label: commitmentTypes.value.find(item => item.id === type)?.[locale.value === 'fr' ? 'label_fr' : 'label_en'] ?? type,
   value: type
 })))
+
+watch(isOpen, async open => {
+  if (!open || commitmentTypes.value.length > 0) return
+  try {
+    const response = await hostApi.get<{ commitmentTypes: Array<{ id: string, label_en: string, label_fr: string }> }>(
+      `/api/extensions/gcs-outcome-cost-allocation/agreements/${agreementId}/allocations`
+    )
+    commitmentTypes.value = response.commitmentTypes
+  } catch {
+    commitmentTypes.value = []
+  }
+})
 
 const buttonLabel = computed(() => locale.value === 'fr' ? label.fr : label.en)
 const isFrench = computed(() => locale.value === 'fr')
@@ -166,7 +172,7 @@ const resolveErrorMessage = (error: unknown): string => {
  * Creates the selected commitment type, closing and notifying the host only after a successful request.
  */
 const createCommitment = async () => {
-  if (isSaving.value) {
+  if (isSaving.value || !selectedType.value) {
     return
   }
 
@@ -226,7 +232,7 @@ const createCommitment = async () => {
             color="primary"
             class="cursor-default"
             :loading="isSaving"
-            :disabled="isSaving"
+            :disabled="isSaving || !selectedType"
             @click="createCommitment" />
         </div>
       </div>

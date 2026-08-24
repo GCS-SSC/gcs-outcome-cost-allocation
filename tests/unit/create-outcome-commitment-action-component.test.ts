@@ -53,7 +53,7 @@ describe('outcome cost allocation commitment action', () => {
           fr: 'Ajouter un engagement reparti'
         },
         mode: 'replace',
-        config: {},
+        config: { enabledCommitmentTypes: ['1'], mappings: [] },
         rbac: {
           subject: 'agreement',
           action: 'update'

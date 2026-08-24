@@ -48,9 +48,35 @@ export interface StreamCommitmentLine {
   id: string
   stream_budget_id: string
   fiscal_year_display: string
-  gl: number
-  gl_description: string
+  label_en: string
+  label_fr: string
+  /** @deprecated Compatibility fields accepted from older extension fixtures. */
+  gl?: number
+  /** @deprecated Compatibility fields accepted from older extension fixtures. */
+  gl_description?: string
 }
+
+export interface StreamCommitmentType {
+  id: string
+  label_en: string
+  label_fr: string
+}
+
+/** Lists stream-owned commitment types used as stable allocation dimensions. */
+export const getStreamCommitmentTypes = async (
+  db: OutcomeCostAllocationDb,
+  streamId: string
+): Promise<StreamCommitmentType[]> => (await db
+  .selectFrom('Transfer_Payment_Stream_Commitment_Type')
+  .where('egcs_tp_transferpaymentstream', '=', streamId)
+  .where('_deleted', '=', false)
+  .select(['id', 'egcs_tp_name_en', 'egcs_tp_name_fr'])
+  .orderBy('id', 'asc')
+  .execute()).map(row => ({
+  id: String(row.id),
+  label_en: row.egcs_tp_name_en,
+  label_fr: row.egcs_tp_name_fr
+}))
 
 type GeneratedAllocationLine = {
   allocation: OutcomeAllocationResolved
@@ -93,7 +119,26 @@ interface LockedAgreementAllocationContext extends AgreementAllocationScope {
   transferPaymentProfileId: string
 }
 
-const PAYMENT_COVERAGE_EXCLUDED_STATUSES = ['denied']
+const paymentHasNoNegativeWorkflowOutcome = sql<boolean>`NOT EXISTS (
+  SELECT 1
+  FROM "Common_Completion" completion
+  JOIN "Common_Workflow_Run" workflow
+    ON workflow.egcs_cn_completion = completion.id
+  JOIN "Common_Runtime" runtime
+    ON runtime.id = workflow.id
+   AND runtime._deleted = false
+  WHERE completion.egcs_cn_entitytype = 'fundingcasepayment'
+    AND completion.egcs_cn_entityid = "Funding_Case_Agreement_Payment".id
+    AND completion._deleted = false
+    AND runtime.egcs_cn_attempt = (
+      SELECT MAX(latest.egcs_cn_attempt)
+      FROM "Common_Workflow_Run" latest_run
+      JOIN "Common_Runtime" latest ON latest.id = latest_run.id
+      WHERE latest_run.egcs_cn_completion = completion.id
+        AND latest._deleted = false
+    )
+    AND runtime.egcs_cn_state IN ('unsuccessful', 'denied', 'failed', 'cancelled')
+)`
 
 const allocationCoordinateKey = (allocation: {
   commitmentType?: CommitmentType
@@ -101,7 +146,7 @@ const allocationCoordinateKey = (allocation: {
   agreementBudgetFiscalYearId: string
   outcomeId: string
 }) => [
-  allocation.commitmentType ?? 'commitment',
+  allocation.commitmentType ?? '',
   allocation.streamCommitmentId,
   allocation.agreementBudgetFiscalYearId,
   allocation.outcomeId
@@ -172,6 +217,26 @@ const getAllocationVersionForUpdate = async (
   allocationVersionId: string
 ): Promise<AllocationVersionRow | null> =>
   await getAllocationVersionRow(db, agreementId, allocationVersionId, true)
+
+const assertAllocationVersionNotCompleted = async (
+  db: OutcomeCostAllocationDb,
+  allocationVersionId: string,
+  errorCode: string
+): Promise<void> => {
+  const completion = await db
+    .selectFrom('Common_Completion')
+    .where('egcs_cn_entitytype', '=', 'gcs-outcome-cost-allocation:allocation-version')
+    .where('egcs_cn_entityid', '=', allocationVersionId)
+    .where('_deleted', '=', false)
+    .select('id')
+    .executeTakeFirst()
+  if (completion) {
+    throw createOutcomeCostAllocationUserError(
+      errorCode,
+      'allocationVersionId'
+    )
+  }
+}
 
 /**
  * Serializes allocation lifecycle work for one agreement for the duration of the caller's transaction.
@@ -770,6 +835,7 @@ export const deleteDraftAllocationVersion = async (
   if (!version || version.status !== 'draft') {
     throw createOutcomeCostAllocationUserError('GCS_OUTCOME_COST_ALLOCATION_DRAFT_DELETE_REQUIRED', 'allocationVersionId')
   }
+  await assertAllocationVersionNotCompleted(trx, allocationVersionId, 'GCS_OUTCOME_COST_ALLOCATION_DRAFT_DELETE_REQUIRED')
 
   await trx
     .updateTable('extensions.gcs_outcome_cost_allocation_allocations')
@@ -886,7 +952,7 @@ export const getSavedAllocations = async (
 
   return rows.map(row => ({
     allocationVersionId: String(row.allocation_version_id),
-    commitmentType: isCommitmentType(row.commitment_type) ? row.commitment_type : 'commitment',
+    commitmentType: String(row.commitment_type),
     streamCommitmentId: String(row.stream_commitment_id),
     agreementBudgetFiscalYearId: String(row.agreement_budget_fiscal_year_id),
     outcomeId: String(row.outcome_id),
@@ -898,11 +964,11 @@ export const getSavedAllocations = async (
     ...(row.funding_basis_amount === null || row.funding_basis_amount === undefined
       ? {}
       : { fundingBasisAmount: Number(row.funding_basis_amount) }),
-    outcomeLabelEn: row.outcome_label_en,
-    outcomeLabelFr: row.outcome_label_fr,
-    commitmentLabelEn: row.commitment_label_en,
-    commitmentLabelFr: row.commitment_label_fr,
-    fiscalYearDisplay: row.fiscal_year_display
+    ...(row.outcome_label_en === null || row.outcome_label_en === undefined ? {} : { outcomeLabelEn: row.outcome_label_en }),
+    ...(row.outcome_label_fr === null || row.outcome_label_fr === undefined ? {} : { outcomeLabelFr: row.outcome_label_fr }),
+    ...(row.commitment_label_en === null || row.commitment_label_en === undefined ? {} : { commitmentLabelEn: row.commitment_label_en }),
+    ...(row.commitment_label_fr === null || row.commitment_label_fr === undefined ? {} : { commitmentLabelFr: row.commitment_label_fr }),
+    ...(row.fiscal_year_display === null || row.fiscal_year_display === undefined ? {} : { fiscalYearDisplay: row.fiscal_year_display })
   }))
 }
 
@@ -913,11 +979,11 @@ export const getStreamCommitmentLines = async (
   db: OutcomeCostAllocationDb,
   streamId: string
 ): Promise<StreamCommitmentLine[]> => await db
-  .selectFrom('Transfer_Payment_Stream_Commitment')
+  .selectFrom('Transfer_Payment_Stream_Chart_of_Account')
   .innerJoin(
     'Transfer_Payment_Stream_Budget',
     'Transfer_Payment_Stream_Budget.id',
-    'Transfer_Payment_Stream_Commitment.egcs_tp_streambudget'
+    'Transfer_Payment_Stream_Chart_of_Account.egcs_tp_streambudget'
   )
   .innerJoin(
     'Transfer_Payment_Fiscal_Year_Budget',
@@ -929,20 +995,28 @@ export const getStreamCommitmentLines = async (
     'Agency_Fiscal_Year.id',
     'Transfer_Payment_Fiscal_Year_Budget.egcs_tp_fiscalyear'
   )
-  .where('Transfer_Payment_Stream_Commitment.egcs_tp_transferpaymentstream', '=', streamId)
-  .where('Transfer_Payment_Stream_Commitment._deleted', '=', false)
+  .where('Transfer_Payment_Stream_Chart_of_Account.egcs_tp_transferpaymentstream', '=', streamId)
+  .where('Transfer_Payment_Stream_Chart_of_Account._deleted', '=', false)
   .where('Transfer_Payment_Stream_Budget._deleted', '=', false)
   .where('Transfer_Payment_Fiscal_Year_Budget._deleted', '=', false)
   .where('Agency_Fiscal_Year._deleted', '=', false)
   .select([
-    'Transfer_Payment_Stream_Commitment.id as id',
-    'Transfer_Payment_Stream_Commitment.egcs_tp_streambudget as stream_budget_id',
+    'Transfer_Payment_Stream_Chart_of_Account.id as id',
+    'Transfer_Payment_Stream_Chart_of_Account.egcs_tp_streambudget as stream_budget_id',
     'Agency_Fiscal_Year.egcs_ay_fiscalyeardisplay as fiscal_year_display',
-    'Transfer_Payment_Stream_Commitment.egcs_tp_gl as gl',
-    'Transfer_Payment_Stream_Commitment.egcs_tp_gldescription as gl_description'
+    sql<string>`COALESCE((
+      SELECT string_agg(concat(dimension->>'label_en', ': ', dimension->>'value'), ' · ' ORDER BY ordinal)
+      FROM jsonb_array_elements("Transfer_Payment_Stream_Chart_of_Account".egcs_tp_accountingdimensions)
+        WITH ORDINALITY AS dimensions(dimension, ordinal)
+    ), '')`.as('label_en'),
+    sql<string>`COALESCE((
+      SELECT string_agg(concat(dimension->>'label_fr', ' : ', dimension->>'value'), ' · ' ORDER BY ordinal)
+      FROM jsonb_array_elements("Transfer_Payment_Stream_Chart_of_Account".egcs_tp_accountingdimensions)
+        WITH ORDINALITY AS dimensions(dimension, ordinal)
+    ), '')`.as('label_fr')
   ])
   .orderBy('Agency_Fiscal_Year.egcs_ay_fiscalyear', 'asc')
-  .orderBy('Transfer_Payment_Stream_Commitment.egcs_tp_gl', 'asc')
+  .orderBy('Transfer_Payment_Stream_Chart_of_Account.id', 'asc')
   .execute()
 
 /**
@@ -954,6 +1028,7 @@ const replaceDraftAllocations = async (
   allocationVersionId: string,
   allocations: OutcomeAllocationInput[]
 ) => {
+  await assertAllocationVersionNotCompleted(db, allocationVersionId, 'GCS_OUTCOME_COST_ALLOCATION_DRAFT_EDIT_REQUIRED')
   const version = await getAllocationVersionForUpdate(
     db,
     agreementId,
@@ -978,7 +1053,7 @@ const replaceDraftAllocations = async (
       .values(allocations.map(allocation => ({
         allocation_version_id: allocationVersionId,
         agreement_id: agreementId,
-        commitment_type: allocation.commitmentType ?? 'commitment',
+        commitment_type: allocation.commitmentType ?? '',
         stream_commitment_id: allocation.streamCommitmentId,
         agreement_budget_fiscal_year_id: allocation.agreementBudgetFiscalYearId,
         outcome_id: allocation.outcomeId,
@@ -1118,12 +1193,12 @@ const getPaidCommitmentLineCoverage = async (
     .where('Funding_Case_Agreement_Commitment_Line._deleted', '=', false)
     .where('Funding_Case_Agreement_Payment_Line._deleted', '=', false)
     .where('Funding_Case_Agreement_Payment._deleted', '=', false)
-    .where('Funding_Case_Agreement_Payment.egcs_fc_status', 'not in', PAYMENT_COVERAGE_EXCLUDED_STATUSES)
+    .where(paymentHasNoNegativeWorkflowOutcome)
     .select([
       'Funding_Case_Agreement_Commitment_Line.id as commitment_line_id',
       'Funding_Case_Agreement_Commitment.egcs_fc_type as commitment_type',
       'Funding_Case_Agreement_Payment.egcs_fc_fiscalyear as agreement_budget_fiscal_year_id',
-      'Funding_Case_Agreement_Commitment_Line.egcs_fc_transferpaymentstreamcommitment as stream_commitment_id',
+      'Funding_Case_Agreement_Commitment_Line.egcs_fc_transferpaymentstreamchartofaccount as stream_commitment_id',
       'Funding_Case_Agreement_Payment_Line.egcs_fc_amount as paid_amount'
     ])
     .execute()
@@ -1301,7 +1376,7 @@ export const generatedPaymentStatusResurrectionExceedsCoverage = async (
       .where('Funding_Case_Agreement_Payment_Line.egcs_fc_fundingagreementpayment', '!=', paymentId)
       .where('Funding_Case_Agreement_Payment_Line._deleted', '=', false)
       .where('Funding_Case_Agreement_Payment._deleted', '=', false)
-      .where('Funding_Case_Agreement_Payment.egcs_fc_status', 'not in', PAYMENT_COVERAGE_EXCLUDED_STATUSES)
+      .where(paymentHasNoNegativeWorkflowOutcome)
       .select(sql<number>`COALESCE(SUM(${sql.ref('Funding_Case_Agreement_Payment_Line.egcs_fc_amount')}), 0)`.as('paid_amount'))
       .executeTakeFirst()
 
@@ -1326,7 +1401,7 @@ const validateAllocationCommitmentMappings = async (
 ): Promise<AllocationValidationIssue[]> => {
   const parsedConfig = parseOutcomeCostAllocationConfig(config)
   const disabledTypeIssues = allocations.flatMap((allocation, index) => {
-    const commitmentType = allocation.commitmentType ?? 'commitment'
+    const commitmentType = allocation.commitmentType ?? ''
     return parsedConfig.enabledCommitmentTypes.includes(commitmentType)
       ? []
       : [{
@@ -1407,8 +1482,8 @@ const snapshotAllocationEconomics = async (
       'Funding_Case_Agreement_Budget_Fiscal_Year.egcs_fc_fiscalyear'
     )
     .innerJoin(
-      'Transfer_Payment_Stream_Commitment',
-      'Transfer_Payment_Stream_Commitment.id',
+      'Transfer_Payment_Stream_Chart_of_Account',
+      'Transfer_Payment_Stream_Chart_of_Account.id',
       'extensions.gcs_outcome_cost_allocation_allocations.stream_commitment_id'
     )
     .where('extensions.gcs_outcome_cost_allocation_allocations.agreement_id', '=', agreementId)
@@ -1417,7 +1492,7 @@ const snapshotAllocationEconomics = async (
     .where('Transfer_Payment_Outcome._deleted', '=', false)
     .where('Funding_Case_Agreement_Budget_Fiscal_Year._deleted', '=', false)
     .where('Agency_Fiscal_Year._deleted', '=', false)
-    .where('Transfer_Payment_Stream_Commitment._deleted', '=', false)
+    .where('Transfer_Payment_Stream_Chart_of_Account._deleted', '=', false)
     .select([
       'extensions.gcs_outcome_cost_allocation_allocations.id as allocation_id',
       'extensions.gcs_outcome_cost_allocation_allocations.commitment_type',
@@ -1427,23 +1502,30 @@ const snapshotAllocationEconomics = async (
       'Transfer_Payment_Outcome.egcs_tp_name_en as outcome_label_en',
       'Transfer_Payment_Outcome.egcs_tp_name_fr as outcome_label_fr',
       'Agency_Fiscal_Year.egcs_ay_fiscalyeardisplay as fiscal_year_display',
-      'Transfer_Payment_Stream_Commitment.egcs_tp_gl as commitment_gl',
-      'Transfer_Payment_Stream_Commitment.egcs_tp_gldescription as commitment_description'
+      sql<string>`COALESCE((
+        SELECT string_agg(concat(dimension->>'label_en', ': ', dimension->>'value'), ' · ' ORDER BY ordinal)
+        FROM jsonb_array_elements("Transfer_Payment_Stream_Chart_of_Account".egcs_tp_accountingdimensions)
+          WITH ORDINALITY AS dimensions(dimension, ordinal)
+      ), '')`.as('commitment_label_en'),
+      sql<string>`COALESCE((
+        SELECT string_agg(concat(dimension->>'label_fr', ' : ', dimension->>'value'), ' · ' ORDER BY ordinal)
+        FROM jsonb_array_elements("Transfer_Payment_Stream_Chart_of_Account".egcs_tp_accountingdimensions)
+          WITH ORDINALITY AS dimensions(dimension, ordinal)
+      ), '')`.as('commitment_label_fr')
     ])
     .execute()
 
   for (const row of rows) {
-    const commitmentLabel = `GL ${Number(row.commitment_gl)} - ${row.commitment_description}`
     await db
       .updateTable('extensions.gcs_outcome_cost_allocation_allocations')
       .set({
         outcome_label_en: row.outcome_label_en,
         outcome_label_fr: row.outcome_label_fr,
-        commitment_label_en: commitmentLabel,
-        commitment_label_fr: commitmentLabel,
+        commitment_label_en: row.commitment_label_en,
+        commitment_label_fr: row.commitment_label_fr,
         fiscal_year_display: row.fiscal_year_display,
         resolved_amount: resolvedAmountByCoordinate.get(allocationCoordinateKey({
-          commitmentType: isCommitmentType(row.commitment_type) ? row.commitment_type : 'commitment',
+          commitmentType: String(row.commitment_type),
           streamCommitmentId: String(row.stream_commitment_id),
           agreementBudgetFiscalYearId: String(row.agreement_budget_fiscal_year_id),
           outcomeId: String(row.outcome_id)
@@ -1469,7 +1551,8 @@ export const completeAllocationVersionInTransaction = async (
   streamId: string,
   allocationVersionId: string,
   config: unknown,
-  expectedScope: AgreementAllocationScope
+  expectedScope: AgreementAllocationScope,
+  activate = true
 ): Promise<CostAllocationVersion> => {
   const lockedContext = await lockAgreementAllocationLifecycleContext(db, agreementId, expectedScope)
   if (lockedContext.streamId !== streamId) {
@@ -1547,6 +1630,21 @@ export const completeAllocationVersionInTransaction = async (
     budgetYears
   )
 
+  if (!activate) {
+    const prepared = await db
+      .updateTable('extensions.gcs_outcome_cost_allocation_versions')
+      .set({ funding_basis_amount: fundingBasisAmount })
+      .where('id', '=', allocationVersionId)
+      .where('agreement_id', '=', agreementId)
+      .where('status', '=', 'draft')
+      .where('_deleted', '=', false)
+      .returning([
+        'id', 'agreement_id', 'version_number', 'status', 'created_at', 'completed_at', 'funding_basis_amount'
+      ])
+      .executeTakeFirstOrThrow()
+    return mapAllocationVersion(prepared)
+  }
+
   await db
     .updateTable('extensions.gcs_outcome_cost_allocation_versions')
     .set({
@@ -1581,6 +1679,40 @@ export const completeAllocationVersionInTransaction = async (
     .executeTakeFirstOrThrow()
 
   return mapAllocationVersion(completed)
+}
+
+/** Promotes a completion-validated allocation version after host Workflow success. */
+export const activateAllocationVersionInTransaction = async (
+  db: OutcomeCostAllocationDb,
+  agreementId: string,
+  allocationVersionId: string
+): Promise<void> => {
+  await lockAgreementAllocationLifecycleContext(db, agreementId)
+  const target = await db
+    .selectFrom('extensions.gcs_outcome_cost_allocation_versions')
+    .where('id', '=', allocationVersionId)
+    .where('agreement_id', '=', agreementId)
+    .where('_deleted', '=', false)
+    .select(['id', 'status'])
+    .forUpdate()
+    .executeTakeFirstOrThrow()
+  if (target.status === 'active') return
+  await db
+    .updateTable('extensions.gcs_outcome_cost_allocation_versions')
+    .set({ status: 'inactive', completed_at: sql`COALESCE(completed_at, now())` })
+    .where('agreement_id', '=', agreementId)
+    .where('id', '!=', allocationVersionId)
+    .where('status', '=', 'active')
+    .where('_deleted', '=', false)
+    .execute()
+  await db
+    .updateTable('extensions.gcs_outcome_cost_allocation_versions')
+    .set({ status: 'active', completed_at: sql`now()` })
+    .where('id', '=', allocationVersionId)
+    .where('agreement_id', '=', agreementId)
+    .where('status', '=', 'draft')
+    .where('_deleted', '=', false)
+    .executeTakeFirstOrThrow()
 }
 
 /**
@@ -1675,7 +1807,7 @@ export const getActiveStreamCommitmentBudgetIds = async (
   lockForShare = false
 ): Promise<Map<string, string>> => {
   let query = db
-    .selectFrom('Transfer_Payment_Stream_Commitment')
+    .selectFrom('Transfer_Payment_Stream_Chart_of_Account')
     .where('egcs_tp_transferpaymentstream', '=', streamId)
     .where('_deleted', '=', false)
     .select([
@@ -1922,12 +2054,12 @@ const getCommitmentLineCoverage = async (
       )
       .on('extensions.gcs_outcome_cost_allocation_commitment_lines._deleted', '=', false))
     .where('Funding_Case_Agreement_Commitment_Line.egcs_fc_commitment', '=', commitmentId)
-    .where('Funding_Case_Agreement_Commitment_Line.egcs_fc_transferpaymentstreamcommitment', 'in', Array.from(desiredStreamCommitmentIds))
+    .where('Funding_Case_Agreement_Commitment_Line.egcs_fc_transferpaymentstreamchartofaccount', 'in', Array.from(desiredStreamCommitmentIds))
     .where('Funding_Case_Agreement_Commitment_Line._deleted', '=', false)
     .select([
       'Funding_Case_Agreement_Commitment_Line.id as id',
       'Funding_Case_Agreement_Commitment_Line.egcs_fc_commitmentlinenumber as line_number',
-      'Funding_Case_Agreement_Commitment_Line.egcs_fc_transferpaymentstreamcommitment as stream_commitment_id',
+      'Funding_Case_Agreement_Commitment_Line.egcs_fc_transferpaymentstreamchartofaccount as stream_commitment_id',
       'Funding_Case_Agreement_Commitment_Line.egcs_fc_amount as amount',
       'extensions.gcs_outcome_cost_allocation_commitment_lines.allocation_version_id as provenance_version_id',
       'extensions.gcs_outcome_cost_allocation_commitment_lines.agreement_budget_fiscal_year_id as provenance_year_id',
@@ -1983,7 +2115,7 @@ const getCommitmentLineCoverage = async (
         .where('Funding_Case_Agreement_Payment_Line.egcs_fc_fundingagreementcommitmentline', 'in', commitmentLines.map(line => String(line.id)))
         .where('Funding_Case_Agreement_Payment_Line._deleted', '=', false)
         .where('Funding_Case_Agreement_Payment._deleted', '=', false)
-        .where('Funding_Case_Agreement_Payment.egcs_fc_status', 'not in', PAYMENT_COVERAGE_EXCLUDED_STATUSES)
+        .where(paymentHasNoNegativeWorkflowOutcome)
         .select([
           'Funding_Case_Agreement_Payment_Line.egcs_fc_fundingagreementcommitmentline as commitment_line_id',
           sql<number>`COALESCE(SUM(${sql.ref('Funding_Case_Agreement_Payment_Line.egcs_fc_amount')}), 0)`.as('paid_amount')
@@ -2049,7 +2181,7 @@ const getRecordedCommitmentPaymentLineInputs = async (
     )
     .where('Funding_Case_Agreement_Payment_Line._deleted', '=', false)
     .where('Funding_Case_Agreement_Payment._deleted', '=', false)
-    .where('Funding_Case_Agreement_Payment.egcs_fc_status', 'not in', PAYMENT_COVERAGE_EXCLUDED_STATUSES)
+    .where(paymentHasNoNegativeWorkflowOutcome)
     .select([
       'Funding_Case_Agreement_Payment_Line.egcs_fc_fundingagreementcommitmentline as commitment_line_id',
       sql<number>`COALESCE(SUM(${sql.ref('Funding_Case_Agreement_Payment_Line.egcs_fc_amount')}), 0)`.as('paid_amount')

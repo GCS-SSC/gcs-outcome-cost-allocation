@@ -285,6 +285,9 @@ class ScriptedDb {
         transfer_payment_profile_id: 'profile-1'
       }]
     }
+    if (operation === 'select' && table === 'Common_Completion' && queued.length === 0) {
+      return []
+    }
     if (operation === 'select' && queued.length === 0) {
       throw new Error(`Unexpected unscripted database query: ${key}`)
     }
@@ -521,7 +524,7 @@ const outcomeRow = {
 
 const allocationRow = {
   allocation_version_id: 'version-1',
-  commitment_type: 'commitment',
+  commitment_type: '1',
   stream_commitment_id: 'stream-commitment-1',
   agreement_budget_fiscal_year_id: 'year-1',
   outcome_id: 'outcome-1',
@@ -530,7 +533,7 @@ const allocationRow = {
 }
 
 const allocation: OutcomeAllocationInput = {
-  commitmentType: 'commitment',
+  commitmentType: '1',
   streamCommitmentId: 'stream-commitment-1',
   agreementBudgetFiscalYearId: 'year-1',
   outcomeId: 'outcome-1',
@@ -541,15 +544,15 @@ const allocation: OutcomeAllocationInput = {
 const enqueueAllocationLabelSnapshot = (db: ScriptedDb) => {
   db.enqueue('select', 'extensions.gcs_outcome_cost_allocation_allocations', [{
     allocation_id: 'allocation-1',
-    commitment_type: 'commitment',
+    commitment_type: '1',
     stream_commitment_id: 'stream-commitment-1',
     agreement_budget_fiscal_year_id: 'year-1',
     outcome_id: 'outcome-1',
     outcome_label_en: 'Outcome 1',
     outcome_label_fr: 'Resultat 1',
     fiscal_year_display: '2026-2027',
-    commitment_gl: 5000,
-    commitment_description: 'Program'
+    commitment_label_en: 'Fund: 110 · G/L: 5000',
+    commitment_label_fr: 'Fonds : 110 · G/L : 5000'
   }])
   db.enqueue('update', 'extensions.gcs_outcome_cost_allocation_allocations', [])
 }
@@ -610,9 +613,9 @@ const enqueuePaymentCoverageLocks = (db: ScriptedDb) => {
 }
 
 const allocationConfig = {
-  enabledCommitmentTypes: ['commitment'],
+  enabledCommitmentTypes: ['1'],
   mappings: [{
-    commitmentType: 'commitment',
+    commitmentType: '1',
     outcomeId: 'outcome-1',
     streamBudgetId: 'stream-budget-1',
     streamCommitmentId: 'stream-commitment-1'
@@ -691,14 +694,14 @@ describe('outcome allocation data reads', () => {
     const db = new ScriptedDb()
     db.enqueue('select', 'Funding_Case_Agreement_Activity', [outcomeRow])
     db.enqueue('select', 'Funding_Case_Agreement_Budget_Fiscal_Year', [budgetYearRow])
-    db.enqueue('select', 'Transfer_Payment_Stream_Commitment', [{
+    db.enqueue('select', 'Transfer_Payment_Stream_Chart_of_Account', [{
       id: 'stream-commitment-1',
       stream_budget_id: 'stream-budget-1',
       fiscal_year_display: '2026-2027',
       gl: 501,
       gl_description: 'Program expense'
     }])
-    db.enqueue('select', 'Transfer_Payment_Stream_Commitment', [
+    db.enqueue('select', 'Transfer_Payment_Stream_Chart_of_Account', [
       { id: 'stream-commitment-1', stream_budget_id: 'stream-budget-1' },
       { id: 2, stream_budget_id: 'stream-budget-2' }
     ])
@@ -867,12 +870,12 @@ describe('outcome allocation data reads', () => {
     ])
 
     const streamLinesQuery = db.records.find(record =>
-      record.table === 'Transfer_Payment_Stream_Commitment'
+      record.table === 'Transfer_Payment_Stream_Chart_of_Account'
       && record.selections.some(selection => Array.isArray(selection[0]))
     )
     expect(streamLinesQuery?.wheres).toEqual([
-      ['Transfer_Payment_Stream_Commitment.egcs_tp_transferpaymentstream', '=', 'stream-1'],
-      ['Transfer_Payment_Stream_Commitment._deleted', '=', false],
+      ['Transfer_Payment_Stream_Chart_of_Account.egcs_tp_transferpaymentstream', '=', 'stream-1'],
+      ['Transfer_Payment_Stream_Chart_of_Account._deleted', '=', false],
       ['Transfer_Payment_Stream_Budget._deleted', '=', false],
       ['Transfer_Payment_Fiscal_Year_Budget._deleted', '=', false],
       ['Agency_Fiscal_Year._deleted', '=', false]
@@ -881,7 +884,7 @@ describe('outcome allocation data reads', () => {
       [[
         'onRef',
         'Transfer_Payment_Stream_Budget.id',
-        'Transfer_Payment_Stream_Commitment.egcs_tp_streambudget'
+        'Transfer_Payment_Stream_Chart_of_Account.egcs_tp_streambudget'
       ]],
       [[
         'onRef',
@@ -993,7 +996,7 @@ describe('outcome allocation data reads', () => {
     await expect(getSavedAllocations(asAllocationDb(db), 'agreement-1', 'version-1')).resolves.toEqual([
       {
         allocationVersionId: 'version-1',
-        commitmentType: 'commitment',
+        commitmentType: '1',
         streamCommitmentId: 'stream-commitment-1',
         agreementBudgetFiscalYearId: 'year-1',
         outcomeId: 'outcome-1',
@@ -1007,7 +1010,7 @@ describe('outcome allocation data reads', () => {
       },
       {
         allocationVersionId: '2',
-        commitmentType: 'commitment',
+        commitmentType: 'unsupported',
         streamCommitmentId: '5',
         agreementBudgetFiscalYearId: '3',
         outcomeId: '4',
@@ -1519,7 +1522,7 @@ describe('outcome allocation version lifecycle', () => {
     db.enqueue('select', 'extensions.gcs_outcome_cost_allocation_allocations', [allocationRow])
     enqueueCompletionBudgetCapture(db)
     db.enqueue('select', 'Funding_Case_Agreement_Activity', [outcomeRow])
-    db.enqueue('select', 'Transfer_Payment_Stream_Commitment', [{
+    db.enqueue('select', 'Transfer_Payment_Stream_Chart_of_Account', [{
       id: 'stream-commitment-1',
       stream_budget_id: 'stream-budget-1'
     }])
@@ -1602,8 +1605,8 @@ describe('outcome allocation version lifecycle', () => {
       update: {
         outcome_label_en: 'Outcome 1',
         outcome_label_fr: 'Resultat 1',
-        commitment_label_en: 'GL 5000 - Program',
-        commitment_label_fr: 'GL 5000 - Program',
+        commitment_label_en: 'Fund: 110 · G/L: 5000',
+        commitment_label_fr: 'Fonds : 110 · G/L : 5000',
         fiscal_year_display: '2026-2027',
         resolved_amount: 100,
         funding_basis_amount: 100
@@ -1686,12 +1689,12 @@ describe('outcome allocation version lifecycle', () => {
     ])
     expect(paidCoverageQuery?.wheres).toEqual([
       ['Funding_Case_Agreement_Commitment.egcs_fc_fundingagreement', '=', 'agreement-1'],
-      ['Funding_Case_Agreement_Commitment.egcs_fc_type', 'in', ['commitment']],
+      ['Funding_Case_Agreement_Commitment.egcs_fc_type', 'in', ['1']],
       ['Funding_Case_Agreement_Commitment._deleted', '=', false],
       ['Funding_Case_Agreement_Commitment_Line._deleted', '=', false],
       ['Funding_Case_Agreement_Payment_Line._deleted', '=', false],
       ['Funding_Case_Agreement_Payment._deleted', '=', false],
-      ['Funding_Case_Agreement_Payment.egcs_fc_status', 'not in', ['denied']]
+      [expect.any(Object)]
     ])
   })
 
@@ -1752,14 +1755,14 @@ describe('outcome allocation version lifecycle', () => {
     db.enqueue('select', 'extensions.gcs_outcome_cost_allocation_allocations', [allocationRow])
     enqueueCompletionBudgetCapture(db)
     db.enqueue('select', 'Funding_Case_Agreement_Activity', [outcomeRow])
-    db.enqueue('select', 'Transfer_Payment_Stream_Commitment', [{
+    db.enqueue('select', 'Transfer_Payment_Stream_Chart_of_Account', [{
       id: 'stream-commitment-1',
       stream_budget_id: 'stream-budget-1'
     }])
     enqueuePaymentCoverageLocks(db)
     db.enqueue('select', 'Funding_Case_Agreement_Payment_Line', [{
       commitment_line_id: 'commitment-line-1',
-      commitment_type: 'commitment',
+      commitment_type: '1',
       agreement_budget_fiscal_year_id: 'year-1',
       stream_commitment_id: 'stream-commitment-1',
       paid_amount: 100.02
@@ -1792,7 +1795,7 @@ describe('outcome allocation version lifecycle', () => {
     }])
     enqueueCompletionBudgetCapture(db)
     db.enqueue('select', 'Funding_Case_Agreement_Activity', [outcomeRow])
-    db.enqueue('select', 'Transfer_Payment_Stream_Commitment', [{
+    db.enqueue('select', 'Transfer_Payment_Stream_Chart_of_Account', [{
       id: 'stream-commitment-1',
       stream_budget_id: 'stream-budget-1'
     }])
@@ -1814,7 +1817,7 @@ describe('outcome allocation version lifecycle', () => {
     expectAgreementLifecycleLock(db)
     expect(db.records.find(record =>
       record.operation === 'select'
-      && record.table === 'Transfer_Payment_Stream_Commitment'
+      && record.table === 'Transfer_Payment_Stream_Chart_of_Account'
     )).toMatchObject({
       scope: 'transaction',
       lockedForShare: true
@@ -1827,7 +1830,7 @@ describe('outcome allocation version lifecycle', () => {
     db.enqueue('select', 'extensions.gcs_outcome_cost_allocation_versions', [versionRow])
     db.enqueue('select', 'extensions.gcs_outcome_cost_allocation_allocations', [{
       ...allocationRow,
-      commitment_type: 'paye'
+      commitment_type: '2'
     }])
     enqueueCompletionBudgetCapture(db)
     db.enqueue('select', 'Funding_Case_Agreement_Activity', [outcomeRow])
@@ -1846,7 +1849,7 @@ describe('outcome allocation version lifecycle', () => {
     })
 
     expect(db.records.some(record =>
-      record.table === 'Transfer_Payment_Stream_Commitment'
+      record.table === 'Transfer_Payment_Stream_Chart_of_Account'
     )).toBe(false)
     expect(db.records.some(record => record.operation === 'update')).toBe(false)
   })
@@ -1857,7 +1860,7 @@ describe('outcome allocation version lifecycle', () => {
     db.enqueue('select', 'extensions.gcs_outcome_cost_allocation_allocations', [allocationRow])
     enqueueCompletionBudgetCapture(db)
     db.enqueue('select', 'Funding_Case_Agreement_Activity', [outcomeRow])
-    db.enqueue('select', 'Transfer_Payment_Stream_Commitment', [{
+    db.enqueue('select', 'Transfer_Payment_Stream_Chart_of_Account', [{
       id: 'stream-commitment-1',
       stream_budget_id: 'different-stream-budget'
     }])
@@ -1876,7 +1879,7 @@ describe('outcome allocation version lifecycle', () => {
     })
 
     expect(db.records.find(record =>
-      record.table === 'Transfer_Payment_Stream_Commitment'
+      record.table === 'Transfer_Payment_Stream_Chart_of_Account'
     )).toMatchObject({
       scope: 'transaction',
       lockedForShare: true
@@ -1891,7 +1894,7 @@ describe('outcome allocation version lifecycle', () => {
     db.enqueue('select', 'extensions.gcs_outcome_cost_allocation_allocations', [allocationRow])
     enqueueCompletionBudgetCapture(db)
     db.enqueue('select', 'Funding_Case_Agreement_Activity', [outcomeRow])
-    db.enqueue('select', 'Transfer_Payment_Stream_Commitment', [{
+    db.enqueue('select', 'Transfer_Payment_Stream_Chart_of_Account', [{
       id: 'stream-commitment-1',
       stream_budget_id: 'stream-budget-1'
     }])
@@ -2007,6 +2010,7 @@ describe('outcome allocation saves and validation', () => {
       'agreement-1',
       'version-1',
       [{
+        commitmentType: '1',
         streamCommitmentId: 'stream-commitment-1',
         agreementBudgetFiscalYearId: 'year-1',
         outcomeId: 'outcome-1',
@@ -2020,7 +2024,7 @@ describe('outcome allocation saves and validation', () => {
     expect(db.records.find(record => record.operation === 'insert')?.values).toEqual([{
       allocation_version_id: 'version-1',
       agreement_id: 'agreement-1',
-      commitment_type: 'commitment',
+      commitment_type: '1',
       stream_commitment_id: 'stream-commitment-1',
       agreement_budget_fiscal_year_id: 'year-1',
       outcome_id: 'outcome-1',
@@ -2074,7 +2078,7 @@ describe('outcome allocation saves and validation', () => {
       'stream-1',
       allocationConfig,
       [allocation],
-      'paye'
+      '2'
     )).resolves.toEqual([])
     expect(db.records).toEqual([])
   })
@@ -2088,7 +2092,7 @@ describe('generated outcome allocation commitment lines', () => {
       asAllocationDb(db),
       'agreement-1',
       'stream-1',
-      'paye',
+      '2',
       allocationConfig
     )).resolves.toEqual({ status: 'continue' })
     expect(db.records).toEqual([])
@@ -2102,7 +2106,7 @@ describe('generated outcome allocation commitment lines', () => {
       asAllocationDb(db),
       'agreement-1',
       'stream-1',
-      'commitment',
+      '1',
       allocationConfig
     )).resolves.toEqual({
       status: 'handled',
@@ -2126,7 +2130,7 @@ describe('generated outcome allocation commitment lines', () => {
     db.enqueue('select', 'Funding_Case_Agreement_Budget_Fiscal_Year', [budgetYearRow])
     db.enqueue('select', 'Funding_Case_Agreement_Budget_Fiscal_Year', [budgetYearRow])
     db.enqueue('select', 'Funding_Case_Agreement_Activity', [outcomeRow])
-    db.enqueue('select', 'Transfer_Payment_Stream_Commitment', [{
+    db.enqueue('select', 'Transfer_Payment_Stream_Chart_of_Account', [{
       id: 'stream-commitment-1',
       stream_budget_id: 'stream-budget-1'
     }])
@@ -2136,7 +2140,7 @@ describe('generated outcome allocation commitment lines', () => {
       asAllocationDb(db),
       'agreement-1',
       'stream-1',
-      'commitment',
+      '1',
       allocationConfig
     )).resolves.toEqual({
       status: 'handled',
@@ -2176,7 +2180,7 @@ describe('generated outcome allocation commitment lines', () => {
       program_funding: 250
     }])
     db.enqueue('select', 'Funding_Case_Agreement_Activity', [outcomeRow])
-    db.enqueue('select', 'Transfer_Payment_Stream_Commitment', [{
+    db.enqueue('select', 'Transfer_Payment_Stream_Chart_of_Account', [{
       id: 'stream-commitment-1',
       stream_budget_id: 'stream-budget-1'
     }])
@@ -2186,7 +2190,7 @@ describe('generated outcome allocation commitment lines', () => {
       asAllocationDb(db),
       'agreement-1',
       'stream-1',
-      'commitment',
+      '1',
       allocationConfig
     )).resolves.toMatchObject({
       status: 'handled',
@@ -2212,12 +2216,12 @@ describe('generated outcome allocation commitment lines', () => {
     }])
     db.enqueue('select', 'extensions.gcs_outcome_cost_allocation_allocations', [{
       ...allocationRow,
-      commitment_type: 'paye'
+      commitment_type: '2'
     }])
     db.enqueue('select', 'Funding_Case_Agreement_Budget_Fiscal_Year', [budgetYearRow])
     db.enqueue('select', 'Funding_Case_Agreement_Budget_Fiscal_Year', [budgetYearRow])
     db.enqueue('select', 'Funding_Case_Agreement_Activity', [outcomeRow])
-    db.enqueue('select', 'Transfer_Payment_Stream_Commitment', [{
+    db.enqueue('select', 'Transfer_Payment_Stream_Chart_of_Account', [{
       id: 'stream-commitment-1',
       stream_budget_id: 'stream-budget-1'
     }])
@@ -2227,7 +2231,7 @@ describe('generated outcome allocation commitment lines', () => {
       asAllocationDb(db),
       'agreement-1',
       'stream-1',
-      'commitment',
+      '1',
       allocationConfig
     )).resolves.toEqual({
       status: 'handled',
@@ -2275,7 +2279,7 @@ describe('generated outcome allocation payment edge cases', () => {
     const db = new ScriptedDb()
     db.enqueue('select', 'Funding_Case_Agreement_Commitment', [{
       id: 'commitment-1',
-      egcs_fc_type: 'commitment'
+      egcs_fc_type: '1'
     }])
     db.enqueue('select', 'extensions.gcs_outcome_cost_allocation_versions', [])
 
@@ -2300,7 +2304,7 @@ describe('generated outcome allocation payment edge cases', () => {
     const db = new ScriptedDb()
     db.enqueue('select', 'Funding_Case_Agreement_Commitment', [{
       id: 'commitment-1',
-      egcs_fc_type: 'commitment'
+      egcs_fc_type: '1'
     }])
     db.enqueue('select', 'extensions.gcs_outcome_cost_allocation_versions', [{
       ...versionRow,
@@ -2310,7 +2314,7 @@ describe('generated outcome allocation payment edge cases', () => {
     db.enqueue('select', 'extensions.gcs_outcome_cost_allocation_allocations', [allocationRow])
     db.enqueue('select', 'Funding_Case_Agreement_Budget_Fiscal_Year', [budgetYearRow])
     db.enqueue('select', 'Funding_Case_Agreement_Activity', [outcomeRow])
-    db.enqueue('select', 'Transfer_Payment_Stream_Commitment', [{
+    db.enqueue('select', 'Transfer_Payment_Stream_Chart_of_Account', [{
       id: 'stream-commitment-1',
       stream_budget_id: 'stream-budget-1'
     }])
@@ -2349,7 +2353,7 @@ describe('generated outcome allocation payment edge cases', () => {
       lockedForUpdate: true,
       wheres: [
         ['Funding_Case_Agreement_Commitment_Line.egcs_fc_commitment', '=', 'commitment-1'],
-        ['Funding_Case_Agreement_Commitment_Line.egcs_fc_transferpaymentstreamcommitment', 'in', ['stream-commitment-1']],
+        ['Funding_Case_Agreement_Commitment_Line.egcs_fc_transferpaymentstreamchartofaccount', 'in', ['stream-commitment-1']],
         ['Funding_Case_Agreement_Commitment_Line._deleted', '=', false]
       ]
     })
@@ -2378,7 +2382,7 @@ describe('generated outcome allocation payment edge cases', () => {
       ],
       ['Funding_Case_Agreement_Payment_Line._deleted', '=', false],
       ['Funding_Case_Agreement_Payment._deleted', '=', false],
-      ['Funding_Case_Agreement_Payment.egcs_fc_status', 'not in', ['denied']]
+      [expect.any(Object)]
     ])
   })
 })

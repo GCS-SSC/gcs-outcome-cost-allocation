@@ -146,7 +146,7 @@ describe('outcome cost allocation logic', () => {
   it('validates the agreement total across all commitment types combined', () => {
     expect(validateAllocationTotals([
       {
-        commitmentType: 'commitment',
+        commitmentType: '1',
         streamCommitmentId: 'stream-commitment-1',
         agreementBudgetFiscalYearId: 'year-1',
         outcomeId: 'outcome-1',
@@ -154,7 +154,7 @@ describe('outcome cost allocation logic', () => {
         allocationValue: 1000
       },
       {
-        commitmentType: 'paye',
+        commitmentType: '2',
         streamCommitmentId: 'stream-commitment-2',
         agreementBudgetFiscalYearId: 'year-2',
         outcomeId: 'outcome-2',
@@ -167,7 +167,7 @@ describe('outcome cost allocation logic', () => {
   it('validates scoped allocation references without requiring each commitment type to equal the agreement total', () => {
     expect(validateAllocationReferences([
       {
-        commitmentType: 'commitment',
+        commitmentType: '1',
         streamCommitmentId: 'stream-commitment-1',
         agreementBudgetFiscalYearId: 'year-1',
         outcomeId: 'outcome-1',
@@ -286,16 +286,16 @@ describe('outcome cost allocation logic', () => {
 
   it('parses stream config and validates missing or inactive mappings', () => {
     const config = parseOutcomeCostAllocationConfig({
-      enabledCommitmentTypes: ['commitment'],
+      enabledCommitmentTypes: ['1'],
       mappings: [
         {
-          commitmentType: 'commitment',
+          commitmentType: '1',
           outcomeId: 'outcome-1',
           streamBudgetId: 'stream-budget-1',
           streamCommitmentId: 'stream-commitment-1'
         },
         {
-          commitmentType: 'commitment',
+          commitmentType: '1',
           outcomeId: 'outcome-2',
           streamBudgetId: 'stream-budget-1',
           streamCommitmentId: 'inactive-stream-commitment'
@@ -304,7 +304,7 @@ describe('outcome cost allocation logic', () => {
     })
 
     const issues = validateCommitmentMappings(
-      'commitment',
+      '1',
       [
         {
           streamCommitmentId: 'stream-commitment-1',
@@ -333,9 +333,9 @@ describe('outcome cost allocation logic', () => {
 
   it('rejects active stream commitments attached to a different fiscal-year budget', () => {
     const config = parseOutcomeCostAllocationConfig({
-      enabledCommitmentTypes: ['commitment'],
+      enabledCommitmentTypes: ['1'],
       mappings: [{
-        commitmentType: 'commitment',
+        commitmentType: '1',
         outcomeId: 'outcome-1',
         streamBudgetId: 'stream-budget-1',
         streamCommitmentId: 'stream-commitment-1'
@@ -343,7 +343,7 @@ describe('outcome cost allocation logic', () => {
     })
 
     expect(validateCommitmentMappings(
-      'commitment',
+      '1',
       [{
         streamCommitmentId: 'stream-commitment-1',
         agreementBudgetFiscalYearId: 'year-1',
@@ -365,7 +365,7 @@ describe('outcome cost allocation logic', () => {
   it('rejects generated commitment lines below existing paid amounts', () => {
     const issues = validateGeneratedCommitmentLinePaymentCoverage([
       {
-        commitmentType: 'commitment',
+        commitmentType: '1',
         agreementBudgetFiscalYearId: 'year-1',
         outcomeId: 'outcome-1',
         streamCommitmentId: 'stream-commitment-1',
@@ -374,14 +374,14 @@ describe('outcome cost allocation logic', () => {
     ], [
       {
         commitmentLineId: 'line-1',
-        commitmentType: 'commitment',
+        commitmentType: '1',
         agreementBudgetFiscalYearId: 'year-1',
         streamCommitmentId: 'stream-commitment-1',
         paidAmount: 80
       },
       {
         commitmentLineId: 'line-2',
-        commitmentType: 'paye',
+        commitmentType: '2',
         agreementBudgetFiscalYearId: 'year-1',
         streamCommitmentId: 'stream-commitment-1',
         paidAmount: 80
@@ -397,14 +397,14 @@ describe('outcome cost allocation logic', () => {
   it('validates paid coverage by commitment type, budget year, and stream commitment', () => {
     const issues = validateGeneratedCommitmentLinePaymentCoverage([
       {
-        commitmentType: 'commitment',
+        commitmentType: '1',
         agreementBudgetFiscalYearId: 'year-1',
         outcomeId: 'outcome-1',
         streamCommitmentId: 'stream-commitment-1',
         amount: 40
       },
       {
-        commitmentType: 'commitment',
+        commitmentType: '1',
         agreementBudgetFiscalYearId: 'year-1',
         outcomeId: 'outcome-2',
         streamCommitmentId: 'stream-commitment-1',
@@ -413,7 +413,7 @@ describe('outcome cost allocation logic', () => {
     ], [
       {
         commitmentLineId: 'line-1',
-        commitmentType: 'commitment',
+        commitmentType: '1',
         agreementBudgetFiscalYearId: 'year-1',
         streamCommitmentId: 'stream-commitment-1',
         paidAmount: 70
@@ -424,14 +424,14 @@ describe('outcome cost allocation logic', () => {
 
     expect(validateGeneratedCommitmentLinePaymentCoverage([
       {
-        commitmentType: 'commitment',
+        commitmentType: '1',
         agreementBudgetFiscalYearId: 'year-1',
         outcomeId: 'outcome-1',
         streamCommitmentId: 'stream-commitment-1',
         amount: 40
       },
       {
-        commitmentType: 'commitment',
+        commitmentType: '1',
         agreementBudgetFiscalYearId: 'year-1',
         outcomeId: 'outcome-2',
         streamCommitmentId: 'stream-commitment-1',
@@ -440,7 +440,7 @@ describe('outcome cost allocation logic', () => {
     ], [
       {
         commitmentLineId: 'line-1',
-        commitmentType: 'commitment',
+        commitmentType: '1',
         agreementBudgetFiscalYearId: 'year-1',
         streamCommitmentId: 'stream-commitment-1',
         paidAmount: 80
@@ -453,7 +453,7 @@ describe('outcome cost allocation logic', () => {
   it('sums multiple paid lines against the same referenced commitment line', () => {
     const issues = validateGeneratedCommitmentLinePaymentCoverage([
       {
-        commitmentType: 'commitment',
+        commitmentType: '1',
         agreementBudgetFiscalYearId: 'year-1',
         outcomeId: 'outcome-1',
         streamCommitmentId: 'stream-commitment-1',
@@ -462,14 +462,14 @@ describe('outcome cost allocation logic', () => {
     ], [
       {
         commitmentLineId: 'line-1',
-        commitmentType: 'commitment',
+        commitmentType: '1',
         agreementBudgetFiscalYearId: 'year-1',
         streamCommitmentId: 'stream-commitment-1',
         paidAmount: 40
       },
       {
         commitmentLineId: 'line-1',
-        commitmentType: 'commitment',
+        commitmentType: '1',
         agreementBudgetFiscalYearId: 'year-1',
         streamCommitmentId: 'stream-commitment-1',
         paidAmount: 40

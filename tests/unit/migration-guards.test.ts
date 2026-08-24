@@ -46,6 +46,41 @@ describe('outcome allocation generated-record database guards', () => {
     })
 
     await sql`CREATE SCHEMA extensions`.execute(db)
+    await sql`CREATE TABLE "Common_Entity_Type" (
+        egcs_cn_type text PRIMARY KEY,
+        _deleted boolean NOT NULL DEFAULT false
+      )`.execute(db)
+    await sql`INSERT INTO "Common_Entity_Type" (egcs_cn_type)
+      VALUES ('gcs-outcome-cost-allocation:allocation-version')`.execute(db)
+    await sql`CREATE TABLE "Common_Entity" (
+        id bigserial PRIMARY KEY,
+        egcs_cn_entitytype text NOT NULL,
+        UNIQUE (id, egcs_cn_entitytype)
+      )`.execute(db)
+    await sql`CREATE OR REPLACE FUNCTION register_entity() RETURNS trigger AS $$
+      BEGIN
+        IF NEW.id IS NULL THEN NEW.id := nextval(pg_get_serial_sequence(TG_TABLE_SCHEMA || '.' || TG_TABLE_NAME, 'id')); END IF;
+        INSERT INTO "Common_Entity" (id, egcs_cn_entitytype) VALUES (NEW.id, TG_ARGV[0]);
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql`.execute(db)
+    await sql`CREATE OR REPLACE FUNCTION trg_fn_soft_delete_entity_assignments() RETURNS trigger AS $$
+      BEGIN RETURN NEW; END;
+      $$ LANGUAGE plpgsql`.execute(db)
+    await sql`CREATE TABLE "Common_Status" (
+        id bigint PRIMARY KEY,
+        egcs_cn_agency bigint NOT NULL,
+        egcs_cn_isdraft boolean NOT NULL DEFAULT false,
+        _deleted boolean NOT NULL DEFAULT false
+      )`.execute(db)
+    await sql`INSERT INTO "Common_Status" (id, egcs_cn_agency, egcs_cn_isdraft)
+      VALUES (1, 1, true), (4, 1, false)`.execute(db)
+    await sql`CREATE TABLE "Transfer_Payment_Profile" (
+        id bigint PRIMARY KEY,
+        egcs_tp_agency bigint NOT NULL,
+        _deleted boolean NOT NULL DEFAULT false
+      )`.execute(db)
+    await sql`INSERT INTO "Transfer_Payment_Profile" (id, egcs_tp_agency) VALUES (300, 1)`.execute(db)
     await sql`
       CREATE TABLE "Funding_Case_Agreement_Profile" (
         id bigint PRIMARY KEY,
@@ -85,14 +120,19 @@ describe('outcome allocation generated-record database guards', () => {
       )
     `.execute(db)
     await sql`
-      CREATE TABLE "Transfer_Payment_Stream_Commitment" (
+      CREATE TABLE "Transfer_Payment_Stream_Chart_of_Account" (
         id bigint PRIMARY KEY,
         egcs_tp_streambudget bigint NOT NULL,
         egcs_tp_transferpaymentstream bigint NOT NULL,
-        egcs_tp_gldescription text NOT NULL,
+        egcs_tp_accountingdimensions jsonb NOT NULL DEFAULT '[]'::jsonb,
         _deleted boolean NOT NULL DEFAULT false
       )
     `.execute(db)
+    await sql`CREATE TABLE "Transfer_Payment_Stream_Commitment_Type" (
+        id bigint PRIMARY KEY,
+        egcs_tp_transferpaymentstream bigint NOT NULL,
+        _deleted boolean NOT NULL DEFAULT false
+      )`.execute(db)
     await sql`
       CREATE TABLE "Funding_Case_Agreement_Budget_Version" (
         id bigint PRIMARY KEY,
@@ -124,8 +164,8 @@ describe('outcome allocation generated-record database guards', () => {
       CREATE TABLE "Funding_Case_Agreement_Commitment" (
         id bigint PRIMARY KEY,
         egcs_fc_fundingagreement bigint NOT NULL,
-        egcs_fc_type text NOT NULL,
-        egcs_fc_status text NOT NULL,
+        egcs_fc_type bigint NOT NULL,
+        egcs_fc_status bigint NOT NULL,
         egcs_fc_financialsystemnumber bigint,
         egcs_fc_active boolean NOT NULL DEFAULT false,
         _deleted boolean NOT NULL DEFAULT false
@@ -136,7 +176,7 @@ describe('outcome allocation generated-record database guards', () => {
         id bigserial PRIMARY KEY,
         egcs_fc_commitment bigint NOT NULL,
         egcs_fc_commitmentlinenumber smallint NOT NULL,
-        egcs_fc_transferpaymentstreamcommitment bigint NOT NULL,
+        egcs_fc_transferpaymentstreamchartofaccount bigint NOT NULL,
         egcs_fc_amount numeric(19, 2) NOT NULL,
         _deleted boolean NOT NULL DEFAULT false
       )
@@ -151,7 +191,7 @@ describe('outcome allocation generated-record database guards', () => {
         egcs_fc_periodend smallint NOT NULL,
         egcs_fc_paymentamount numeric(19, 2) NOT NULL,
         egcs_fc_comment text,
-        egcs_fc_status text NOT NULL,
+        egcs_fc_status bigint NOT NULL,
         _deleted boolean NOT NULL DEFAULT false
       )
     `.execute(db)
@@ -177,6 +217,7 @@ describe('outcome allocation generated-record database guards', () => {
     await sql`INSERT INTO "Funding_Case_Agreement_Profile" (id, egcs_fc_transferpaymentstream) VALUES (1, 200)`.execute(db)
     await sql`INSERT INTO "Funding_Case_Agreement_Budget_Version" (id, egcs_fc_fundingagreement, egcs_fc_iscurrent) VALUES (2, 1, true)`.execute(db)
     await sql`INSERT INTO "Transfer_Payment_Stream" (id, egcs_tp_transferpaymentprofile) VALUES (200, 300)`.execute(db)
+    await sql`INSERT INTO "Transfer_Payment_Stream_Commitment_Type" (id, egcs_tp_transferpaymentstream) VALUES (1, 200)`.execute(db)
     await sql`
       INSERT INTO "Agency_Fiscal_Year" (
         id,
@@ -199,12 +240,12 @@ describe('outcome allocation generated-record database guards', () => {
       ) VALUES (100, 200, 500)
     `.execute(db)
     await sql`
-      INSERT INTO "Transfer_Payment_Stream_Commitment" (
+      INSERT INTO "Transfer_Payment_Stream_Chart_of_Account" (
         id,
         egcs_tp_streambudget,
         egcs_tp_transferpaymentstream,
-        egcs_tp_gldescription
-      ) VALUES (10, 100, 200, 'Program')
+        egcs_tp_accountingdimensions
+      ) VALUES (10, 100, 200, '[{"label_en":"G/L","label_fr":"G/L","value":"5000"}]'::jsonb)
     `.execute(db)
     await sql`
       INSERT INTO "Funding_Case_Agreement_Budget_Fiscal_Year" (
@@ -229,17 +270,17 @@ describe('outcome allocation generated-record database guards', () => {
         egcs_fc_type,
         egcs_fc_status
       ) VALUES
-        (40, 1, 'commitment', 'inprogress'),
-        (41, 1, 'commitment', 'inprogress'),
-        (42, 1, 'commitment', 'inprogress'),
-        (43, 1, 'commitment', 'inprogress')
+        (40, 1, 1, 4),
+        (41, 1, 1, 4),
+        (42, 1, 1, 4),
+        (43, 1, 1, 4)
     `.execute(db)
     await sql`
       INSERT INTO "Funding_Case_Agreement_Commitment_Line" (
         id,
         egcs_fc_commitment,
         egcs_fc_commitmentlinenumber,
-        egcs_fc_transferpaymentstreamcommitment,
+        egcs_fc_transferpaymentstreamchartofaccount,
         egcs_fc_amount
       ) VALUES
         (50, 40, 1, 10, 100),
@@ -276,7 +317,7 @@ describe('outcome allocation generated-record database guards', () => {
         ) VALUES (
           60,
           1,
-          'commitment',
+          '1',
           10,
           '00000000-0000-4000-8000-000000000020',
           30,
@@ -325,7 +366,7 @@ describe('outcome allocation generated-record database guards', () => {
         egcs_fc_periodend,
         egcs_fc_paymentamount,
         egcs_fc_status
-      ) VALUES (71, 41, '00000000-0000-4000-8000-000000000020', 'advance', 0, 0, 25, 'inprogress')
+      ) VALUES (71, 41, '00000000-0000-4000-8000-000000000020', 'advance', 0, 0, 25, 4)
     `.execute(db)
   })
 
@@ -375,7 +416,7 @@ describe('outcome allocation generated-record database guards', () => {
         ) VALUES (
           ${versionId},
           1,
-          'commitment',
+          '1',
           10,
           '00000000-0000-4000-8000-000000000020',
           30,
@@ -430,7 +471,7 @@ describe('outcome allocation generated-record database guards', () => {
         INSERT INTO "Funding_Case_Agreement_Commitment_Line" (
           egcs_fc_commitment,
           egcs_fc_commitmentlinenumber,
-          egcs_fc_transferpaymentstreamcommitment,
+          egcs_fc_transferpaymentstreamchartofaccount,
           egcs_fc_amount
         ) VALUES (40, 2, 10, 1)
       `.execute(db),
@@ -449,7 +490,7 @@ describe('outcome allocation generated-record database guards', () => {
       'gcs_outcome_cost_allocation_generated_commitment_line_guard'
     )
     await expectGuardConstraint(
-      sql`UPDATE "Funding_Case_Agreement_Commitment" SET egcs_fc_type = 'paye' WHERE id = 40`.execute(db),
+      sql`UPDATE "Funding_Case_Agreement_Commitment" SET egcs_fc_type = '2' WHERE id = 40`.execute(db),
       'gcs_outcome_cost_allocation_generated_commitment_guard'
     )
     await expectGuardConstraint(
@@ -463,7 +504,7 @@ describe('outcome allocation generated-record database guards', () => {
 
     await expect(sql`
       UPDATE "Funding_Case_Agreement_Commitment"
-      SET egcs_fc_status = 'approved',
+      SET egcs_fc_status = 4,
         egcs_fc_active = true,
         egcs_fc_financialsystemnumber = 123
       WHERE id = 40
@@ -482,7 +523,7 @@ describe('outcome allocation generated-record database guards', () => {
           egcs_fc_periodend,
           egcs_fc_paymentamount,
           egcs_fc_status
-        ) VALUES (70, 40, '00000000-0000-4000-8000-000000000020', 'advance', 0, 0, 25, 'draft')
+        ) VALUES (70, 40, '00000000-0000-4000-8000-000000000020', 'advance', 0, 0, 25, 1)
       `.execute(trx)
       await sql`
         INSERT INTO "Funding_Case_Agreement_Payment_Line" (
@@ -494,7 +535,7 @@ describe('outcome allocation generated-record database guards', () => {
       `.execute(trx)
       await sql`
         UPDATE "Funding_Case_Agreement_Payment"
-        SET egcs_fc_status = 'inprogress',
+        SET egcs_fc_status = 4,
           egcs_fc_comment = 'Generated'
         WHERE id = 70
       `.execute(trx)
@@ -548,7 +589,7 @@ describe('outcome allocation generated-record database guards', () => {
 
     await expect(sql`
       UPDATE "Funding_Case_Agreement_Payment"
-      SET egcs_fc_status = 'approved',
+      SET egcs_fc_status = 4,
         egcs_fc_comment = 'Workflow fields remain editable'
       WHERE id = 70
     `.execute(db)).resolves.toBeDefined()
@@ -566,8 +607,8 @@ describe('outcome allocation generated-record database guards', () => {
           egcs_fc_paymentamount,
           egcs_fc_status
         ) VALUES
-          (72, 40, '00000000-0000-4000-8000-000000000020', 'advance', 0, 0, 1, 'draft'),
-          (73, 40, '00000000-0000-4000-8000-000000000020', 'advance', 0, 0, 1, 'draft')
+          (72, 40, '00000000-0000-4000-8000-000000000020', 'advance', 0, 0, 1, 1),
+          (73, 40, '00000000-0000-4000-8000-000000000020', 'advance', 0, 0, 1, 1)
       `.execute(trx))
 
     await expectGuardConstraint(
@@ -589,11 +630,11 @@ describe('outcome allocation generated-record database guards', () => {
       `.execute(trx))
 
     await expectGuardConstraint(
-      sql`UPDATE "Funding_Case_Agreement_Payment" SET egcs_fc_status = 'inprogress' WHERE id = 72`.execute(db),
+      sql`UPDATE "Funding_Case_Agreement_Payment" SET egcs_fc_status = 4 WHERE id = 72`.execute(db),
       'gcs_outcome_cost_allocation_generated_payment_total_guard'
     )
     await expectGuardConstraint(
-      sql`UPDATE "Funding_Case_Agreement_Payment" SET egcs_fc_status = 'inprogress' WHERE id = 73`.execute(db),
+      sql`UPDATE "Funding_Case_Agreement_Payment" SET egcs_fc_status = 4 WHERE id = 73`.execute(db),
       'gcs_outcome_cost_allocation_generated_payment_total_guard'
     )
   })
@@ -638,7 +679,7 @@ describe('outcome allocation generated-record database guards', () => {
           outcome_id,
           allocation_method,
           allocation_value
-        ) VALUES (61, 1, 'commitment', 10, '00000000-0000-4000-8000-000000000020', 30, 'amount', 1)
+        ) VALUES (61, 1, '1', 10, '00000000-0000-4000-8000-000000000020', 30, 'amount', 1)
       `.execute(trx))
     await expectGuardConstraint(
       managedMutation(db, '1', async trx => await sql`
@@ -717,25 +758,25 @@ describe('outcome allocation generated-record database guards', () => {
 
   it('blocks deletion and reassignment of stream commitments used by active allocations', async () => {
     await expectGuardConstraint(
-      sql`UPDATE "Transfer_Payment_Stream_Commitment" SET _deleted = true WHERE id = 10`.execute(db),
+      sql`UPDATE "Transfer_Payment_Stream_Chart_of_Account" SET _deleted = true WHERE id = 10`.execute(db),
       'gcs_outcome_cost_allocation_active_stream_commitment_guard'
     )
     await expectGuardConstraint(
-      sql`DELETE FROM "Transfer_Payment_Stream_Commitment" WHERE id = 10`.execute(db),
+      sql`DELETE FROM "Transfer_Payment_Stream_Chart_of_Account" WHERE id = 10`.execute(db),
       'gcs_outcome_cost_allocation_active_stream_commitment_guard'
     )
     await expectGuardConstraint(
-      sql`UPDATE "Transfer_Payment_Stream_Commitment" SET egcs_tp_streambudget = 101 WHERE id = 10`.execute(db),
+      sql`UPDATE "Transfer_Payment_Stream_Chart_of_Account" SET egcs_tp_streambudget = 101 WHERE id = 10`.execute(db),
       'gcs_outcome_cost_allocation_active_stream_commitment_guard'
     )
     await expectGuardConstraint(
-      sql`UPDATE "Transfer_Payment_Stream_Commitment" SET egcs_tp_transferpaymentstream = 201 WHERE id = 10`.execute(db),
+      sql`UPDATE "Transfer_Payment_Stream_Chart_of_Account" SET egcs_tp_transferpaymentstream = 201 WHERE id = 10`.execute(db),
       'gcs_outcome_cost_allocation_active_stream_commitment_guard'
     )
 
     await expect(sql`
-      UPDATE "Transfer_Payment_Stream_Commitment"
-      SET egcs_tp_gldescription = 'Updated description'
+      UPDATE "Transfer_Payment_Stream_Chart_of_Account"
+      SET egcs_tp_accountingdimensions = '[{"label_en":"G/L","label_fr":"G/L","value":"5001"}]'::jsonb
       WHERE id = 10
     `.execute(db)).resolves.toBeDefined()
   })

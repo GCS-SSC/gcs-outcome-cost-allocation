@@ -9,6 +9,7 @@ export default defineGcsExtensionMigration({
         agreement_id bigint NOT NULL REFERENCES "Funding_Case_Agreement_Profile" (id) ON DELETE RESTRICT,
         version_number integer NOT NULL,
         status varchar(20) NOT NULL,
+        lifecycle_status_id bigint NOT NULL REFERENCES "Common_Status" (id) ON DELETE RESTRICT,
         created_at timestamp NOT NULL DEFAULT now(),
         completed_at timestamp,
         funding_basis_amount numeric(19, 2),

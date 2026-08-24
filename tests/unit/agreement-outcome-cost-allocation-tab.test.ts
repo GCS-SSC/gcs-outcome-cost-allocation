@@ -66,7 +66,7 @@ describe('agreement outcome cost allocation tab helpers', () => {
     const associations = [
       {
         id: 'association-1',
-        commitmentType: 'commitment',
+        commitmentType: '1',
         commitmentTypeLabel: 'Commitments',
         yearId: 'year-1',
         yearLabel: '2026-2027',
@@ -79,7 +79,7 @@ describe('agreement outcome cost allocation tab helpers', () => {
       },
       {
         id: 'association-2',
-        commitmentType: 'commitment',
+        commitmentType: '1',
         commitmentTypeLabel: 'Commitments',
         yearId: 'year-1',
         yearLabel: '2026-2027',
@@ -97,12 +97,12 @@ describe('agreement outcome cost allocation tab helpers', () => {
       recordsLabel: 'records'
     })).toEqual([
       expect.objectContaining({
-        id: 'type:commitment',
+        id: 'type:1',
         rowType: 'commitmentType',
         associationCount: 2
       }),
       expect.objectContaining({
-        id: 'year:commitment:year-1',
+        id: 'year:1:year-1',
         rowType: 'fiscalYear',
         associationCount: 2,
         programFunding: 1000
@@ -123,7 +123,7 @@ describe('agreement outcome cost allocation tab helpers', () => {
   it('omits collapsed allocation child rows', () => {
     const association = {
       id: 'association-1',
-      commitmentType: 'commitment',
+      commitmentType: '1',
       commitmentTypeLabel: 'Commitments',
       yearId: 'year-1',
       yearLabel: '2026-2027',
@@ -136,11 +136,11 @@ describe('agreement outcome cost allocation tab helpers', () => {
     } as const
 
     expect(buildOutcomeAllocationRows([association], {
-      isExpanded: groupId => groupId !== 'type:commitment',
+      isExpanded: groupId => groupId !== 'type:1',
       recordsLabel: 'records'
     })).toEqual([
       expect.objectContaining({
-        id: 'type:commitment',
+        id: 'type:1',
         rowType: 'commitmentType'
       })
     ])
@@ -165,7 +165,7 @@ describe('agreement outcome cost allocation tab helpers', () => {
   it('builds save request bodies for active allocations', () => {
     const allocations = [{
       allocationVersionId: 'version-1',
-      commitmentType: 'commitment',
+      commitmentType: '1',
       agreementBudgetFiscalYearId: 'year-1',
       streamCommitmentId: 'commitment-1',
       outcomeId: 'outcome-1',
@@ -182,7 +182,7 @@ describe('agreement outcome cost allocation tab helpers', () => {
   it('sends save requests with the selected allocation version payload', async () => {
     const allocations: VersionedOutcomeAllocationInput[] = [{
       allocationVersionId: 'version-1',
-      commitmentType: 'commitment',
+      commitmentType: '1',
       agreementBudgetFiscalYearId: 'year-1',
       streamCommitmentId: 'commitment-1',
       outcomeId: 'outcome-1',
@@ -290,7 +290,7 @@ describe('agreement outcome cost allocation tab helpers', () => {
   it('atomically saves and completes, refreshes, and shows success for valid completion requests', async () => {
     const allocations: VersionedOutcomeAllocationInput[] = [{
       allocationVersionId: 'version-1',
-      commitmentType: 'commitment',
+      commitmentType: '1',
       agreementBudgetFiscalYearId: 'year-1',
       streamCommitmentId: 'commitment-1',
       outcomeId: 'outcome-1',
@@ -323,7 +323,7 @@ describe('agreement outcome cost allocation tab helpers', () => {
     expect(options.refresh).toHaveBeenCalled()
     expect(options.toast.add).toHaveBeenCalledWith({
       title: 'Success',
-      description: 'Cost allocation activated.',
+      description: 'Cost allocation submitted for approval.',
       color: 'success'
     })
     expect(options.isCompleting.value).toBe(false)

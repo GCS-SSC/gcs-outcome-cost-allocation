@@ -14,16 +14,28 @@ export default defineGcsExtension({
     'extension-api-client',
     'host-api-client',
     'extension-create-operation-hooks',
-    'extension-lifecycle-hooks'
+    'extension-lifecycle-hooks',
+    'lifecycle-entities'
   ],
   name: {
     en: 'Outcome cost allocation',
     fr: 'Repartition des couts par resultat'
   },
   description: {
-    en: 'Allocates agreement program funding by outcome and generates commitment lines from stream commitment mappings.',
+    en: 'Allocates agreement program funding by outcome and generates commitment lines from stream chart-of-account mappings.',
     fr: 'Repartit le financement de programme par resultat et genere les lignes d engagement a partir des correspondances du volet.'
   },
+  entities: [{
+    type: 'allocation-version',
+    label: { en: 'Outcome cost allocation version', fr: 'Version de repartition des couts par resultat' },
+    transitionMode: 'completion_workflow',
+    workflowRequired: true,
+    workflowPurpose: 'standard',
+    supportsDirectReviews: false,
+    ownerKind: 'agreement',
+    assignmentMode: 'inherited',
+    adapter: { path: './server/allocation-version-adapter.ts' }
+  }],
   admin: {
     streamConfig: {
       path: './components/StreamOutcomeCostAllocationConfig.vue'
@@ -106,19 +118,6 @@ export default defineGcsExtension({
       route: '/agreements/[agreementId]/allocation-versions',
       method: 'post',
       path: './server/api/allocation-versions.post.ts',
-      rbac: {
-        subject: 'agreement',
-        action: 'update',
-        entity: {
-          target: 'agreement',
-          param: 'agreementId'
-        }
-      }
-    },
-    {
-      route: '/agreements/[agreementId]/allocation-versions/[allocationVersionId]/complete',
-      method: 'post',
-      path: './server/api/allocation-version-complete.post.ts',
       rbac: {
         subject: 'agreement',
         action: 'update',

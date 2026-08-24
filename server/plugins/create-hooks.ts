@@ -213,7 +213,7 @@ const getLockedPaymentStatus = async (
   db: ReturnType<typeof asOutcomeCostAllocationDb>,
   agreementId: string,
   paymentId: string
-): Promise<string | null> => {
+): Promise<{ id: string, terminal: boolean } | null> => {
   const payment = await db
     .selectFrom('Funding_Case_Agreement_Payment')
     .innerJoin(
@@ -221,15 +221,34 @@ const getLockedPaymentStatus = async (
       'Funding_Case_Agreement_Commitment.id',
       'Funding_Case_Agreement_Payment.egcs_fc_fundingagreementcommitment'
     )
+    .innerJoin('Common_Status', 'Common_Status.id', 'Funding_Case_Agreement_Payment.egcs_fc_status')
     .where('Funding_Case_Agreement_Payment.id', '=', paymentId)
     .where('Funding_Case_Agreement_Commitment.egcs_fc_fundingagreement', '=', agreementId)
     .where('Funding_Case_Agreement_Payment._deleted', '=', false)
     .where('Funding_Case_Agreement_Commitment._deleted', '=', false)
-    .select('Funding_Case_Agreement_Payment.egcs_fc_status')
+    .select([
+      'Funding_Case_Agreement_Payment.egcs_fc_status',
+      'Common_Status.egcs_cn_terminal as status_terminal'
+    ])
     .forUpdate('Funding_Case_Agreement_Payment')
     .executeTakeFirst()
 
-  return payment ? String(payment.egcs_fc_status) : null
+  return payment
+    ? { id: String(payment.egcs_fc_status), terminal: payment.status_terminal === true }
+    : null
+}
+
+const isTerminalStatus = async (
+  db: ReturnType<typeof asOutcomeCostAllocationDb>,
+  statusId: string
+): Promise<boolean> => {
+  const status = await db
+    .selectFrom('Common_Status')
+    .select('egcs_cn_terminal')
+    .where('id', '=', statusId)
+    .where('_deleted', '=', false)
+    .executeTakeFirst()
+  return status?.egcs_cn_terminal === true
 }
 
 /** Serializes and preflights host edits that can affect generated payment coverage. */
@@ -254,9 +273,9 @@ const guardAgreementPaymentMutation = async (
       context.paymentId
     )
     if (
-      currentStatus === 'denied'
-      && context.nextStatus !== undefined
-      && context.nextStatus !== 'denied'
+      currentStatus?.terminal === true
+      && context.nextStatusId !== undefined
+      && !await isTerminalStatus(db, context.nextStatusId)
       && await generatedPaymentStatusResurrectionExceedsCoverage(db, context.paymentId)
     ) {
       throw paymentCoverageConflict()
@@ -427,7 +446,7 @@ const guardAgreementDelete = async (
 }
 
 /**
- * Inserts a commitment, its generated lines, and allocation provenance in the operation transaction.
+ * Inserts generated lines and provenance for the host-created commitment.
  */
 const createGeneratedCommitment = async (
   context: CreateOperationContext,
@@ -435,27 +454,19 @@ const createGeneratedCommitment = async (
   generated: Extract<Awaited<ReturnType<typeof getGeneratedCommitmentLines>>, { status: 'handled' }>
 ) => {
   const db = asOutcomeCostAllocationDb(context.trx)
-  const commitment = await db
-    .insertInto('Funding_Case_Agreement_Commitment')
-    .values({
-      egcs_fc_fundingagreement: context.agreementId,
-      egcs_fc_type: commitmentType,
-      egcs_fc_status: 'inprogress',
-      egcs_fc_financialsystemnumber: null
-    })
-    .returningAll()
-    .executeTakeFirstOrThrow()
+  const commitmentId = getRecordStringValue(context.createdRecord, 'id')
+  if (!commitmentId) throw new Error('Host-created commitment identity is missing.')
 
   if (generated.lines.length === 0) {
-    return commitment
+    return
   }
 
   const commitmentLines = await db
     .insertInto('Funding_Case_Agreement_Commitment_Line')
     .values(generated.lines.map((line, index) => ({
-      egcs_fc_commitment: String(commitment.id),
+      egcs_fc_commitment: commitmentId,
       egcs_fc_commitmentlinenumber: index + 1,
-      egcs_fc_transferpaymentstreamcommitment: line.streamCommitmentId,
+      egcs_fc_transferpaymentstreamchartofaccount: line.streamCommitmentId,
       egcs_fc_amount: line.allocation.amount
     })))
     .returningAll()
@@ -471,7 +482,7 @@ const createGeneratedCommitment = async (
 
       return {
         allocation_version_id: generatedLine.allocationVersionId,
-        generated_commitment_id: String(commitment.id),
+        generated_commitment_id: commitmentId,
         commitment_line_id: String(line.id),
         agreement_id: context.agreementId,
         agreement_budget_fiscal_year_id: generatedLine.allocation.agreementBudgetFiscalYearId,
@@ -482,7 +493,6 @@ const createGeneratedCommitment = async (
     }))
     .execute()
 
-  return commitment
 }
 
 /**
@@ -490,7 +500,7 @@ const createGeneratedCommitment = async (
  */
 const handleCommitmentCreate = async (context: CreateOperationContext): Promise<CreateOperationResult> => {
   const commitmentType = context.validatedBody.egcs_fc_type
-  if (!isCommitmentType(commitmentType) || context.createdRecord) {
+  if (!isCommitmentType(commitmentType)) {
     return continueCreateOperation()
   }
 
@@ -523,10 +533,9 @@ const handleCommitmentCreate = async (context: CreateOperationContext): Promise<
     throwOutcomeCostAllocationIssues(generated.issues)
   }
 
-  return {
-    status: 'handled',
-    response: await createGeneratedCommitment(context, commitmentType, generated)
-  }
+  if (!context.createdRecord) return continueCreateOperation()
+  await createGeneratedCommitment(context, commitmentType, generated)
+  return continueCreateOperation()
 }
 
 const getRecordStringValue = (record: Record<string, unknown> | undefined, key: string): string => {
@@ -574,7 +583,7 @@ const paymentCreateRequestInputsAreComplete = (inputs: ReturnType<typeof getPaym
   && inputs.paymentAmount > 0
 
 /**
- * Inserts generated payment lines and advances a matching draft payment to in-progress.
+ * Inserts generated payment lines for the host-created draft payment.
  */
 const createGeneratedPaymentLines = async (
   context: CreateOperationContext,
@@ -591,13 +600,6 @@ const createGeneratedPaymentLines = async (
     })))
     .execute()
 
-  await db
-    .updateTable('Funding_Case_Agreement_Payment')
-    .set({ egcs_fc_status: 'inprogress' })
-    .where('id', '=', paymentId)
-    .where('egcs_fc_status', '=', 'draft')
-    .where('_deleted', '=', false)
-    .execute()
 }
 
 /**

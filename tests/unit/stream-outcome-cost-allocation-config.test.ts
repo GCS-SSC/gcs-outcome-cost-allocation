@@ -3,7 +3,7 @@ import { buildStreamOutcomeAllocationTableRows } from '../../shared/stream-outco
 
 const association = {
   id: 'association-1',
-  commitmentType: 'commitment',
+  commitmentType: '1',
   commitmentTypeGroup: 'Commitments',
   fiscalYearGroup: '2026-2027',
   streamBudgetId: 'budget-1',
@@ -20,12 +20,12 @@ describe('stream outcome cost allocation config helpers', () => {
       recordsLabel: 'records'
     })).toEqual([
       expect.objectContaining({
-        id: 'type:commitment',
+        id: 'type:1',
         rowType: 'commitmentType',
         associationCount: 1
       }),
       expect.objectContaining({
-        id: 'year:commitment:2026-2027',
+        id: 'year:1:2026-2027',
         rowType: 'fiscalYear',
         lineLabel: '2026-2027'
       }),
@@ -39,11 +39,11 @@ describe('stream outcome cost allocation config helpers', () => {
 
   it('omits fiscal-year and association rows when the type group is collapsed', () => {
     expect(buildStreamOutcomeAllocationTableRows([association], {
-      isExpanded: groupId => groupId !== 'type:commitment',
+      isExpanded: groupId => groupId !== 'type:1',
       recordsLabel: 'records'
     })).toEqual([
       expect.objectContaining({
-        id: 'type:commitment',
+        id: 'type:1',
         rowType: 'commitmentType'
       })
     ])

@@ -23,7 +23,7 @@ const RequiredIdSchema = z.union([
 ]).transform(value => String(value))
 
 const OutcomeAllocationRequestBaseSchema = z.object({
-  commitmentType: z.enum(['commitment', 'paye', 'paye2', 'pyp']),
+  commitmentType: RequiredIdSchema,
   streamCommitmentId: RequiredIdSchema,
   agreementBudgetFiscalYearId: RequiredIdSchema,
   outcomeId: RequiredIdSchema,

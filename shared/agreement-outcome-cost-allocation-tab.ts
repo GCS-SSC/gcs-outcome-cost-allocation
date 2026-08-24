@@ -1,6 +1,5 @@
 import type { Ref } from 'vue'
 import {
-  COMMITMENT_TYPES,
   type CommitmentType,
   type CostAllocationVersion,
   type VersionedOutcomeAllocationInput
@@ -120,7 +119,7 @@ export const buildOutcomeAllocationRows = (
 ): AllocationTableRow[] => {
   const rows: AllocationTableRow[] = []
 
-  for (const commitmentType of COMMITMENT_TYPES) {
+  for (const commitmentType of [...new Set(associations.map(row => row.commitmentType))]) {
     const typeRows = associations.filter((row: ConfiguredAssociationRow) => row.commitmentType === commitmentType)
     if (typeRows.length === 0) {
       continue
@@ -320,7 +319,7 @@ export const completeOutcomeAllocationSelectedVersion = async (
     )
     await options.refresh()
     options.toast.add({
-      ...getOutcomeAllocationToastText(options.locale, 'activated'),
+      ...getOutcomeAllocationToastText(options.locale, 'submitted'),
       color: 'success'
     })
   } catch (error: unknown) {
@@ -340,16 +339,16 @@ export const completeOutcomeAllocationSelectedVersion = async (
  */
 export const getOutcomeAllocationToastText = (
   locale: string,
-  key: 'saved' | 'activated' | 'deleted' | 'error'
+  key: 'saved' | 'submitted' | 'deleted' | 'error'
 ) => {
   const labels = {
     saved: {
       title: locale === 'fr' ? 'Succes' : 'Success',
       description: locale === 'fr' ? 'Repartition enregistree.' : 'Allocation saved.'
     },
-    activated: {
+    submitted: {
       title: locale === 'fr' ? 'Succes' : 'Success',
-      description: locale === 'fr' ? 'Repartition activee.' : 'Cost allocation activated.'
+      description: locale === 'fr' ? 'Repartition soumise au processus d approbation.' : 'Cost allocation submitted for approval.'
     },
     deleted: {
       title: locale === 'fr' ? 'Succes' : 'Success',

@@ -5,29 +5,14 @@ export default defineGcsExtensionMigration({
   up: async (db) => {
     await sql`
       ALTER TABLE extensions.gcs_outcome_cost_allocation_allocations
-      ADD COLUMN IF NOT EXISTS commitment_type varchar(20) NOT NULL DEFAULT 'commitment'
+      ADD COLUMN IF NOT EXISTS commitment_type bigint
+      REFERENCES "Transfer_Payment_Stream_Commitment_Type" (id) ON DELETE RESTRICT
     `.execute(db)
 
     await sql`
       ALTER TABLE extensions.gcs_outcome_cost_allocation_allocations
       ADD COLUMN IF NOT EXISTS stream_commitment_id bigint
-      REFERENCES "Transfer_Payment_Stream_Commitment" (id) ON DELETE RESTRICT
-    `.execute(db)
-
-    await sql`
-      DO $$
-      BEGIN
-        IF NOT EXISTS (
-          SELECT 1
-          FROM pg_constraint
-          WHERE conname = 'gcs_outcome_cost_allocation_commitment_type'
-        ) THEN
-          ALTER TABLE extensions.gcs_outcome_cost_allocation_allocations
-          ADD CONSTRAINT gcs_outcome_cost_allocation_commitment_type
-          CHECK (commitment_type IN ('commitment', 'paye', 'paye2', 'pyp'));
-        END IF;
-      END
-      $$;
+      REFERENCES "Transfer_Payment_Stream_Chart_of_Account" (id) ON DELETE RESTRICT
     `.execute(db)
 
     await sql`
@@ -40,7 +25,6 @@ export default defineGcsExtensionMigration({
 
     await sql`
       ALTER TABLE extensions.gcs_outcome_cost_allocation_allocations
-      ALTER COLUMN commitment_type DROP DEFAULT,
       ALTER COLUMN commitment_type SET NOT NULL,
       ALTER COLUMN stream_commitment_id SET NOT NULL
     `.execute(db)
