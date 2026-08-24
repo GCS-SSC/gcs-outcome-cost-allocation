@@ -4,6 +4,7 @@ import { KyselyPGlite } from 'kysely-pglite'
 import migration0001 from '../../server/migrations/0001_outcome_cost_allocation'
 import migration0002 from '../../server/migrations/0002_versioned_allocations'
 import migration0003 from '../../server/migrations/0003_scoped_allocations'
+import migration0004 from '../../server/migrations/0004_showcase_seed'
 
 interface GuardTestDatabase {
   Funding_Case_Agreement_Profile: {
@@ -70,6 +71,7 @@ describe('outcome allocation generated-record database guards', () => {
     await sql`CREATE TABLE "Common_Status" (
         id bigint PRIMARY KEY,
         egcs_cn_agency bigint NOT NULL,
+        egcs_cn_name_en text NOT NULL DEFAULT '',
         egcs_cn_isdraft boolean NOT NULL DEFAULT false,
         _deleted boolean NOT NULL DEFAULT false
       )`.execute(db)
@@ -85,6 +87,7 @@ describe('outcome allocation generated-record database guards', () => {
       CREATE TABLE "Funding_Case_Agreement_Profile" (
         id bigint PRIMARY KEY,
         egcs_fc_transferpaymentstream bigint NOT NULL,
+        egcs_fc_title_en text NOT NULL DEFAULT '',
         _deleted boolean NOT NULL DEFAULT false
       )
     `.execute(db)
@@ -131,6 +134,7 @@ describe('outcome allocation generated-record database guards', () => {
     await sql`CREATE TABLE "Transfer_Payment_Stream_Commitment_Type" (
         id bigint PRIMARY KEY,
         egcs_tp_transferpaymentstream bigint NOT NULL,
+        egcs_tp_name_en text NOT NULL DEFAULT '',
         _deleted boolean NOT NULL DEFAULT false
       )`.execute(db)
     await sql`
@@ -148,6 +152,14 @@ describe('outcome allocation generated-record database guards', () => {
         egcs_fc_budgetversion bigint NOT NULL,
         egcs_fc_originalbudgetfiscalyear uuid,
         egcs_fc_fiscalyear bigint NOT NULL,
+        _deleted boolean NOT NULL DEFAULT false
+      )
+    `.execute(db)
+    await sql`
+      CREATE TABLE "Funding_Case_Agreement_Budget_Line_Item" (
+        id bigint PRIMARY KEY,
+        egcs_fc_fundingagreementbudgetfiscalyear uuid NOT NULL,
+        egcs_fc_programfunding numeric(19, 2) NOT NULL,
         _deleted boolean NOT NULL DEFAULT false
       )
     `.execute(db)
@@ -171,6 +183,21 @@ describe('outcome allocation generated-record database guards', () => {
         _deleted boolean NOT NULL DEFAULT false
       )
     `.execute(db)
+    await sql`CREATE TABLE "Common_User" (
+      id bigint PRIMARY KEY,
+      egcs_cn_email text NOT NULL,
+      _deleted boolean NOT NULL DEFAULT false
+    )`.execute(db)
+    await sql`CREATE TABLE "Common_Completion" (
+      id bigserial PRIMARY KEY,
+      egcs_cn_entitytype text NOT NULL,
+      egcs_cn_entityid bigint NOT NULL,
+      egcs_cn_comments text,
+      egcs_cn_user bigint NOT NULL,
+      egcs_cn_disposition text NOT NULL,
+      egcs_cn_completedat timestamptz NOT NULL,
+      _deleted boolean NOT NULL DEFAULT false
+    )`.execute(db)
     await sql`
       CREATE TABLE "Funding_Case_Agreement_Commitment_Line" (
         id bigserial PRIMARY KEY,
@@ -838,5 +865,72 @@ describe('outcome allocation generated-record database guards', () => {
     )
 
     await sql`UPDATE "Funding_Case_Agreement_Profile" SET _deleted = false WHERE id = 1`.execute(db)
+  })
+
+  it('materializes the unmistakable agreement 51 showcase allocation and commitment provenance', async () => {
+    await sql`
+      DO $showcase$
+      BEGIN
+      INSERT INTO "Transfer_Payment_Profile" (id, egcs_tp_agency) VALUES (310, 1);
+      INSERT INTO "Transfer_Payment_Stream" (id, egcs_tp_transferpaymentprofile) VALUES (31, 310);
+      INSERT INTO "Funding_Case_Agreement_Profile" (id, egcs_fc_transferpaymentstream, egcs_fc_title_en)
+        VALUES (51, 31, 'Health Canada Cost Agreement 1 - Showcase');
+      UPDATE "Common_Status" SET egcs_cn_name_en = 'Active' WHERE id = 4;
+      INSERT INTO "Transfer_Payment_Stream_Commitment_Type" (id, egcs_tp_transferpaymentstream, egcs_tp_name_en)
+        VALUES (31, 31, 'Commitment');
+      INSERT INTO "Agency_Fiscal_Year" (id, egcs_ay_fiscalyeardisplay, egcs_ay_fiscalyear)
+        VALUES (410, '2026-2027', 2026), (411, '2027-2028', 2027);
+      INSERT INTO "Transfer_Payment_Fiscal_Year_Budget" (id, egcs_tp_transferpaymentprofile, egcs_tp_fiscalyear)
+        VALUES (510, 310, 410), (511, 310, 411);
+      INSERT INTO "Transfer_Payment_Stream_Budget" (id, egcs_tp_transferpaymentstream, egcs_tp_transferpaymentbudget)
+        VALUES (310, 31, 510), (311, 31, 511);
+      INSERT INTO "Transfer_Payment_Stream_Chart_of_Account" (id, egcs_tp_streambudget, egcs_tp_transferpaymentstream)
+        VALUES (311, 310, 31), (312, 310, 31), (313, 311, 31), (314, 311, 31);
+      INSERT INTO "Funding_Case_Agreement_Budget_Version" (id, egcs_fc_fundingagreement, egcs_fc_iscurrent)
+        VALUES (51, 51, true);
+      INSERT INTO "Funding_Case_Agreement_Budget_Fiscal_Year"
+        (id, egcs_fc_fundingagreement, egcs_fc_budgetversion, egcs_fc_fiscalyear)
+        VALUES ('00000000-0000-4000-8000-000000000051', 51, 51, 410),
+          ('00000000-0000-4000-8000-000000000052', 51, 51, 411);
+      INSERT INTO "Funding_Case_Agreement_Budget_Line_Item"
+        (id, egcs_fc_fundingagreementbudgetfiscalyear, egcs_fc_programfunding)
+        VALUES (511, '00000000-0000-4000-8000-000000000051', 60),
+          (512, '00000000-0000-4000-8000-000000000051', 15),
+          (513, '00000000-0000-4000-8000-000000000052', 70),
+          (514, '00000000-0000-4000-8000-000000000052', 20);
+      INSERT INTO "Transfer_Payment_Outcome" (id, egcs_tp_transferpaymentprofile, egcs_tp_name_en, egcs_tp_name_fr)
+        VALUES (311, 310, 'Outcome one', 'Résultat un'), (312, 310, 'Outcome two', 'Résultat deux');
+      INSERT INTO "Funding_Case_Agreement_Commitment"
+        (id, egcs_fc_fundingagreement, egcs_fc_type, egcs_fc_status, egcs_fc_financialsystemnumber)
+        VALUES (510001, 51, 31, 4, 510001);
+      INSERT INTO "Funding_Case_Agreement_Commitment_Line"
+        (id, egcs_fc_commitment, egcs_fc_commitmentlinenumber, egcs_fc_transferpaymentstreamchartofaccount, egcs_fc_amount)
+        VALUES (510011, 510001, 1, 311, 60), (510012, 510001, 2, 312, 15);
+      INSERT INTO "Common_User" (id, egcs_cn_email) VALUES (51, 'root@example.com');
+      END;
+      $showcase$;
+    `.execute(db)
+
+    await migration0004.up(db)
+
+    const version = await sql<{ status: string, funding_basis_amount: string }>`
+      SELECT status, funding_basis_amount::text FROM extensions.gcs_outcome_cost_allocation_versions
+      WHERE agreement_id = 51
+    `.execute(db)
+    expect(version.rows).toEqual([{ status: 'active', funding_basis_amount: '165.00' }])
+    const allocations = await sql<{ fiscal_year: string, allocated: string }>`
+      SELECT fiscal_year_display AS fiscal_year, sum(resolved_amount)::text AS allocated
+      FROM extensions.gcs_outcome_cost_allocation_allocations WHERE agreement_id = 51
+      GROUP BY fiscal_year_display ORDER BY fiscal_year_display
+    `.execute(db)
+    expect(allocations.rows).toEqual([
+      { fiscal_year: '2026-2027', allocated: '75.00' },
+      { fiscal_year: '2027-2028', allocated: '90.00' }
+    ])
+    const provenance = await sql<{ count: string }>`
+      SELECT count(*)::text AS count FROM extensions.gcs_outcome_cost_allocation_commitment_lines
+      WHERE agreement_id = 51 AND generated_commitment_id = 510001
+    `.execute(db)
+    expect(provenance.rows).toEqual([{ count: '2' }])
   })
 })
