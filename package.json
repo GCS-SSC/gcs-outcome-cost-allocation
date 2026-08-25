@@ -11,7 +11,7 @@
     "test:integration:postgres": "vitest run --config vitest.postgres.config.ts"
   },
   "dependencies": {
-    "@gcs-ssc/extensions": "^0.1.0"
+    "@gcs-ssc/extensions": "^0.2.0"
   },
   "peerDependencies": {
     "vue": "^3.5.28"

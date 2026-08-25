@@ -2,7 +2,7 @@ import { defineGcsExtension } from '@gcs-ssc/extensions'
 
 export default defineGcsExtension({
   key: 'gcs-outcome-cost-allocation',
-  sdkVersion: '^0.1.0',
+  sdkVersion: '^0.2.0',
   requiredHostCapabilities: [
     'stream-config-modal',
     'entity-tabs',
@@ -28,9 +28,9 @@ export default defineGcsExtension({
   entities: [{
     type: 'allocation-version',
     label: { en: 'Outcome cost allocation version', fr: 'Version de repartition des couts par resultat' },
-    transitionMode: 'completion_workflow',
-    workflowRequired: true,
-    workflowPurpose: 'standard',
+    completion: 'supported',
+    approvalSubmission: 'on_completion',
+    standardWorkflow: 'explicit',
     supportsDirectReviews: false,
     ownerKind: 'agreement',
     assignmentMode: 'inherited',

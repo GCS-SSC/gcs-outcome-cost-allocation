@@ -52,6 +52,10 @@ describe('outcome cost allocation extension UI', () => {
     expect(agreementTab).toContain('overflow-wrap: anywhere')
     expect(agreementTab).toContain('<ExtensionSaveButton')
     expect(manifest).toContain("en: 'Cost Allocation'")
+    expect(manifest).toContain("completion: 'supported'")
+    expect(manifest).toContain("approvalSubmission: 'on_completion'")
+    expect(manifest).toContain("standardWorkflow: 'explicit'")
+    expect(manifest).not.toContain('workflowRequired')
   })
 
   it('does not create draft allocation rows as a render side effect', async () => {
