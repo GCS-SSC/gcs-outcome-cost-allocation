@@ -4,6 +4,20 @@ import type {
   GcsExtensionRouteContext
 } from '@gcs-ssc/extensions/server'
 
+const BUDGET_YEAR_ID = '00000000-0000-4000-8000-000000000003'
+
+const validSaveBody = () => ({
+  allocationVersionId: '2',
+  allocations: [{
+    commitmentType: '3',
+    streamCommitmentId: '4',
+    agreementBudgetFiscalYearId: BUDGET_YEAR_ID,
+    outcomeId: '5',
+    allocationMethod: 'percentage' as const,
+    allocationValue: 25.5
+  }]
+})
+
 const routeMocks = vi.hoisted(() => ({
   asOutcomeCostAllocationDb: vi.fn((db: unknown) => ({ wrapped: db })),
   createDraftAllocationVersion: vi.fn(),
@@ -58,8 +72,8 @@ const createRouteContext = (
   },
   db: { raw: true },
   params: {
-    agreementId: 'agreement-1',
-    allocationVersionId: 'version-1'
+    agreementId: '1',
+    allocationVersionId: '2'
   },
   config: {},
   writeAuthorization: {
@@ -86,7 +100,7 @@ describe('outcome allocation routes', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     routeMocks.createDraftAllocationVersion.mockResolvedValue({
-      id: 'version-1',
+      id: '2',
       status: 'draft'
     })
     routeMocks.deleteDraftAllocationVersion.mockResolvedValue(undefined)
@@ -118,14 +132,14 @@ describe('outcome allocation routes', () => {
     await expect(invokeRoute(route, createRouteContext())).resolves.toEqual({
       ok: true,
       version: {
-        id: 'version-1',
+        id: '2',
         status: 'draft'
       }
     })
     expect(routeMocks.asOutcomeCostAllocationDb).toHaveBeenCalledWith({ raw: true })
     expect(routeMocks.createDraftAllocationVersion).toHaveBeenCalledWith(
       { wrapped: { raw: true } },
-      'agreement-1',
+      '1',
       { agencyId: 'agency-1', streamId: 'stream-1' },
       expect.objectContaining({
         lockAuthState: expect.any(Function),
@@ -134,16 +148,26 @@ describe('outcome allocation routes', () => {
     )
   })
 
-  it('soft-deletes a selected draft and defaults absent route parameters', async () => {
+  it.each([
+    '../../server/api/allocation-versions.post',
+    '../../server/api/allocation-version.delete'
+  ])('fails closed when fresh write authorization is absent for %s', async routePath => {
+    const route = (await import(routePath)).default
+
+    await expect(invokeRoute(route, createRouteContext({ writeAuthorization: undefined })))
+      .rejects.toThrow('Fresh extension authorization is required for allocation writes.')
+    expect(routeMocks.createDraftAllocationVersion).not.toHaveBeenCalled()
+    expect(routeMocks.deleteDraftAllocationVersion).not.toHaveBeenCalled()
+  })
+
+  it('soft-deletes a selected draft', async () => {
     const route = (await import('../../server/api/allocation-version.delete')).default
 
-    await expect(invokeRoute(route, createRouteContext({
-      params: {}
-    }))).resolves.toEqual({ ok: true })
+    await expect(invokeRoute(route, createRouteContext())).resolves.toEqual({ ok: true })
     expect(routeMocks.deleteDraftAllocationVersion).toHaveBeenCalledWith(
       { wrapped: { raw: true } },
-      '',
-      '',
+      '1',
+      '2',
       { agencyId: 'agency-1', streamId: 'stream-1' },
       expect.objectContaining({
         lockAuthState: expect.any(Function),
@@ -155,7 +179,7 @@ describe('outcome allocation routes', () => {
   it('returns existing versions and all allocation reference data', async () => {
     const route = (await import('../../server/api/allocations.get')).default
     const versions = [{
-      id: 'version-1',
+      id: '2',
       status: 'draft'
     }]
     routeMocks.getAllocationVersions.mockResolvedValue(versions)
@@ -175,7 +199,7 @@ describe('outcome allocation routes', () => {
     expect(routeMocks.createDraftAllocationVersion).not.toHaveBeenCalled()
     expect(routeMocks.getAgreementBudgetYears).toHaveBeenCalledWith(
       { wrapped: { raw: true } },
-      'agreement-1',
+      '1',
       'stream-1'
     )
   })
@@ -184,17 +208,14 @@ describe('outcome allocation routes', () => {
     const route = (await import('../../server/api/allocations.get')).default
     routeMocks.getAllocationVersions.mockResolvedValue([])
 
-    await expect(invokeRoute(route, createRouteContext({
-      params: {},
-      entity: undefined
-    }))).resolves.toMatchObject({
+    await expect(invokeRoute(route, createRouteContext({ entity: undefined }))).resolves.toMatchObject({
       versions: []
     })
     expect(routeMocks.createDraftAllocationVersion).not.toHaveBeenCalled()
     expect(routeMocks.getAllocationVersions).toHaveBeenCalledTimes(1)
     expect(routeMocks.getAgreementBudgetYears).toHaveBeenCalledWith(
       { wrapped: { raw: true } },
-      '',
+      '1',
       ''
     )
   })
@@ -203,14 +224,46 @@ describe('outcome allocation routes', () => {
     const route = (await import('../../server/api/allocations.put')).default
     const context = createRouteContext({
       readBody: createReadBody({
-        allocationVersionId: 'version-1',
+        ...validSaveBody(),
+        allocations: [{ ...validSaveBody().allocations[0], allocationValue: '25.5' }]
+      })
+    })
+
+    await expect(invokeRoute(route, context)).resolves.toEqual({ ok: true })
+    expect(routeMocks.saveAllocations).toHaveBeenCalledWith(
+      { wrapped: { raw: true } },
+      '1',
+      '2',
+      [{
+        commitmentType: '3',
+        streamCommitmentId: '4',
+        agreementBudgetFiscalYearId: BUDGET_YEAR_ID,
+        outcomeId: '5',
+        allocationMethod: 'percentage',
+        allocationValue: 25.5
+      }],
+      { agencyId: 'agency-1', streamId: 'stream-1' },
+      expect.objectContaining({
+        lockAuthState: expect.any(Function),
+        authorizeCurrentEntity: expect.any(Function)
+      }),
+      true
+    )
+  })
+
+  it('normalizes numeric bigint identifiers and an uppercase UUID', async () => {
+    const route = (await import('../../server/api/allocations.put')).default
+    const context = createRouteContext({
+      params: { agreementId: ' 1 ' },
+      readBody: createReadBody({
+        allocationVersionId: 7,
         allocations: [{
-          commitmentType: '1',
-          streamCommitmentId: 'stream-commitment-1',
-          agreementBudgetFiscalYearId: 'year-1',
-          outcomeId: 'outcome-1',
-          allocationMethod: 'percentage',
-          allocationValue: '25.5'
+          commitmentType: 1,
+          streamCommitmentId: 2,
+          agreementBudgetFiscalYearId: BUDGET_YEAR_ID.toUpperCase(),
+          outcomeId: 4,
+          allocationMethod: 'amount',
+          allocationValue: 25
         }]
       })
     })
@@ -218,15 +271,15 @@ describe('outcome allocation routes', () => {
     await expect(invokeRoute(route, context)).resolves.toEqual({ ok: true })
     expect(routeMocks.saveAllocations).toHaveBeenCalledWith(
       { wrapped: { raw: true } },
-      'agreement-1',
-      'version-1',
+      '1',
+      '7',
       [{
         commitmentType: '1',
-        streamCommitmentId: 'stream-commitment-1',
-        agreementBudgetFiscalYearId: 'year-1',
-        outcomeId: 'outcome-1',
-        allocationMethod: 'percentage',
-        allocationValue: 25.5
+        streamCommitmentId: '2',
+        agreementBudgetFiscalYearId: BUDGET_YEAR_ID,
+        outcomeId: '4',
+        allocationMethod: 'amount',
+        allocationValue: 25
       }],
       { agencyId: 'agency-1', streamId: 'stream-1' },
       expect.objectContaining({
@@ -247,11 +300,11 @@ describe('outcome allocation routes', () => {
     },
     {
       body: {
-        allocationVersionId: 'version-1',
+        allocationVersionId: '2',
         allocations: [{
           commitmentType: '1',
-          agreementBudgetFiscalYearId: 'year-1',
-          outcomeId: 'outcome-1',
+          agreementBudgetFiscalYearId: BUDGET_YEAR_ID,
+          outcomeId: '5',
           allocationMethod: 'amount',
           allocationValue: 100
         }]
@@ -260,12 +313,12 @@ describe('outcome allocation routes', () => {
     },
     {
       body: {
-        allocationVersionId: 'version-1',
+        allocationVersionId: '2',
         allocations: [{
           commitmentType: '1',
-          streamCommitmentId: 'stream-commitment-1',
-          agreementBudgetFiscalYearId: 'year-1',
-          outcomeId: 'outcome-1',
+          streamCommitmentId: '4',
+          agreementBudgetFiscalYearId: BUDGET_YEAR_ID,
+          outcomeId: '5',
           allocationMethod: 'amount',
           allocationValue: null
         }]
@@ -274,12 +327,12 @@ describe('outcome allocation routes', () => {
     },
     {
       body: {
-        allocationVersionId: 'version-1',
+        allocationVersionId: '2',
         allocations: [{
           commitmentType: '1',
-          streamCommitmentId: 'stream-commitment-1',
-          agreementBudgetFiscalYearId: 'year-1',
-          outcomeId: 'outcome-1',
+          streamCommitmentId: '4',
+          agreementBudgetFiscalYearId: BUDGET_YEAR_ID,
+          outcomeId: '5',
           allocationMethod: 'amount',
           allocationValue: '1.00001'
         }]
@@ -288,14 +341,28 @@ describe('outcome allocation routes', () => {
     },
     {
       body: {
-        allocationVersionId: 'version-1',
+        allocationVersionId: '2',
         allocations: [{
           commitmentType: '1',
-          streamCommitmentId: 'stream-commitment-1',
-          agreementBudgetFiscalYearId: 'year-1',
-          outcomeId: 'outcome-1',
+          streamCommitmentId: '4',
+          agreementBudgetFiscalYearId: BUDGET_YEAR_ID,
+          outcomeId: '5',
           allocationMethod: 'amount',
           allocationValue: '1000000000000000'
+        }]
+      },
+      path: 'allocations.0.allocationValue'
+    },
+    {
+      body: {
+        allocationVersionId: '2',
+        allocations: [{
+          commitmentType: '1',
+          streamCommitmentId: '4',
+          agreementBudgetFiscalYearId: BUDGET_YEAR_ID,
+          outcomeId: '5',
+          allocationMethod: 'percentage',
+          allocationValue: 100.0001
         }]
       },
       path: 'allocations.0.allocationValue'
@@ -332,7 +399,7 @@ describe('outcome allocation routes', () => {
 
     await expect(invokeRoute(route, createRouteContext({
       readBody: createReadBody({
-        allocationVersionId: 'version-1',
+        allocationVersionId: '2',
         allocations: []
       })
     }))).rejects.toMatchObject({
@@ -379,8 +446,8 @@ describe('outcome allocation routes', () => {
       })
 
       await expect(invokeRoute(route, createRouteContext({
-        readBody: createReadBody({
-          allocationVersionId: 'version-1',
+          readBody: createReadBody({
+          allocationVersionId: '2',
           allocations: []
         })
       }))).rejects.toMatchObject({
@@ -403,7 +470,7 @@ describe('outcome allocation routes', () => {
 
     await expect(invokeRoute(route, createRouteContext({
       readBody: createReadBody({
-        allocationVersionId: 'version-1',
+        allocationVersionId: '2',
         allocations: []
       })
     }))).rejects.toBe(error)

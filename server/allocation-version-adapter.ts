@@ -18,6 +18,12 @@ type LockedVersion = {
   domainStatus: 'draft' | 'active' | 'inactive'
 }
 
+type LockedStatus = {
+  egcs_cn_readonly: boolean
+  egcs_cn_terminal: boolean
+  egcs_cn_isdraft: boolean
+}
+
 const loadLockedVersion = async (transaction: Transaction<unknown>, entityId: string): Promise<LockedVersion | null> => {
   const db = asOutcomeCostAllocationDb(transaction)
   const row = await db
@@ -64,6 +70,30 @@ const loadLockedVersion = async (transaction: Transaction<unknown>, entityId: st
     : null
 }
 
+const loadLockedStatus = async (
+  transaction: Transaction<unknown>,
+  record: LockedVersion,
+  statusId: string = record.lifecycleStatusId
+): Promise<LockedStatus | null> => await asOutcomeCostAllocationDb(transaction)
+  .selectFrom('Common_Status')
+  .select([
+    'egcs_cn_readonly',
+    'egcs_cn_terminal',
+    'egcs_cn_isdraft'
+  ])
+  .where('id', '=', statusId)
+  .where('egcs_cn_agency', '=', record.agencyId)
+  .where('_deleted', '=', false)
+  .forUpdate()
+  .executeTakeFirst() ?? null
+
+const resolvedStatus = (record: LockedVersion, status: LockedStatus) => ({
+  statusId: record.lifecycleStatusId,
+  readOnly: status.egcs_cn_readonly,
+  terminal: status.egcs_cn_terminal,
+  isDraft: status.egcs_cn_isdraft
+})
+
 const adapter = defineGcsLifecycleEntityAdapter({
   registerIdentity: async () => undefined,
   resolveOwner: async (context, target) => {
@@ -83,22 +113,15 @@ const adapter = defineGcsLifecycleEntityAdapter({
     } : null
   },
   resolveStatus: async (context, target) => {
-    const db = asOutcomeCostAllocationDb(context.transaction)
     const record = await loadLockedVersion(context.transaction, target.entityId)
     if (!record) return null
-    const status = await db.selectFrom('Common_Status').selectAll().where('id', '=', record.lifecycleStatusId).executeTakeFirst()
-    return status ? {
-      statusId: record.lifecycleStatusId,
-      readOnly: status.egcs_cn_readonly,
-      terminal: status.egcs_cn_terminal,
-      isDraft: status.egcs_cn_isdraft
-    } : null
+    const status = await loadLockedStatus(context.transaction, record)
+    return status ? resolvedStatus(record, status) : null
   },
   lockEntity: async (context, target) => {
     const record = await loadLockedVersion(context.transaction, target.entityId)
     if (!record) return null
-    const db = asOutcomeCostAllocationDb(context.transaction)
-    const status = await db.selectFrom('Common_Status').selectAll().where('id', '=', record.lifecycleStatusId).executeTakeFirst()
+    const status = await loadLockedStatus(context.transaction, record)
     if (!status) return null
     return {
       target,
@@ -112,12 +135,7 @@ const adapter = defineGcsLifecycleEntityAdapter({
           path: [{ type: 'transferpaymentstream', id: record.streamId }]
         }
       },
-      status: {
-        statusId: record.lifecycleStatusId,
-        readOnly: status.egcs_cn_readonly,
-        terminal: status.egcs_cn_terminal,
-        isDraft: status.egcs_cn_isdraft
-      },
+      status: resolvedStatus(record, status),
       assignmentMode: 'inherited' as const,
       record
     }
@@ -149,7 +167,11 @@ const adapter = defineGcsLifecycleEntityAdapter({
   },
   mutateStatus: async (context, mutation) => {
     const record = mutation.lockedEntity.record as LockedVersion
-    await asOutcomeCostAllocationDb(context.transaction)
+    const db = asOutcomeCostAllocationDb(context.transaction)
+    if (!await loadLockedStatus(context.transaction, record, mutation.nextStatusId)) {
+      throw new Error('Outcome cost allocation next status is unavailable for the owning Agency.')
+    }
+    await db
       .updateTable('extensions.gcs_outcome_cost_allocation_versions')
       .set({ lifecycle_status_id: mutation.nextStatusId })
       .where('id', '=', record.id)

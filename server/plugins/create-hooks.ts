@@ -8,12 +8,14 @@ import {
   type GcsExtensionCreateOperationContext,
   type GcsExtensionCreateOperationResult,
   type GcsExtensionDisableGuardContext,
+  type GcsExtensionStatusReferenceGuardContext,
   registerGcsExtensionAgreementLifecycleLock,
   registerGcsExtensionAgreementDeleteGuard,
   registerGcsExtensionAgreementStreamChangeGuard,
   registerGcsExtensionAgreementPaymentMutationGuard,
   registerGcsExtensionCreateOperationHandler,
-  registerGcsExtensionDisableGuard
+  registerGcsExtensionDisableGuard,
+  registerGcsExtensionStatusReferenceGuard
 } from '@gcs-ssc/extensions/server'
 import { sql } from 'kysely'
 import { asOutcomeCostAllocationDb } from '../db.ts'
@@ -95,6 +97,15 @@ const agreementDeleteBlocked = () => createGcsExtensionUserError({
   message: {
     en: 'This agreement cannot be deleted because outcome cost allocation history or generated records exist.',
     fr: 'Cette entente ne peut pas etre supprimee, car un historique de repartition des couts par resultat ou des enregistrements generes existent.'
+  }
+})
+
+const allocationStatusReferenced = () => createGcsExtensionUserError({
+  code: 'GCS_OUTCOME_COST_ALLOCATION_STATUS_REFERENCED',
+  statusCode: 409,
+  message: {
+    en: 'This status is still referenced by outcome cost allocation history.',
+    fr: 'Ce statut est toujours reference par un historique de repartition des couts par resultat.'
   }
 })
 
@@ -445,6 +456,46 @@ const guardAgreementDelete = async (
   }
 }
 
+/** Blocks deletion of a status referenced by non-deleted allocation history in its canonical Agency. */
+export const guardOutcomeCostAllocationStatusReference = async (
+  context: GcsExtensionStatusReferenceGuardContext
+): Promise<void> => {
+  const db = asOutcomeCostAllocationDb(context.db)
+  if (!await outcomeCostAllocationLifecycleTablesExist(db)) {
+    return
+  }
+
+  const reference = await db
+    .selectFrom('extensions.gcs_outcome_cost_allocation_versions as allocation_version')
+    .innerJoin(
+      'Funding_Case_Agreement_Profile as agreement',
+      'agreement.id',
+      'allocation_version.agreement_id'
+    )
+    .innerJoin(
+      'Transfer_Payment_Stream as stream',
+      'stream.id',
+      'agreement.egcs_fc_transferpaymentstream'
+    )
+    .innerJoin(
+      'Transfer_Payment_Profile as profile',
+      'profile.id',
+      'stream.egcs_tp_transferpaymentprofile'
+    )
+    .select('allocation_version.id')
+    .where('allocation_version.lifecycle_status_id', '=', context.statusId)
+    .where('allocation_version._deleted', '=', false)
+    .where('agreement._deleted', '=', false)
+    .where('stream._deleted', '=', false)
+    .where('profile._deleted', '=', false)
+    .where('profile.egcs_tp_agency', '=', context.agencyId)
+    .executeTakeFirst()
+
+  if (reference) {
+    throw allocationStatusReferenced()
+  }
+}
+
 /**
  * Inserts generated lines and provenance for the host-created commitment.
  */
@@ -682,4 +733,5 @@ export default defineGcsExtensionNitroPlugin(nitroApp => {
   registerGcsExtensionAgreementDeleteGuard(EXTENSION_KEY, guardAgreementDelete, nitroApp)
   registerGcsExtensionAgreementStreamChangeGuard(EXTENSION_KEY, guardAgreementStreamChange, nitroApp)
   registerGcsExtensionAgreementPaymentMutationGuard(EXTENSION_KEY, guardAgreementPaymentMutation, nitroApp)
+  registerGcsExtensionStatusReferenceGuard(EXTENSION_KEY, guardOutcomeCostAllocationStatusReference, nitroApp)
 })

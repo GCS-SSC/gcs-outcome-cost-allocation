@@ -106,6 +106,25 @@ const ReactiveModal = defineComponent({
       ])
 })
 
+const WorkflowSection = defineComponent({
+  name: 'WorkflowSection',
+  inheritAttrs: false,
+  props: {
+    entityType: { type: String, required: true },
+    entityId: { type: String, required: true },
+    canEdit: { type: Boolean, default: true },
+    refreshKey: { type: Number, default: 0 }
+  },
+  emits: ['changed'],
+  setup: props => () => h('div', {
+    'data-control': 'workflow-section',
+    'data-entity-type': props.entityType,
+    'data-entity-id': props.entityId,
+    'data-can-edit': String(props.canEdit),
+    'data-refresh-key': String(props.refreshKey)
+  })
+})
+
 const jsonResponse = (value: unknown): Response => new Response(JSON.stringify(value), {
   status: 200,
   headers: {
@@ -218,6 +237,7 @@ const mountTab = async (
   runtime.components.USelect = InteractiveSelect
   runtime.components.UTable = AllocationTable
   runtime.components.UModal = ReactiveModal
+  runtime.components.CommonWorkflowSection = WorkflowSection
 
   const Host = defineComponent({
     setup: () => () => h(Suspense, null, {
@@ -258,6 +278,34 @@ afterEach(() => {
 })
 
 describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
+  it.each([
+    ['en', 'Workflows', 'Start and complete a standard workflow for the selected allocation version.'],
+    ['fr', 'Flux de travail', 'Demarrez et terminez un flux de travail standard pour la version de repartition selectionnee.']
+  ])('mounts the standard host Workflow section for the selected qualified target in %s', async (
+    locale,
+    heading,
+    description
+  ) => {
+    const fetchMock = vi.fn(async (): Promise<Response> => jsonResponse(allocationResponse))
+    const wrapper = await mountTab(fetchMock as typeof fetch, config, locale)
+
+    const workflow = wrapper.getComponent(WorkflowSection)
+    expect(workflow.props()).toMatchObject({
+      entityType: 'gcs-outcome-cost-allocation:allocation-version',
+      entityId: 'version-1',
+      canEdit: true,
+      refreshKey: 0
+    })
+    expect(wrapper.text()).toContain(heading)
+    expect(wrapper.text()).toContain(description)
+
+    workflow.vm.$emit('changed')
+    await flushPromises()
+    expect(fetchMock).toHaveBeenCalled()
+
+    wrapper.unmount()
+  })
+
   it('normalizes generation years and accepts only supported allocation methods', async () => {
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       return init?.method === 'PUT'
@@ -782,6 +830,7 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
     expect(generateButton.attributes()).toHaveProperty('disabled')
     expect(saveButton.attributes()).toHaveProperty('disabled')
     expect(completeButton.attributes()).toHaveProperty('disabled')
+    expect(wrapper.getComponent(WorkflowSection).props('canEdit')).toBe(false)
 
     await generateButton.trigger('click')
     await saveButton.trigger('click')
@@ -793,6 +842,34 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
 
     releaseDelete(jsonResponse({ ok: true }))
     await flushPromises()
+    wrapper.unmount()
+  })
+
+  it('refreshes the selected Workflow projection after submitting the allocation for approval', async () => {
+    const completeReadyResponse = {
+      ...allocationResponse,
+      allocations: allocationResponse.budgetYears.map((year, index) => ({
+        allocationVersionId: 'version-1',
+        commitmentType: '1',
+        streamCommitmentId: `stream-commitment-${index + 1}`,
+        agreementBudgetFiscalYearId: String(year.id),
+        outcomeId: 'outcome-1',
+        allocationMethod: 'amount',
+        allocationValue: 100
+      }))
+    }
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit): Promise<Response> =>
+      jsonResponse(completeReadyResponse))
+    const wrapper = await mountTab(fetchMock as typeof fetch)
+
+    await findButton(wrapper, 'Submit for approval').trigger('click')
+    await flushPromises()
+
+    expect(fetchMock.mock.calls.some(([input, init]) =>
+      String(input).includes('/api/completions/complete') && init?.method === 'POST'
+    )).toBe(true)
+    expect(wrapper.getComponent(WorkflowSection).props('refreshKey')).toBe(1)
+
     wrapper.unmount()
   })
 })

@@ -1,10 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
-import { ref } from 'vue'
 import {
   buildOutcomeAllocationRows,
   buildSaveOutcomeAllocationsRequestBody,
-  completeOutcomeAllocationSelectedVersion,
-  completeOutcomeAllocationVersionRequest,
   deleteOutcomeAllocationDraftVersionRequest,
   getOutcomeAllocationVersionEndpoint,
   getOutcomeAllocationVersionsEndpoint,
@@ -215,147 +212,13 @@ describe('agreement outcome cost allocation tab helpers', () => {
       .rejects.toThrow('Cannot save allocations')
   })
 
-  it('sends complete and draft delete requests', async () => {
+  it('sends draft delete requests', async () => {
     const fetcher = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }))
 
-    await expect(completeOutcomeAllocationVersionRequest(
-      '/allocation-versions/version-1/complete',
-      [],
-      fetcher
-    ))
-      .resolves.toBeUndefined()
     await expect(deleteOutcomeAllocationDraftVersionRequest('/allocation-versions/version-1', fetcher))
       .resolves.toBeUndefined()
 
-    expect(fetcher).toHaveBeenNthCalledWith(1, '/allocation-versions/version-1/complete', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ allocations: [] })
-    })
-    expect(fetcher).toHaveBeenNthCalledWith(2, '/allocation-versions/version-1', { method: 'DELETE' })
-  })
-
-  it('skips completion when already completing, not editable, or missing a version', async () => {
-    const baseOptions = {
-      isCompleting: ref(false),
-      hasPendingMutation: false,
-      canEditSelectedVersion: true,
-      selectedVersionId: 'version-1',
-      validationIssueCount: 0,
-      validationMessage: '',
-      locale: 'en',
-      saveError: ref(''),
-      allocations: [],
-      refresh: vi.fn().mockResolvedValue(undefined),
-      buildCompleteRequestUrl: (versionId: string) => `/versions/${versionId}/complete`,
-      toast: { add: vi.fn() },
-      completeRequest: vi.fn().mockResolvedValue(undefined)
-    }
-
-    await completeOutcomeAllocationSelectedVersion({ ...baseOptions, isCompleting: ref(true) })
-    await completeOutcomeAllocationSelectedVersion({ ...baseOptions, hasPendingMutation: true })
-    await completeOutcomeAllocationSelectedVersion({ ...baseOptions, canEditSelectedVersion: false })
-    await completeOutcomeAllocationSelectedVersion({ ...baseOptions, selectedVersionId: '' })
-
-    expect(baseOptions.completeRequest).not.toHaveBeenCalled()
-  })
-
-  it('shows validation errors before saving completion requests', async () => {
-    const options = {
-      isCompleting: ref(false),
-      hasPendingMutation: false,
-      canEditSelectedVersion: true,
-      selectedVersionId: 'version-1',
-      validationIssueCount: 1,
-      validationMessage: 'The full agreement budget must be allocated.',
-      locale: 'en',
-      saveError: ref(''),
-      allocations: [],
-      refresh: vi.fn().mockResolvedValue(undefined),
-      buildCompleteRequestUrl: (versionId: string) => `/versions/${versionId}/complete`,
-      toast: { add: vi.fn() },
-      completeRequest: vi.fn().mockResolvedValue(undefined)
-    }
-
-    await completeOutcomeAllocationSelectedVersion(options)
-
-    expect(options.toast.add).toHaveBeenCalledWith({
-      title: 'Error',
-      description: 'The full agreement budget must be allocated.',
-      color: 'error'
-    })
-    expect(options.completeRequest).not.toHaveBeenCalled()
-  })
-
-  it('atomically saves and completes, refreshes, and shows success for valid completion requests', async () => {
-    const allocations: VersionedOutcomeAllocationInput[] = [{
-      allocationVersionId: 'version-1',
-      commitmentType: '1',
-      agreementBudgetFiscalYearId: 'year-1',
-      streamCommitmentId: 'commitment-1',
-      outcomeId: 'outcome-1',
-      allocationMethod: 'amount',
-      allocationValue: 10
-    }]
-    const options = {
-      isCompleting: ref(false),
-      hasPendingMutation: false,
-      canEditSelectedVersion: true,
-      selectedVersionId: 'version-1',
-      validationIssueCount: 0,
-      validationMessage: '',
-      locale: 'en',
-      saveError: ref('previous'),
-      allocations,
-      refresh: vi.fn().mockResolvedValue(undefined),
-      buildCompleteRequestUrl: (versionId: string) => `/versions/${versionId}/complete`,
-      toast: { add: vi.fn() },
-      completeRequest: vi.fn().mockResolvedValue(undefined)
-    }
-
-    await completeOutcomeAllocationSelectedVersion(options)
-
-    expect(options.saveError.value).toBe('')
-    expect(options.completeRequest).toHaveBeenCalledWith(
-      '/versions/version-1/complete',
-      allocations
-    )
-    expect(options.refresh).toHaveBeenCalled()
-    expect(options.toast.add).toHaveBeenCalledWith({
-      title: 'Success',
-      description: 'Cost allocation submitted for approval.',
-      color: 'success'
-    })
-    expect(options.isCompleting.value).toBe(false)
-  })
-
-  it('stores and toasts completion request errors', async () => {
-    const options = {
-      isCompleting: ref(false),
-      hasPendingMutation: false,
-      canEditSelectedVersion: true,
-      selectedVersionId: 'version-1',
-      validationIssueCount: 0,
-      validationMessage: '',
-      locale: 'en',
-      saveError: ref(''),
-      allocations: [],
-      refresh: vi.fn().mockResolvedValue(undefined),
-      buildCompleteRequestUrl: (versionId: string) => `/versions/${versionId}/complete`,
-      toast: { add: vi.fn() },
-      completeRequest: vi.fn().mockRejectedValue(new Error('Cannot complete'))
-    }
-
-    await completeOutcomeAllocationSelectedVersion(options)
-
-    expect(options.saveError.value).toBe('Cannot complete')
-    expect(options.toast.add).toHaveBeenCalledWith({
-      title: 'Error',
-      description: 'Cannot complete',
-      color: 'error'
-    })
-    expect(options.refresh).not.toHaveBeenCalled()
-    expect(options.isCompleting.value).toBe(false)
+    expect(fetcher).toHaveBeenCalledWith('/allocation-versions/version-1', { method: 'DELETE' })
   })
 
   it('returns localized outcome allocation toast text', () => {

@@ -85,9 +85,6 @@ export default defineGcsExtension({
     },
     {
       path: './server/migrations/0003_scoped_allocations.ts'
-    },
-    {
-      path: './server/migrations/0004_showcase_seed.ts'
     }
   ],
   serverHandlers: [

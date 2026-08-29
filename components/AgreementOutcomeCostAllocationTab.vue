@@ -16,6 +16,7 @@ import {
   ExtensionSelect,
   ExtensionSelectMenu,
   ExtensionTable,
+  ExtensionWorkflowSection,
   useHostApi,
   useExtensionApi,
   useExtensionConfirmDialog,
@@ -97,6 +98,7 @@ const isSaving: Ref<boolean> = ref(false)
 const isCompleting: Ref<boolean> = ref(false)
 const isCreatingDraft: Ref<boolean> = ref(false)
 const deletingVersionId: Ref<string> = ref('')
+const workflowRefreshKey: Ref<number> = ref(0)
 const saveError: Ref<string> = ref('')
 const expandedRows: Ref<Record<string, boolean>> = ref({})
 const isGenerateModalOpen: Ref<boolean> = ref(false)
@@ -799,6 +801,7 @@ const completeSelectedVersion = async () => {
     })
     selectedVersionHasCompletion.value = true
     await refresh()
+    workflowRefreshKey.value += 1
     toast.add({ ...getOutcomeAllocationToastText(locale.value, 'submitted'), color: 'success' })
   } catch (error: unknown) {
     saveError.value = error instanceof Error ? error.message : String(error)
@@ -806,6 +809,13 @@ const completeSelectedVersion = async () => {
   } finally {
     isCompleting.value = false
   }
+}
+
+const handleWorkflowChanged = async () => {
+  await Promise.all([
+    refresh(),
+    refreshSelectedCompletion()
+  ])
 }
 
 const createDraftVersion = async () => {
@@ -977,6 +987,14 @@ const text = {
   save: {
     en: 'Save',
     fr: 'Enregistrer'
+  },
+  workflows: {
+    en: 'Workflows',
+    fr: 'Flux de travail'
+  },
+  workflowsDescription: {
+    en: 'Start and complete a standard workflow for the selected allocation version.',
+    fr: 'Demarrez et terminez un flux de travail standard pour la version de repartition selectionnee.'
   }
 }
 
@@ -1268,6 +1286,24 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
           {{ tLocal('noRows') }}
         </span>
       </div>
+    </div>
+
+    <div v-if="selectedVersion" class="min-w-0 space-y-4 border-t border-zinc-200 pt-6 dark:border-zinc-800">
+      <div class="space-y-1">
+        <h3 class="text-base font-semibold text-zinc-900 dark:text-white">
+          {{ tLocal('workflows') }}
+        </h3>
+        <p class="text-sm text-zinc-500 dark:text-zinc-400">
+          {{ tLocal('workflowsDescription') }}
+        </p>
+      </div>
+      <ExtensionWorkflowSection
+        :key="selectedVersion.id"
+        entity-type="gcs-outcome-cost-allocation:allocation-version"
+        :entity-id="selectedVersion.id"
+        :can-edit="!hasPendingDraftMutation"
+        :refresh-key="workflowRefreshKey"
+        @changed="handleWorkflowChanged" />
     </div>
 
     <ExtensionModal v-model:open="isGenerateModalOpen" :title="tLocal('generateRowsTitle')">

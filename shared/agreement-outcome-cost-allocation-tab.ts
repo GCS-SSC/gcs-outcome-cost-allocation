@@ -1,4 +1,3 @@
-import type { Ref } from 'vue'
 import {
   type CommitmentType,
   type CostAllocationVersion,
@@ -6,29 +5,6 @@ import {
 } from './allocation'
 
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
-
-interface ToastLike {
-  add: (notification: { title: string, description: string, color: 'error' | 'success' }) => void
-}
-
-export interface CompleteOutcomeAllocationSelectedVersionOptions {
-  isCompleting: Ref<boolean>
-  hasPendingMutation: boolean
-  canEditSelectedVersion: boolean
-  selectedVersionId: string
-  validationIssueCount: number
-  validationMessage: string
-  locale: string
-  saveError: Ref<string>
-  allocations: VersionedOutcomeAllocationInput[]
-  refresh: () => Promise<void>
-  buildCompleteRequestUrl: (versionId: string) => RequestInfo | URL
-  toast: ToastLike
-  completeRequest?: (
-    requestUrl: RequestInfo | URL,
-    allocations: VersionedOutcomeAllocationInput[]
-  ) => Promise<void>
-}
 
 export interface ConfiguredAssociationRow {
   id: string
@@ -254,24 +230,6 @@ export const saveOutcomeAllocationsRequest = async (
 }
 
 /**
- * Completes an allocation version and throws the server-provided message for a non-success response.
- */
-export const completeOutcomeAllocationVersionRequest = async (
-  requestUrl: RequestInfo | URL,
-  allocations: VersionedOutcomeAllocationInput[],
-  fetcher: Fetcher = fetch
-) => {
-  const response = await fetcher(requestUrl, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ allocations })
-  })
-  if (!response.ok) {
-    throw new Error(await getOutcomeAllocationResponseErrorMessage(response))
-  }
-}
-
-/**
  * Deletes a draft allocation version and throws the server-provided message for a non-success response.
  */
 export const deleteOutcomeAllocationDraftVersionRequest = async (
@@ -281,56 +239,6 @@ export const deleteOutcomeAllocationDraftVersionRequest = async (
   const response = await fetcher(requestUrl, { method: 'DELETE' })
   if (!response.ok) {
     throw new Error(await getOutcomeAllocationResponseErrorMessage(response))
-  }
-}
-
-/**
- * Runs the selected outcome allocation version completion flow.
- *
- * @param options - Completion state, callbacks, and UI dependencies.
- */
-export const completeOutcomeAllocationSelectedVersion = async (
-  options: CompleteOutcomeAllocationSelectedVersionOptions
-) => {
-  if (
-    options.isCompleting.value
-    || options.hasPendingMutation
-    || !options.canEditSelectedVersion
-    || !options.selectedVersionId
-  ) {
-    return
-  }
-
-  if (options.validationIssueCount > 0) {
-    options.toast.add({
-      title: getOutcomeAllocationToastText(options.locale, 'error').title,
-      description: options.validationMessage,
-      color: 'error'
-    })
-    return
-  }
-
-  try {
-    options.isCompleting.value = true
-    options.saveError.value = ''
-    await (options.completeRequest ?? completeOutcomeAllocationVersionRequest)(
-      options.buildCompleteRequestUrl(options.selectedVersionId),
-      options.allocations
-    )
-    await options.refresh()
-    options.toast.add({
-      ...getOutcomeAllocationToastText(options.locale, 'submitted'),
-      color: 'success'
-    })
-  } catch (error: unknown) {
-    options.saveError.value = error instanceof Error ? error.message : String(error)
-    options.toast.add({
-      title: getOutcomeAllocationToastText(options.locale, 'error').title,
-      description: options.saveError.value,
-      color: 'error'
-    })
-  } finally {
-    options.isCompleting.value = false
   }
 }
 

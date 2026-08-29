@@ -1,10 +1,10 @@
 import { defineGcsExtensionRouteHandler } from '@gcs-ssc/extensions/server'
 import { asOutcomeCostAllocationDb } from '../db.ts'
 import { deleteDraftAllocationVersion } from '../allocation-data.ts'
+import { parseAllocationVersionRouteParams } from '../allocation-request-validation.ts'
 
 export default defineGcsExtensionRouteHandler(async ({ params, entity, db: rawDb, writeAuthorization }) => {
-  const agreementId = params.agreementId ?? ''
-  const allocationVersionId = params.allocationVersionId ?? ''
+  const { agreementId, allocationVersionId } = parseAllocationVersionRouteParams(params)
   const db = asOutcomeCostAllocationDb(rawDb)
 
   if (!writeAuthorization) {

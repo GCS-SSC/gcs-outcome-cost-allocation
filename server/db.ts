@@ -1,4 +1,4 @@
-import type { Generated, Kysely } from 'kysely'
+import type { Generated, JSONColumnType, Kysely } from 'kysely'
 import type { AllocationVersionStatus } from '../shared/allocation.ts'
 
 export interface OutcomeCostAllocationHostDatabase {
@@ -85,7 +85,7 @@ export interface OutcomeCostAllocationHostDatabase {
     id: string
     egcs_tp_streambudget: string
     egcs_tp_transferpaymentstream: string
-    egcs_tp_accountingdimensions: Array<{ label_en: string, label_fr: string, value: string }>
+    egcs_tp_accountingdimensions: JSONColumnType<Array<{ label_en: string, label_fr: string, value: string }>>
     _deleted: boolean
   }
   'Transfer_Payment_Stream_Commitment_Type': {
