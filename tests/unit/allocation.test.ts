@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
   allocatePaymentAmountToCommitmentLines,
+  parseAllocationMoney,
+  parseExactNumeric19Scale4,
   parseOutcomeCostAllocationConfig,
   resolveAllocationAmounts,
+  sumMoney,
   toMoney,
   validateGeneratedCommitmentLinePaymentCoverage,
   validateAllocationReferences,
@@ -205,8 +208,8 @@ describe('outcome cost allocation logic', () => {
       }
     ], years)
 
-    expect(resolved.map(allocation => allocation.amount)).toEqual([111.1, 222.23])
-    expect(resolved.reduce((sum, allocation) => sum + allocation.amount, 0)).toBe(333.33)
+    expect(resolved.map(allocation => allocation.amount)).toEqual(['111.10', '222.23'])
+    expect(sumMoney(resolved.map(allocation => allocation.amount))).toBe('333.33')
   })
 
   it('balances percentage residual cents deterministically and validates the resolved values', () => {
@@ -233,8 +236,8 @@ describe('outcome cost allocation logic', () => {
 
     const resolved = resolveAllocationAmounts(allocations, centSensitiveYears)
 
-    expect(resolved.map(allocation => allocation.amount)).toEqual([0.21, 1.84])
-    expect(toMoney(resolved.reduce((sum, allocation) => sum + allocation.amount, 0))).toBe(2.05)
+    expect(resolved.map(allocation => allocation.amount)).toEqual(['0.21', '1.84'])
+    expect(sumMoney(resolved.map(allocation => allocation.amount))).toBe('2.05')
     expect(validateAllocationTotals(allocations, centSensitiveYears, activeOutcomes)).toEqual([])
   })
 
@@ -267,15 +270,23 @@ describe('outcome cost allocation logic', () => {
     const reversed = byOutcomeId(resolveAllocationAmounts([...allocations].reverse(), centSensitiveYears))
 
     expect(forward).toEqual(new Map([
-      ['outcome-1', 0.21],
-      ['outcome-2', 1.84]
+      ['outcome-1', '0.21'],
+      ['outcome-2', '1.84']
     ]))
     expect(reversed).toEqual(forward)
   })
 
   it('rounds decimal half cents correctly without binary floating-point drift', () => {
-    expect(toMoney(10.075)).toBe(10.08)
-    expect(toMoney(1.005)).toBe(1.01)
+    expect(toMoney(10.075)).toBe('10.08')
+    expect(toMoney(1.005)).toBe('1.01')
+  })
+
+  it('accepts full database ranges while enforcing canonical string syntax', () => {
+    expect(parseAllocationMoney('99999999999999999.99')).toBe('99999999999999999.99')
+    expect(parseExactNumeric19Scale4('999999999999999.9999')).toBe('999999999999999.9999')
+    expect(parseAllocationMoney(' 1.00')).toBeNull()
+    expect(parseAllocationMoney('01.00')).toBeNull()
+    expect(parseExactNumeric19Scale4('00.1000')).toBeNull()
   })
 
   it('reports missing activity outcomes and stale budget rows', () => {
@@ -322,7 +333,7 @@ describe('outcome cost allocation logic', () => {
           outcomeId: 'outcome-1',
           allocationMethod: 'amount',
           allocationValue: 500,
-          amount: 500
+          amount: toMoney('500')
         },
         {
           streamCommitmentId: 'inactive-stream-commitment',
@@ -330,7 +341,7 @@ describe('outcome cost allocation logic', () => {
           outcomeId: 'outcome-2',
           allocationMethod: 'amount',
           allocationValue: 500,
-          amount: 500
+          amount: toMoney('500')
         }
       ],
       config,
@@ -360,7 +371,7 @@ describe('outcome cost allocation logic', () => {
         outcomeId: 'outcome-1',
         allocationMethod: 'amount',
         allocationValue: 1000,
-        amount: 1000
+        amount: toMoney('1000')
       }],
       config,
       new Map([['year-1', 'stream-budget-1']]),
@@ -506,15 +517,15 @@ describe('outcome cost allocation logic', () => {
     ], 50)).toEqual([
       {
         commitmentLineId: 'line-1',
-        weightAmount: 75,
-        remainingAmount: 75,
-        paymentAmount: 40
+        weightAmount: '75.00',
+        remainingAmount: '75.00',
+        paymentAmount: '40.00'
       },
       {
         commitmentLineId: 'line-2',
-        weightAmount: 25,
-        remainingAmount: 10,
-        paymentAmount: 10
+        weightAmount: '25.00',
+        remainingAmount: '10.00',
+        paymentAmount: '10.00'
       }
     ])
 
@@ -546,8 +557,8 @@ describe('outcome cost allocation logic', () => {
       }
     ], 100)
 
-    expect(lines.map(line => line.paymentAmount)).toEqual([33.33, 33.33, 33.34])
-    expect(lines.reduce((sum, line) => sum + line.paymentAmount, 0)).toBe(100)
+    expect(lines.map(line => line.paymentAmount)).toEqual(['33.33', '33.33', '33.34'])
+    expect(sumMoney(lines.map(line => line.paymentAmount))).toBe('100.00')
   })
 
   it('weights large exact financial values without overflowing Number multiplication', () => {
@@ -565,8 +576,8 @@ describe('outcome cost allocation logic', () => {
     ], 900_000_000_000)
 
     expect(lines.map(line => line.paymentAmount)).toEqual([
-      450_000_000_000,
-      450_000_000_000
+      '450000000000.00',
+      '450000000000.00'
     ])
   })
 })

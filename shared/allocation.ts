@@ -10,11 +10,13 @@ export type AllocationMethod = typeof ALLOCATION_METHODS[number]
 export const ALLOCATION_VERSION_STATUSES = ['draft', 'active', 'inactive'] as const
 export type AllocationVersionStatus = typeof ALLOCATION_VERSION_STATUSES[number]
 
-export const EXACT_NUMERIC_19_4_MAX = 900_719_925_474.0991
+declare const allocationMoneyBrand: unique symbol
+declare const allocationDecimal4Brand: unique symbol
+export type AllocationMoney = string & { readonly [allocationMoneyBrand]: 'AllocationMoney' }
+export type AllocationDecimal4 = string & { readonly [allocationDecimal4Brand]: 'AllocationDecimal4' }
+export type AllocationDecimalInput = string | number
 
-/**
- * Converts a non-negative scale-four decimal to exact units when it fits a safe JavaScript integer.
- */
+/** Converts a canonical non-negative numeric(19,4) value to exact scale-four units. */
 export const toExactNumeric19Scale4Units = (value: unknown): bigint | null => {
   if (typeof value !== 'number' && typeof value !== 'string') {
     return null
@@ -23,8 +25,8 @@ export const toExactNumeric19Scale4Units = (value: unknown): bigint | null => {
     return null
   }
 
-  const numericText = typeof value === 'string' ? value.trim() : String(value)
-  const match = /^(\d+)(?:\.(\d+))?$/.exec(numericText)
+  const numericText = String(value)
+  const match = /^(0|[1-9]\d*)(?:\.(\d+))?$/.exec(numericText)
   if (!match) {
     return null
   }
@@ -36,19 +38,30 @@ export const toExactNumeric19Scale4Units = (value: unknown): bigint | null => {
   }
 
   const scaledUnits = BigInt(`${integerDigits}${fractionDigits.padEnd(4, '0')}`)
-  return scaledUnits > BigInt(Number.MAX_SAFE_INTEGER) ? null : scaledUnits
+  return typeof value === 'number' && scaledUnits > BigInt(Number.MAX_SAFE_INTEGER) ? null : scaledUnits
 }
 
-/**
- * Parses a non-negative scale-four decimal only when its scaled units fit a safe JavaScript integer.
- */
-export const parseExactNumeric19Scale4 = (value: unknown): number | null => {
-  if (toExactNumeric19Scale4Units(value) === null) {
-    return null
-  }
+/** Parses a canonical non-negative numeric(19,4) value. */
+export const parseExactNumeric19Scale4 = (value: unknown): AllocationDecimal4 | null => {
+  const units = toExactNumeric19Scale4Units(value)
+  if (units === null) return null
+  return fromScale4Units(units)
+}
 
-  const parsed = Number(typeof value === 'string' ? value.trim() : value)
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null
+export const fromScale4Units = (units: bigint): AllocationDecimal4 => {
+  const text = units.toString().padStart(5, '0')
+  return `${text.slice(0, -4)}.${text.slice(-4)}` as AllocationDecimal4
+}
+
+export const parseAllocationMoney = (value: unknown): AllocationMoney | null => {
+  if (typeof value !== 'string' && typeof value !== 'number') return null
+  if (typeof value === 'number' && !Number.isFinite(value)) return null
+  const match = /^(-?)(0|[1-9]\d*)(?:\.(\d{1,2}))?$/.exec(String(value))
+  if (!match || (match[2]?.replace(/^0+/, '').length ?? 0) > 17) return null
+  const sign = match[1] === '-' ? -BIGINT_ONE : BIGINT_ONE
+  const cents = sign * BigInt(`${match[2]}${(match[3] ?? '').padEnd(2, '0')}`)
+  if (typeof value === 'number' && (cents > BigInt(Number.MAX_SAFE_INTEGER) || cents < BigInt(Number.MIN_SAFE_INTEGER))) return null
+  return fromCents(cents)
 }
 
 export interface OutcomeAllocationInput {
@@ -57,13 +70,13 @@ export interface OutcomeAllocationInput {
   agreementBudgetFiscalYearId: string
   outcomeId: string
   allocationMethod: AllocationMethod
-  allocationValue: number
+  allocationValue: AllocationDecimalInput
 }
 
 export interface VersionedOutcomeAllocationInput extends OutcomeAllocationInput {
   allocationVersionId: string
-  resolvedAmount?: number | null
-  fundingBasisAmount?: number | null
+  resolvedAmount?: AllocationMoney | null
+  fundingBasisAmount?: AllocationMoney | null
   outcomeLabelEn?: string | null
   outcomeLabelFr?: string | null
   commitmentLabelEn?: string | null
@@ -78,16 +91,17 @@ export interface CostAllocationVersion {
   versionNumber: number
   createdAt?: string | null
   completedAt?: string | null
-  fundingBasisAmount?: number | null
+  fundingBasisAmount?: AllocationMoney | null
 }
 
 export interface OutcomeAllocationResolved extends OutcomeAllocationInput {
-  amount: number
+  amount: AllocationMoney
 }
 
 export interface YearFundingTotal {
   agreementBudgetFiscalYearId: string
-  programFunding: number
+  /** Canonical strings are authoritative; safe numbers remain deprecated input compatibility. */
+  programFunding: AllocationDecimalInput
 }
 
 export interface StreamCommitmentMapping {
@@ -113,7 +127,7 @@ export interface GeneratedCommitmentLineCoverage {
   agreementBudgetFiscalYearId: string
   outcomeId: string
   streamCommitmentId: string
-  amount: number
+  amount: AllocationDecimalInput
 }
 
 export interface PaidCommitmentLineCoverage {
@@ -121,20 +135,23 @@ export interface PaidCommitmentLineCoverage {
   commitmentType: CommitmentType
   agreementBudgetFiscalYearId: string
   streamCommitmentId: string
-  paidAmount: number
+  paidAmount: AllocationDecimalInput
 }
 
 export interface PaymentLineAllocationInput {
   commitmentLineId: string
-  weightAmount: number
-  remainingAmount: number
+  weightAmount: AllocationDecimalInput
+  remainingAmount: AllocationDecimalInput
 }
 
-export interface PaymentLineAllocationResolved extends PaymentLineAllocationInput {
-  paymentAmount: number
+export interface PaymentLineAllocationResolved {
+  commitmentLineId: string
+  weightAmount: AllocationMoney
+  remainingAmount: AllocationMoney
+  paymentAmount: AllocationMoney
 }
 
-type PaymentLineAllocationCandidate = PaymentLineAllocationInput
+type PaymentLineAllocationCandidate = Omit<PaymentLineAllocationResolved, 'paymentAmount'>
 
 const BIGINT_ZERO = BigInt(0)
 const BIGINT_ONE = BigInt(1)
@@ -150,56 +167,69 @@ export const isCommitmentType = (value: unknown): value is CommitmentType =>
 /**
  * Converts a finite decimal number to a rounded scaled integer without binary half-cent drift.
  */
-const decimalToScaledBigInt = (value: number, scale: number): bigint => {
-  if (!Number.isFinite(value)) {
-    return BIGINT_ZERO
-  }
-
-  const sign = value < 0 ? -BIGINT_ONE : BIGINT_ONE
-  const [coefficient = '0', exponentText = '0'] = Math.abs(value).toString().toLowerCase().split('e')
-  const [integerPart = '0', fractionPart = ''] = coefficient.split('.')
-  const exponent = Number(exponentText)
-  const digits = `${integerPart}${fractionPart}`
-  const decimalPosition = integerPart.length + exponent
-  const normalized = decimalPosition <= 0
-    ? `${'0'.repeat(-decimalPosition)}${digits}`
-    : `${digits}${'0'.repeat(Math.max(0, decimalPosition - digits.length))}`
-  const scaledPosition = decimalPosition + scale
-  const wholeDigits = scaledPosition <= 0
-    ? '0'
-    : normalized.slice(0, scaledPosition).padEnd(scaledPosition, '0') || '0'
-  const roundingDigit = scaledPosition < 0
-    ? '0'
-    : normalized[scaledPosition] ?? '0'
-  const rounded = BigInt(wholeDigits) + (roundingDigit >= '5' ? BIGINT_ONE : BIGINT_ZERO)
-
-  return sign * rounded
-}
-
-/**
- * Converts a finite decimal number to a rounded scaled integer.
- */
-const decimalToScaledInteger = (value: number, scale: number): number => {
-  const scaled = decimalToScaledBigInt(value, scale)
-  return scaled > BigInt(Number.MAX_SAFE_INTEGER) || scaled < BigInt(Number.MIN_SAFE_INTEGER)
-    ? 0
-    : Number(scaled)
-}
-
 /**
  * Rounds a numeric amount to the nearest cent.
  */
-export const toMoney = (value: number): number => decimalToScaledInteger(value, 2) / 100
+export const toMoney = (value: AllocationDecimalInput): AllocationMoney => {
+  const money = parseAllocationMoney(value)
+  if (money !== null) return money
+  const units = toExactNumeric19Scale4Units(value) ?? BIGINT_ZERO
+  return fromCents((units + 50n) / 100n)
+}
 
 /**
  * Converts a monetary value to an integer number of cents.
  */
-export const toCents = (value: number): number => decimalToScaledInteger(value, 2)
+export const toCents = (value: AllocationDecimalInput): bigint => {
+  const parsed = parseAllocationMoney(value)
+  if (parsed === null) return BIGINT_ZERO
+  const negative = parsed.startsWith('-')
+  const unsigned = negative ? parsed.slice(1) : parsed
+  const [integer = '0', fraction = '00'] = unsigned.split('.')
+  const cents = BigInt(`${integer}${fraction}`)
+  return negative ? -cents : cents
+}
 
 /**
  * Converts an integer number of cents to a monetary value.
  */
-export const fromCents = (value: number): number => value / 100
+export const fromCents = (value: bigint | number): AllocationMoney => {
+  const cents = typeof value === 'bigint' ? value : BigInt(value)
+  const sign = cents < BIGINT_ZERO ? '-' : ''
+  const text = (cents < BIGINT_ZERO ? -cents : cents).toString().padStart(3, '0')
+  return `${sign}${text.slice(0, -2)}.${text.slice(-2)}` as AllocationMoney
+}
+
+export const compareMoney = (left: AllocationDecimalInput, right: AllocationDecimalInput): number => {
+  const difference = toCents(left) - toCents(right)
+  return difference < BIGINT_ZERO ? -1 : difference > BIGINT_ZERO ? 1 : 0
+}
+
+export const sumMoney = (values: AllocationDecimalInput[]): AllocationMoney =>
+  fromCents(values.reduce((sum, value) => sum + toCents(value), BIGINT_ZERO))
+
+export const subtractMoney = (left: AllocationDecimalInput, right: AllocationDecimalInput): AllocationMoney =>
+  fromCents(toCents(left) - toCents(right))
+
+export const percentageForMoney = (
+  amount: AllocationDecimalInput,
+  funding: AllocationDecimalInput
+): AllocationDecimal4 => {
+  const fundingCents = toCents(funding)
+  if (fundingCents <= BIGINT_ZERO) return parseExactNumeric19Scale4('0')!
+  const units = (toCents(amount) * PERCENTAGE_DENOMINATOR + fundingCents / BIGINT_TWO) / fundingCents
+  return fromScale4Units(units)
+}
+
+export const moneyForPercentage = (
+  funding: AllocationDecimalInput,
+  percentage: AllocationDecimalInput
+): AllocationMoney => {
+  const units = toExactNumeric19Scale4Units(percentage) ?? BIGINT_ZERO
+  const numerator = toCents(funding) * units
+  return fromCents(numerator / PERCENTAGE_DENOMINATOR
+    + (numerator % PERCENTAGE_DENOMINATOR >= PERCENTAGE_DENOMINATOR / BIGINT_TWO ? BIGINT_ONE : BIGINT_ZERO))
+}
 
 /**
  * Keeps valid commitment types and complete mapping records from an unknown extension config.
@@ -293,13 +323,9 @@ export const validateAllocationTotals = (
   const issues: AllocationValidationIssue[] = validateAllocationReferences(allocations, yearTotals, activeOutcomeIds)
   const resolvedAllocations = resolveAllocationAmounts(allocations, yearTotals)
   const allocatedTotalCents = resolvedAllocations
-    .reduce((sum, allocation) => sum + BigInt(toCents(allocation.amount)), BIGINT_ZERO)
+    .reduce((sum, allocation) => sum + toCents(allocation.amount), BIGINT_ZERO)
   const agreementBudgetTotalCents = yearTotals
-    .reduce((sum, total) => sum + BigInt(toCents(total.programFunding)), BIGINT_ZERO)
-  const agreementBudgetScale4Units = yearTotals.reduce(
-    (sum, total) => sum + (toExactNumeric19Scale4Units(total.programFunding) ?? BIGINT_ZERO),
-    BIGINT_ZERO
-  )
+    .reduce((sum, total) => sum + toCents(total.programFunding), BIGINT_ZERO)
   if (allocatedTotalCents !== agreementBudgetTotalCents) {
     issues.push({
       code: 'GCS_OUTCOME_COST_ALLOCATION_TOTAL_INVALID',
@@ -310,8 +336,8 @@ export const validateAllocationTotals = (
   for (const total of yearTotals) {
     const allocatedYearCents = resolvedAllocations
       .filter(allocation => allocation.agreementBudgetFiscalYearId === total.agreementBudgetFiscalYearId)
-      .reduce((sum, allocation) => sum + BigInt(toCents(allocation.amount)), BIGINT_ZERO)
-    if (allocatedYearCents !== BigInt(toCents(total.programFunding))) {
+      .reduce((sum, allocation) => sum + toCents(allocation.amount), BIGINT_ZERO)
+    if (allocatedYearCents !== toCents(total.programFunding)) {
       issues.push({
         code: 'GCS_OUTCOME_COST_ALLOCATION_YEAR_TOTAL_INVALID',
         path: `allocations.${total.agreementBudgetFiscalYearId}`,
@@ -319,14 +345,6 @@ export const validateAllocationTotals = (
       })
     }
   }
-  if (agreementBudgetScale4Units > BigInt(Number.MAX_SAFE_INTEGER)) {
-    issues.push({
-      code: 'GCS_OUTCOME_COST_ALLOCATION_TOTAL_INVALID',
-      path: 'allocations',
-      message: 'apiErrors.extensions.outcome_cost_allocation.total_invalid'
-    })
-  }
-
   return issues
 }
 
@@ -340,7 +358,7 @@ export const validateAllocationYearLimits = (
     const allocatedCents = resolvedAllocations
       .filter(allocation => allocation.agreementBudgetFiscalYearId === total.agreementBudgetFiscalYearId)
       .reduce((sum, allocation) => sum + BigInt(toCents(allocation.amount)), BIGINT_ZERO)
-    return allocatedCents > BigInt(toCents(total.programFunding))
+    return allocatedCents > toCents(total.programFunding)
       ? [{
           code: 'GCS_OUTCOME_COST_ALLOCATION_YEAR_TOTAL_EXCEEDED',
           path: `allocations.${total.agreementBudgetFiscalYearId}`,
@@ -373,7 +391,9 @@ export const resolveAllocationAmounts = (
     toCents(total.programFunding)
   ]))
   const resolvedCents = allocations.map(allocation =>
-    allocation.allocationMethod === 'amount' ? toCents(allocation.allocationValue) : 0
+    allocation.allocationMethod === 'amount'
+      ? ((toExactNumeric19Scale4Units(allocation.allocationValue) ?? BIGINT_ZERO) + 50n) / 100n
+      : BIGINT_ZERO
   )
   const percentageIndexesByYearId = new Map<string, number[]>()
 
@@ -388,11 +408,11 @@ export const resolveAllocationAmounts = (
   })
 
   for (const [yearId, indexes] of percentageIndexesByYearId) {
-    const fundingCents = BigInt(totalsByYearId.get(yearId) ?? 0)
+    const fundingCents = totalsByYearId.get(yearId) ?? BIGINT_ZERO
     const denominator = PERCENTAGE_DENOMINATOR
     const shares = indexes.map(index => {
       const allocation = allocations[index]
-      const percentageUnits = decimalToScaledBigInt(allocation?.allocationValue ?? 0, 4)
+      const percentageUnits = toExactNumeric19Scale4Units(allocation?.allocationValue ?? 0) ?? BIGINT_ZERO
       const numerator = fundingCents * percentageUnits
       return {
         index,
@@ -405,7 +425,7 @@ export const resolveAllocationAmounts = (
     const targetCents = totalNumerator / denominator
       + (totalNumerator % denominator >= denominator / BIGINT_TWO ? BIGINT_ONE : BIGINT_ZERO)
     const floorCents = shares.reduce((sum, share) => sum + share.cents, BIGINT_ZERO)
-    let residualCents = Number(targetCents - floorCents)
+    let residualCents = targetCents - floorCents
 
     shares
       .sort((left, right) => {
@@ -420,15 +440,15 @@ export const resolveAllocationAmounts = (
         return left.remainder > right.remainder ? -1 : 1
       })
       .forEach(share => {
-        const balancedCents = share.cents + (residualCents > 0 ? BIGINT_ONE : BIGINT_ZERO)
-        resolvedCents[share.index] = Number(balancedCents)
-        residualCents = Math.max(0, residualCents - 1)
+        const balancedCents = share.cents + (residualCents > BIGINT_ZERO ? BIGINT_ONE : BIGINT_ZERO)
+        resolvedCents[share.index] = balancedCents
+        if (residualCents > BIGINT_ZERO) residualCents -= BIGINT_ONE
       })
   }
 
   return allocations.map((allocation, index) => ({
     ...allocation,
-    amount: fromCents(resolvedCents[index] ?? 0)
+    amount: fromCents(resolvedCents[index] ?? BIGINT_ZERO)
   }))
 }
 
@@ -448,7 +468,7 @@ export const validateCommitmentMappings = (
     .map(mapping => `${mapping.outcomeId}:${mapping.streamBudgetId}:${mapping.streamCommitmentId}`))
 
   allocations
-    .filter(allocation => allocation.amount > 0)
+    .filter(allocation => toCents(allocation.amount) > BIGINT_ZERO)
     .forEach((allocation, index) => {
       const streamBudgetId = streamBudgetIdsByAgreementBudgetFiscalYearId.get(allocation.agreementBudgetFiscalYearId)
       if (!streamBudgetId) {
@@ -515,26 +535,26 @@ export const validateGeneratedCommitmentLinePaymentCoverage = (
   generatedLines: GeneratedCommitmentLineCoverage[],
   paidLines: PaidCommitmentLineCoverage[]
 ): AllocationValidationIssue[] => {
-  const generatedAmountByKey = new Map<string, number>()
+  const generatedAmountByKey = new Map<string, bigint>()
   for (const line of generatedLines) {
     const key = commitmentLineCoverageKey(line)
-    const existingAmount = generatedAmountByKey.get(key) ?? 0
-    generatedAmountByKey.set(key, toMoney(existingAmount + line.amount))
+    const existingAmount = generatedAmountByKey.get(key) ?? BIGINT_ZERO
+    generatedAmountByKey.set(key, existingAmount + toCents(line.amount))
   }
 
-  const paidAmountByKey = new Map<string, { index: number, paidAmount: number }>()
+  const paidAmountByKey = new Map<string, { index: number, paidAmount: bigint }>()
   for (const [index, line] of paidLines.entries()) {
     const key = commitmentLineCoverageKey(line)
-    const existing = paidAmountByKey.get(key) ?? { index, paidAmount: 0 }
+    const existing = paidAmountByKey.get(key) ?? { index, paidAmount: BIGINT_ZERO }
     paidAmountByKey.set(key, {
       ...existing,
-      paidAmount: toMoney(existing.paidAmount + line.paidAmount)
+      paidAmount: existing.paidAmount + toCents(line.paidAmount)
     })
   }
 
   return Array.from(paidAmountByKey.entries()).flatMap(([key, paidLine]) => {
-    const generatedAmount = generatedAmountByKey.get(key) ?? 0
-    if (toCents(paidLine.paidAmount) <= toCents(generatedAmount)) {
+    const generatedAmount = generatedAmountByKey.get(key) ?? BIGINT_ZERO
+    if (paidLine.paidAmount <= generatedAmount) {
       return []
     }
 
@@ -554,28 +574,28 @@ const normalizePaymentLineAllocationCandidates = (
     weightAmount: toMoney(line.weightAmount),
     remainingAmount: toMoney(line.remainingAmount)
   }))
-  .filter(line => line.weightAmount > 0 && line.remainingAmount > 0)
+  .filter(line => toCents(line.weightAmount) > BIGINT_ZERO && toCents(line.remainingAmount) > BIGINT_ZERO)
 
 const canAllocatePaymentAmount = (
   candidates: PaymentLineAllocationCandidate[],
-  amountToAllocate: number
+  amountToAllocate: AllocationMoney
 ) => {
-  const totalRemainingCents = candidates.reduce((sum, line) => sum + toCents(line.remainingAmount), 0)
+  const totalRemainingCents = candidates.reduce((sum, line) => sum + toCents(line.remainingAmount), BIGINT_ZERO)
   const amountToAllocateCents = toCents(amountToAllocate)
-  return amountToAllocateCents > 0
-    && totalRemainingCents > 0
+  return amountToAllocateCents > BIGINT_ZERO
+    && totalRemainingCents > BIGINT_ZERO
     && amountToAllocateCents <= totalRemainingCents
 }
 
 const recordPaymentLineAllocation = (
   allocatedByLineId: Map<string, PaymentLineAllocationResolved>,
   line: PaymentLineAllocationCandidate,
-  paymentLineAmount: number
+  paymentLineAmount: AllocationMoney
 ) => {
   const existing = allocatedByLineId.get(line.commitmentLineId)
   allocatedByLineId.set(line.commitmentLineId, {
     ...(existing ?? line),
-    paymentAmount: toMoney((existing?.paymentAmount ?? 0) + paymentLineAmount)
+    paymentAmount: fromCents(toCents(existing?.paymentAmount ?? '0.00') + toCents(paymentLineAmount))
   })
 }
 
@@ -584,16 +604,16 @@ const recordPaymentLineAllocation = (
  */
 const allocatePaymentRound = (
   candidates: PaymentLineAllocationCandidate[],
-  remainingPaymentCents: number,
+  remainingPaymentCents: bigint,
   allocatedByLineId: Map<string, PaymentLineAllocationResolved>
 ) => {
   const totalWeightCents = candidates.reduce(
-    (sum, line) => sum + BigInt(toCents(line.weightAmount)),
+    (sum, line) => sum + toCents(line.weightAmount),
     BIGINT_ZERO
   )
   if (totalWeightCents <= BIGINT_ZERO) {
     return {
-      roundAllocatedCents: 0,
+      roundAllocatedCents: BIGINT_ZERO,
       roundRemainingCents: remainingPaymentCents,
       nextCandidates: []
     }
@@ -604,18 +624,17 @@ const allocatePaymentRound = (
   const nextCandidates: PaymentLineAllocationCandidate[] = []
   for (const [index, line] of candidates.entries()) {
     const isLastLine = index === candidates.length - 1
-    const lineWeightCents = BigInt(toCents(line.weightAmount))
+    const lineWeightCents = toCents(line.weightAmount)
     const lineRemainingCents = toCents(line.remainingAmount)
     const targetCents = isLastLine
       ? roundRemainingCents
-      : Number(
-          (
-            BigInt(roundStartCents) * lineWeightCents
+      : (
+            roundStartCents * lineWeightCents
             + totalWeightCents / BIGINT_TWO
           ) / totalWeightCents
-        )
-    const paymentLineCents = Math.min(targetCents, lineRemainingCents, roundRemainingCents)
-    if (paymentLineCents <= 0) {
+    const paymentLineCents = [targetCents, lineRemainingCents, roundRemainingCents]
+      .reduce((minimum, value) => value < minimum ? value : minimum)
+    if (paymentLineCents <= BIGINT_ZERO) {
       nextCandidates.push(line)
       continue
     }
@@ -623,7 +642,7 @@ const allocatePaymentRound = (
     recordPaymentLineAllocation(allocatedByLineId, line, fromCents(paymentLineCents))
     roundRemainingCents -= paymentLineCents
     const nextRemainingCents = lineRemainingCents - paymentLineCents
-    if (nextRemainingCents > 0) {
+    if (nextRemainingCents > BIGINT_ZERO) {
       nextCandidates.push({
         ...line,
         remainingAmount: fromCents(nextRemainingCents)
@@ -643,7 +662,7 @@ const allocatePaymentRound = (
  */
 export const allocatePaymentAmountToCommitmentLines = (
   lines: PaymentLineAllocationInput[],
-  paymentAmount: number
+  paymentAmount: AllocationDecimalInput
 ): PaymentLineAllocationResolved[] => {
   let candidates = normalizePaymentLineAllocationCandidates(lines)
   const amountToAllocate = toMoney(paymentAmount)
@@ -654,9 +673,9 @@ export const allocatePaymentAmountToCommitmentLines = (
   let remainingPaymentCents = toCents(amountToAllocate)
   const allocatedByLineId = new Map<string, PaymentLineAllocationResolved>()
 
-  while (remainingPaymentCents > 0 && candidates.length > 0) {
+  while (remainingPaymentCents > BIGINT_ZERO && candidates.length > 0) {
     const round = allocatePaymentRound(candidates, remainingPaymentCents, allocatedByLineId)
-    if (round.roundAllocatedCents <= 0) {
+    if (round.roundAllocatedCents <= BIGINT_ZERO) {
       break
     }
 

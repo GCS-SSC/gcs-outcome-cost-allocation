@@ -5,6 +5,8 @@ import {
 } from '@gcs-ssc/extensions/server'
 import {
   type AllocationValidationIssue,
+  type AllocationDecimalInput,
+  type AllocationMoney,
   type CostAllocationVersion,
   type CommitmentType,
   type GeneratedCommitmentLineCoverage,
@@ -20,6 +22,7 @@ import {
   parseExactNumeric19Scale4,
   parseOutcomeCostAllocationConfig,
   resolveAllocationAmounts,
+  subtractMoney,
   toCents,
   toMoney,
   validateGeneratedCommitmentLinePaymentCoverage,
@@ -30,6 +33,15 @@ import {
 } from '../shared/allocation.ts'
 import type { OutcomeCostAllocationDb } from './db.ts'
 import { createOutcomeCostAllocationUserError } from './errors.ts'
+import {
+  databaseAggregateMoneyValue,
+  databaseMoneyValue,
+  databaseNumericText,
+  databaseScale4Value,
+  parseDatabaseAggregateMoney,
+  parseDatabaseMoney,
+  parseDatabaseScale4
+} from './numeric.ts'
 
 export interface AgreementOutcome {
   id: string
@@ -41,7 +53,7 @@ export interface AgreementBudgetYear {
   id: string
   fiscal_year_id: string
   fiscal_year_display: string
-  program_funding: number
+  program_funding: AllocationMoney
   stream_budget_id?: string | null
 }
 
@@ -87,18 +99,18 @@ type GeneratedAllocationLine = {
 
 type GeneratedPaymentLine = {
   commitmentLineId: string
-  amount: number
+  amount: AllocationMoney
 }
 
 type PaymentLineInput = {
   commitmentLineId: string
-  weightAmount: number
-  remainingAmount: number
+  weightAmount: AllocationMoney
+  remainingAmount: AllocationMoney
 }
 
 type CommitmentLinePaymentCoverage = {
   id: string
-  amount: number
+  amount: AllocationMoney
 }
 
 interface AllocationVersionRow {
@@ -108,7 +120,7 @@ interface AllocationVersionRow {
   status: CostAllocationVersion['status']
   created_at?: Date | string | null
   completed_at?: Date | string | null
-  funding_basis_amount?: number | null
+  funding_basis_amount?: string | null
 }
 
 export interface AgreementAllocationScope {
@@ -156,16 +168,13 @@ const allocationCoordinateKey = (allocation: {
 const resolveStoredAllocationAmounts = (
   allocations: OutcomeAllocationInput[],
   yearTotals: YearFundingTotal[]
-): OutcomeAllocationResolved[] => allocations.every(allocation => 'resolvedAmount' in allocation
-  && allocation.resolvedAmount !== null
-  && allocation.resolvedAmount !== undefined)
+): OutcomeAllocationResolved[] => allocations.every((allocation): allocation is OutcomeAllocationInput & {
+  resolvedAmount: AllocationMoney
+} => 'resolvedAmount' in allocation
+  && typeof allocation.resolvedAmount === 'string')
   ? allocations.map(allocation => ({
       ...allocation,
-      amount: toMoney(
-        'resolvedAmount' in allocation && typeof allocation.resolvedAmount === 'number'
-          ? allocation.resolvedAmount
-          : 0
-      )
+      amount: toMoney(allocation.resolvedAmount)
     }))
   : resolveAllocationAmounts(allocations, yearTotals)
 
@@ -178,7 +187,7 @@ const mapAllocationVersion = (row: AllocationVersionRow): CostAllocationVersion 
   completedAt: row.completed_at ? new Date(row.completed_at).toISOString() : null,
   ...(row.funding_basis_amount === null || row.funding_basis_amount === undefined
     ? {}
-    : { fundingBasisAmount: Number(row.funding_basis_amount) })
+    : { fundingBasisAmount: parseDatabaseAggregateMoney(row.funding_basis_amount) as AllocationMoney })
 })
 
 /**
@@ -202,7 +211,7 @@ const getAllocationVersionRow = async (
       'status',
       'created_at',
       'completed_at',
-      'funding_basis_amount'
+      databaseNumericText(sql.ref('funding_basis_amount')).as('funding_basis_amount')
     ])
 
   if (lockForUpdate) {
@@ -602,7 +611,7 @@ export const getAgreementBudgetYears = async (
     'Funding_Case_Agreement_Budget_Fiscal_Year.egcs_fc_fiscalyear as fiscal_year_id',
     'Agency_Fiscal_Year.egcs_ay_fiscalyeardisplay as fiscal_year_display',
     'Transfer_Payment_Stream_Budget.id as stream_budget_id',
-    sql<number>`COALESCE(SUM("Funding_Case_Agreement_Budget_Line_Item"."egcs_fc_programfunding"), 0)`.as('program_funding')
+    databaseNumericText(sql`COALESCE(SUM("Funding_Case_Agreement_Budget_Line_Item"."egcs_fc_programfunding"), 0)`).as('program_funding')
   ])
   .groupBy([
     'Funding_Case_Agreement_Budget_Fiscal_Year.id',
@@ -616,13 +625,7 @@ export const getAgreementBudgetYears = async (
     .execute()
 
   return rows.map(row => {
-    const programFunding = parseExactNumeric19Scale4(row.program_funding)
-    if (programFunding === null) {
-      throw createOutcomeCostAllocationUserError(
-        'GCS_OUTCOME_COST_ALLOCATION_INVALID',
-        `budgetYears.${String(row.id)}.programFunding`
-      )
-    }
+    const programFunding = parseDatabaseAggregateMoney(row.program_funding) as AllocationMoney
 
     return {
       ...row,
@@ -734,7 +737,7 @@ export const getAllocationVersions = async (
       'status',
       'created_at',
       'completed_at',
-      'funding_basis_amount'
+      databaseNumericText(sql.ref('funding_basis_amount')).as('funding_basis_amount')
     ])
     .orderBy('version_number', 'desc')
     .execute()
@@ -767,7 +770,7 @@ export const createDraftAllocationVersion = async (
       'status',
       'created_at',
       'completed_at',
-      'funding_basis_amount'
+      databaseNumericText(sql.ref('funding_basis_amount')).as('funding_basis_amount')
     ])
     .orderBy('version_number', 'desc')
     .executeTakeFirst()
@@ -797,7 +800,7 @@ export const createDraftAllocationVersion = async (
       'status',
       'created_at',
       'completed_at',
-      'funding_basis_amount'
+      databaseNumericText(sql.ref('funding_basis_amount')).as('funding_basis_amount')
     ])
     .executeTakeFirstOrThrow()
 
@@ -888,7 +891,7 @@ export const getActiveAllocationVersion = async (
       'status',
       'created_at',
       'completed_at',
-      'funding_basis_amount'
+      databaseNumericText(sql.ref('funding_basis_amount')).as('funding_basis_amount')
     ])
     .executeTakeFirst()
 
@@ -939,9 +942,9 @@ export const getSavedAllocations = async (
       'extensions.gcs_outcome_cost_allocation_allocations.agreement_budget_fiscal_year_id',
       'extensions.gcs_outcome_cost_allocation_allocations.outcome_id',
       'extensions.gcs_outcome_cost_allocation_allocations.allocation_method',
-      'extensions.gcs_outcome_cost_allocation_allocations.allocation_value',
-      'extensions.gcs_outcome_cost_allocation_allocations.resolved_amount',
-      'extensions.gcs_outcome_cost_allocation_allocations.funding_basis_amount',
+      databaseNumericText(sql.ref('extensions.gcs_outcome_cost_allocation_allocations.allocation_value')).as('allocation_value'),
+      databaseNumericText(sql.ref('extensions.gcs_outcome_cost_allocation_allocations.resolved_amount')).as('resolved_amount'),
+      databaseNumericText(sql.ref('extensions.gcs_outcome_cost_allocation_allocations.funding_basis_amount')).as('funding_basis_amount'),
       'extensions.gcs_outcome_cost_allocation_allocations.outcome_label_en',
       'extensions.gcs_outcome_cost_allocation_allocations.outcome_label_fr',
       'extensions.gcs_outcome_cost_allocation_allocations.commitment_label_en',
@@ -958,13 +961,13 @@ export const getSavedAllocations = async (
     agreementBudgetFiscalYearId: String(row.agreement_budget_fiscal_year_id),
     outcomeId: String(row.outcome_id),
     allocationMethod: row.allocation_method,
-    allocationValue: Number(row.allocation_value),
+    allocationValue: parseDatabaseScale4(row.allocation_value),
     ...(row.resolved_amount === null || row.resolved_amount === undefined
       ? {}
-      : { resolvedAmount: Number(row.resolved_amount) }),
+      : { resolvedAmount: parseDatabaseMoney(row.resolved_amount) as AllocationMoney }),
     ...(row.funding_basis_amount === null || row.funding_basis_amount === undefined
       ? {}
-      : { fundingBasisAmount: Number(row.funding_basis_amount) }),
+      : { fundingBasisAmount: parseDatabaseMoney(row.funding_basis_amount) as AllocationMoney }),
     ...(row.outcome_label_en === null || row.outcome_label_en === undefined ? {} : { outcomeLabelEn: row.outcome_label_en }),
     ...(row.outcome_label_fr === null || row.outcome_label_fr === undefined ? {} : { outcomeLabelFr: row.outcome_label_fr }),
     ...(row.commitment_label_en === null || row.commitment_label_en === undefined ? {} : { commitmentLabelEn: row.commitment_label_en }),
@@ -1059,7 +1062,7 @@ const replaceDraftAllocations = async (
         agreement_budget_fiscal_year_id: allocation.agreementBudgetFiscalYearId,
         outcome_id: allocation.outcomeId,
         allocation_method: allocation.allocationMethod,
-        allocation_value: allocation.allocationValue,
+        allocation_value: databaseScale4Value(parseExactNumeric19Scale4(allocation.allocationValue)!),
         resolved_amount: null,
         funding_basis_amount: null
       })))
@@ -1083,7 +1086,7 @@ const saveAllocationsInTransaction = async (
     const budgetYears = await getAgreementBudgetYears(db, agreementId, expectedScope.streamId)
     const yearLimitIssues = validateAllocationYearLimits(allocations, budgetYears.map(year => ({
       agreementBudgetFiscalYearId: String(year.id),
-      programFunding: Number(year.program_funding)
+      programFunding: year.program_funding
     })))
     if (yearLimitIssues[0]) {
       throw createOutcomeCostAllocationUserError(yearLimitIssues[0].code, yearLimitIssues[0].path)
@@ -1131,7 +1134,7 @@ export const validateAgreementAllocations = async (
 
   const yearTotals = budgetYears.map(year => ({
     agreementBudgetFiscalYearId: String(year.id),
-    programFunding: Number(year.program_funding)
+    programFunding: year.program_funding
   }))
   const activeOutcomeIds = new Set(outcomes.map(outcome => String(outcome.id)))
 
@@ -1148,7 +1151,7 @@ const buildGeneratedCommitmentLineCoverage = (
   streamBudgetIdsByAgreementBudgetFiscalYearId: Map<string, string>
 ): GeneratedCommitmentLineCoverage[] => commitmentTypes.flatMap(commitmentType =>
   allocations
-    .filter(allocation => allocation.commitmentType === commitmentType && allocation.amount > 0)
+    .filter(allocation => allocation.commitmentType === commitmentType && toCents(allocation.amount) > 0n)
     .flatMap(allocation => {
       const streamBudgetId = streamBudgetIdsByAgreementBudgetFiscalYearId.get(allocation.agreementBudgetFiscalYearId) ?? ''
       const mapping = config.mappings.find(candidate =>
@@ -1213,7 +1216,7 @@ const getPaidCommitmentLineCoverage = async (
       'Funding_Case_Agreement_Commitment.egcs_fc_type as commitment_type',
       'Funding_Case_Agreement_Payment.egcs_fc_fiscalyear as agreement_budget_fiscal_year_id',
       'Funding_Case_Agreement_Commitment_Line.egcs_fc_transferpaymentstreamchartofaccount as stream_commitment_id',
-      'Funding_Case_Agreement_Payment_Line.egcs_fc_amount as paid_amount'
+      databaseNumericText(sql.ref('Funding_Case_Agreement_Payment_Line.egcs_fc_amount')).as('paid_amount')
     ])
     .execute()
 
@@ -1222,7 +1225,7 @@ const getPaidCommitmentLineCoverage = async (
     commitmentType: row.commitment_type,
     agreementBudgetFiscalYearId: String(row.agreement_budget_fiscal_year_id),
     streamCommitmentId: String(row.stream_commitment_id),
-    paidAmount: Number(row.paid_amount)
+    paidAmount: parseDatabaseMoney(row.paid_amount) as AllocationMoney
   }))
 }
 
@@ -1331,7 +1334,7 @@ export const validateAllocationPaymentCoverage = async (
     ?? await getAgreementBudgetYears(db, agreementId, streamId)
   const yearTotals: YearFundingTotal[] = budgetYears.map(year => ({
     agreementBudgetFiscalYearId: String(year.id),
-    programFunding: Number(year.program_funding)
+    programFunding: year.program_funding
   }))
   const resolvedAllocations = resolveStoredAllocationAmounts(scopedAllocations, yearTotals)
   const streamBudgetIdsByAgreementBudgetFiscalYearId = new Map(budgetYears.map(year => [
@@ -1369,8 +1372,8 @@ export const generatedPaymentStatusResurrectionExceedsCoverage = async (
     .where('Funding_Case_Agreement_Commitment_Line._deleted', '=', false)
     .select([
       'Funding_Case_Agreement_Payment_Line.egcs_fc_fundingagreementcommitmentline as commitment_line_id',
-      'Funding_Case_Agreement_Payment_Line.egcs_fc_amount as payment_amount',
-      'Funding_Case_Agreement_Commitment_Line.egcs_fc_amount as commitment_amount'
+      databaseNumericText(sql.ref('Funding_Case_Agreement_Payment_Line.egcs_fc_amount')).as('payment_amount'),
+      databaseNumericText(sql.ref('Funding_Case_Agreement_Commitment_Line.egcs_fc_amount')).as('commitment_amount')
     ])
     .execute()
 
@@ -1391,10 +1394,13 @@ export const generatedPaymentStatusResurrectionExceedsCoverage = async (
       .where('Funding_Case_Agreement_Payment_Line._deleted', '=', false)
       .where('Funding_Case_Agreement_Payment._deleted', '=', false)
       .where(paymentHasNoNegativeWorkflowOutcome)
-      .select(sql<number>`COALESCE(SUM(${sql.ref('Funding_Case_Agreement_Payment_Line.egcs_fc_amount')}), 0)`.as('paid_amount'))
+      .select(databaseNumericText(sql`COALESCE(SUM(${sql.ref('Funding_Case_Agreement_Payment_Line.egcs_fc_amount')}), 0)`).as('paid_amount'))
       .executeTakeFirst()
 
-    if (Number(paid?.paid_amount ?? 0) + Number(targetLine.payment_amount) > Number(targetLine.commitment_amount)) {
+    const paidCents = paid ? toCents(parseDatabaseAggregateMoney(paid.paid_amount)) : 0n
+    const targetCents = toCents(parseDatabaseMoney(targetLine.payment_amount))
+    const commitmentCents = toCents(parseDatabaseMoney(targetLine.commitment_amount))
+    if (paidCents + targetCents > commitmentCents) {
       return true
     }
   }
@@ -1437,7 +1443,7 @@ const validateAllocationCommitmentMappings = async (
   )
   const yearTotals: YearFundingTotal[] = budgetYears.map(year => ({
     agreementBudgetFiscalYearId: String(year.id),
-    programFunding: Number(year.program_funding)
+    programFunding: year.program_funding
   }))
   const streamBudgetIdsByAgreementBudgetFiscalYearId = new Map(budgetYears.map(year => [
     String(year.id),
@@ -1465,10 +1471,10 @@ const snapshotAllocationEconomics = async (
   allocationVersionId: string,
   allocations: VersionedOutcomeAllocationInput[],
   budgetYears: AgreementBudgetYear[]
-): Promise<number> => {
+): Promise<AllocationMoney> => {
   const yearTotals: YearFundingTotal[] = budgetYears.map(year => ({
     agreementBudgetFiscalYearId: String(year.id),
-    programFunding: Number(year.program_funding)
+    programFunding: year.program_funding
   }))
   const fundingBasisByYearId = new Map(yearTotals.map(year => [
     year.agreementBudgetFiscalYearId,
@@ -1530,6 +1536,13 @@ const snapshotAllocationEconomics = async (
     .execute()
 
   for (const row of rows) {
+    const resolvedAmount = resolvedAmountByCoordinate.get(allocationCoordinateKey({
+      commitmentType: String(row.commitment_type),
+      streamCommitmentId: String(row.stream_commitment_id),
+      agreementBudgetFiscalYearId: String(row.agreement_budget_fiscal_year_id),
+      outcomeId: String(row.outcome_id)
+    }))
+    const fundingBasisAmount = fundingBasisByYearId.get(String(row.agreement_budget_fiscal_year_id))
     await db
       .updateTable('extensions.gcs_outcome_cost_allocation_allocations')
       .set({
@@ -1538,13 +1551,8 @@ const snapshotAllocationEconomics = async (
         commitment_label_en: row.commitment_label_en,
         commitment_label_fr: row.commitment_label_fr,
         fiscal_year_display: row.fiscal_year_display,
-        resolved_amount: resolvedAmountByCoordinate.get(allocationCoordinateKey({
-          commitmentType: String(row.commitment_type),
-          streamCommitmentId: String(row.stream_commitment_id),
-          agreementBudgetFiscalYearId: String(row.agreement_budget_fiscal_year_id),
-          outcomeId: String(row.outcome_id)
-        })) ?? null,
-        funding_basis_amount: fundingBasisByYearId.get(String(row.agreement_budget_fiscal_year_id)) ?? null
+        resolved_amount: resolvedAmount === undefined ? null : databaseMoneyValue(resolvedAmount),
+        funding_basis_amount: fundingBasisAmount === undefined ? null : databaseMoneyValue(fundingBasisAmount)
       })
       .where('id', '=', String(row.allocation_id))
       .where('agreement_id', '=', agreementId)
@@ -1553,7 +1561,7 @@ const snapshotAllocationEconomics = async (
       .execute()
   }
 
-  return fromCents(yearTotals.reduce((sum, year) => sum + toCents(year.programFunding), 0))
+  return fromCents(yearTotals.reduce((sum, year) => sum + toCents(year.programFunding), 0n))
 }
 
 /**
@@ -1647,13 +1655,14 @@ export const completeAllocationVersionInTransaction = async (
   if (!activate) {
     const prepared = await db
       .updateTable('extensions.gcs_outcome_cost_allocation_versions')
-      .set({ funding_basis_amount: fundingBasisAmount })
+      .set({ funding_basis_amount: databaseAggregateMoneyValue(fundingBasisAmount) })
       .where('id', '=', allocationVersionId)
       .where('agreement_id', '=', agreementId)
       .where('status', '=', 'draft')
       .where('_deleted', '=', false)
       .returning([
-        'id', 'agreement_id', 'version_number', 'status', 'created_at', 'completed_at', 'funding_basis_amount'
+        'id', 'agreement_id', 'version_number', 'status', 'created_at', 'completed_at',
+        databaseNumericText(sql.ref('funding_basis_amount')).as('funding_basis_amount')
       ])
       .executeTakeFirstOrThrow()
     return mapAllocationVersion(prepared)
@@ -1675,7 +1684,7 @@ export const completeAllocationVersionInTransaction = async (
     .set({
       status: 'active',
       completed_at: sql`now()`,
-      funding_basis_amount: fundingBasisAmount
+      funding_basis_amount: databaseAggregateMoneyValue(fundingBasisAmount)
     })
     .where('id', '=', allocationVersionId)
     .where('agreement_id', '=', agreementId)
@@ -1688,7 +1697,7 @@ export const completeAllocationVersionInTransaction = async (
       'status',
       'created_at',
       'completed_at',
-      'funding_basis_amount'
+      databaseNumericText(sql.ref('funding_basis_amount')).as('funding_basis_amount')
     ])
     .executeTakeFirstOrThrow()
 
@@ -1886,7 +1895,7 @@ export const getGeneratedCommitmentLines = async (
 
   const yearTotals: YearFundingTotal[] = budgetYears.map(year => ({
     agreementBudgetFiscalYearId: String(year.id),
-    programFunding: Number(year.program_funding)
+    programFunding: year.program_funding
   }))
   const scopedAllocations = allocations.filter(allocation => allocation.commitmentType === commitmentType)
   const referenceIssues = validateAllocationReferences(
@@ -1906,7 +1915,7 @@ export const getGeneratedCommitmentLines = async (
     streamBudgetIdsByAgreementBudgetFiscalYearId,
     activeStreamCommitmentBudgetIds
   )
-  const positiveAllocations = resolvedAllocations.filter(allocation => allocation.amount > 0)
+  const positiveAllocations = resolvedAllocations.filter(allocation => toCents(allocation.amount) > 0n)
   const generatedLines = positiveAllocations
     .map(allocation => {
       const streamBudgetId = streamBudgetIdsByAgreementBudgetFiscalYearId.get(allocation.agreementBudgetFiscalYearId) ?? ''
@@ -1989,7 +1998,7 @@ const getPaymentContext = async (
   ])
   const yearTotals: YearFundingTotal[] = budgetYears.map(year => ({
     agreementBudgetFiscalYearId: String(year.id),
-    programFunding: Number(year.program_funding)
+    programFunding: year.program_funding
   }))
   const scopedAllocations = allocations.filter(allocation => allocation.commitmentType === commitmentType)
   const streamBudgetIdsByAgreementBudgetFiscalYearId = new Map(budgetYears.map(year => [
@@ -2056,7 +2065,7 @@ const getCommitmentLineCoverage = async (
 ): Promise<{
   commitmentLineByAllocationKey: Map<string, CommitmentLinePaymentCoverage>
   manualCommitmentLinesByStreamCommitmentId: Map<string, CommitmentLinePaymentCoverage[]>
-  paidAmountByCommitmentLineId: Map<string, number>
+  paidAmountByCommitmentLineId: Map<string, AllocationMoney>
 }> => {
   const commitmentLines = await db
     .selectFrom('Funding_Case_Agreement_Commitment_Line')
@@ -2074,7 +2083,7 @@ const getCommitmentLineCoverage = async (
       'Funding_Case_Agreement_Commitment_Line.id as id',
       'Funding_Case_Agreement_Commitment_Line.egcs_fc_commitmentlinenumber as line_number',
       'Funding_Case_Agreement_Commitment_Line.egcs_fc_transferpaymentstreamchartofaccount as stream_commitment_id',
-      'Funding_Case_Agreement_Commitment_Line.egcs_fc_amount as amount',
+      databaseNumericText(sql.ref('Funding_Case_Agreement_Commitment_Line.egcs_fc_amount')).as('amount'),
       'extensions.gcs_outcome_cost_allocation_commitment_lines.allocation_version_id as provenance_version_id',
       'extensions.gcs_outcome_cost_allocation_commitment_lines.agreement_budget_fiscal_year_id as provenance_year_id',
       'extensions.gcs_outcome_cost_allocation_commitment_lines.outcome_id as provenance_outcome_id',
@@ -2089,7 +2098,7 @@ const getCommitmentLineCoverage = async (
   for (const line of commitmentLines) {
     const coverage = {
       id: String(line.id),
-      amount: Number(line.amount)
+      amount: parseDatabaseMoney(line.amount) as AllocationMoney
     }
     if (
       line.provenance_version_id !== null
@@ -2132,7 +2141,7 @@ const getCommitmentLineCoverage = async (
         .where(paymentHasNoNegativeWorkflowOutcome)
         .select([
           'Funding_Case_Agreement_Payment_Line.egcs_fc_fundingagreementcommitmentline as commitment_line_id',
-          sql<number>`COALESCE(SUM(${sql.ref('Funding_Case_Agreement_Payment_Line.egcs_fc_amount')}), 0)`.as('paid_amount')
+          databaseNumericText(sql`COALESCE(SUM(${sql.ref('Funding_Case_Agreement_Payment_Line.egcs_fc_amount')}), 0)`).as('paid_amount')
         ])
         .groupBy('Funding_Case_Agreement_Payment_Line.egcs_fc_fundingagreementcommitmentline')
         .execute()
@@ -2142,7 +2151,7 @@ const getCommitmentLineCoverage = async (
     manualCommitmentLinesByStreamCommitmentId,
     paidAmountByCommitmentLineId: new Map(paidRows.map(row => [
       String(row.commitment_line_id),
-      Number(row.paid_amount)
+      parseDatabaseAggregateMoney(row.paid_amount) as AllocationMoney
     ]))
   }
 }
@@ -2169,8 +2178,8 @@ const getRecordedCommitmentPaymentLineInputs = async (
     .where('Funding_Case_Agreement_Commitment_Line._deleted', '=', false)
     .select([
       'Funding_Case_Agreement_Commitment_Line.id as commitment_line_id',
-      'Funding_Case_Agreement_Commitment_Line.egcs_fc_amount as commitment_line_amount',
-      'extensions.gcs_outcome_cost_allocation_commitment_lines.generated_amount as generated_amount'
+      databaseNumericText(sql.ref('Funding_Case_Agreement_Commitment_Line.egcs_fc_amount')).as('commitment_line_amount'),
+      databaseNumericText(sql.ref('extensions.gcs_outcome_cost_allocation_commitment_lines.generated_amount')).as('generated_amount')
     ])
     .orderBy('Funding_Case_Agreement_Commitment_Line.egcs_fc_commitmentlinenumber', 'asc')
     .orderBy('Funding_Case_Agreement_Commitment_Line.id', 'asc')
@@ -2198,21 +2207,21 @@ const getRecordedCommitmentPaymentLineInputs = async (
     .where(paymentHasNoNegativeWorkflowOutcome)
     .select([
       'Funding_Case_Agreement_Payment_Line.egcs_fc_fundingagreementcommitmentline as commitment_line_id',
-      sql<number>`COALESCE(SUM(${sql.ref('Funding_Case_Agreement_Payment_Line.egcs_fc_amount')}), 0)`.as('paid_amount')
+      databaseNumericText(sql`COALESCE(SUM(${sql.ref('Funding_Case_Agreement_Payment_Line.egcs_fc_amount')}), 0)`).as('paid_amount')
     ])
     .groupBy('Funding_Case_Agreement_Payment_Line.egcs_fc_fundingagreementcommitmentline')
     .execute()
   const paidAmountByCommitmentLineId = new Map(paidRows.map(row => [
     String(row.commitment_line_id),
-    Number(row.paid_amount)
+    parseDatabaseAggregateMoney(row.paid_amount) as AllocationMoney
   ]))
 
   return commitmentLines.map(line => ({
     commitmentLineId: String(line.commitment_line_id),
-    weightAmount: Number(line.generated_amount),
-    remainingAmount: toMoney(
-      Number(line.commitment_line_amount)
-      - (paidAmountByCommitmentLineId.get(String(line.commitment_line_id)) ?? 0)
+    weightAmount: parseDatabaseMoney(line.generated_amount) as AllocationMoney,
+    remainingAmount: subtractMoney(
+      parseDatabaseMoney(line.commitment_line_amount) as AllocationMoney,
+      paidAmountByCommitmentLineId.get(String(line.commitment_line_id)) ?? toMoney('0')
     )
   }))
 }
@@ -2222,10 +2231,10 @@ const getRecordedCommitmentPaymentLineInputs = async (
  */
 const distributeManualCommitmentLineWeight = (
   commitmentLines: CommitmentLinePaymentCoverage[],
-  weightAmount: number
+  weightAmount: AllocationMoney
 ): Array<{
   commitmentLine: CommitmentLinePaymentCoverage
-  weightAmount: number
+  weightAmount: AllocationMoney
 }> => {
   const commitmentLineById = new Map(commitmentLines.map(line => [line.id, line]))
   return allocatePaymentAmountToCommitmentLines(
@@ -2254,7 +2263,7 @@ const getPaymentLineInputs = (
   streamBudgetIdsByAgreementBudgetFiscalYearId: Map<string, string>,
   commitmentLineByAllocationKey: Map<string, CommitmentLinePaymentCoverage>,
   manualCommitmentLinesByStreamCommitmentId: Map<string, CommitmentLinePaymentCoverage[]>,
-  paidAmountByCommitmentLineId: Map<string, number>,
+  paidAmountByCommitmentLineId: Map<string, AllocationMoney>,
   useRecordedProvenance: boolean
 ): {
   paymentLineInputs: PaymentLineInput[]
@@ -2300,12 +2309,12 @@ const getPaymentLineInputs = (
     }
 
     for (const { commitmentLine, weightAmount: commitmentLineWeight } of weightedCommitmentLines) {
-      const paidAmount = paidAmountByCommitmentLineId.get(commitmentLine.id) ?? 0
+      const paidAmount = paidAmountByCommitmentLineId.get(commitmentLine.id) ?? toMoney('0')
       const existingInput = paymentLineInputByCommitmentLineId.get(commitmentLine.id)
       paymentLineInputByCommitmentLineId.set(commitmentLine.id, {
         commitmentLineId: commitmentLine.id,
-        weightAmount: toMoney((existingInput?.weightAmount ?? 0) + commitmentLineWeight),
-        remainingAmount: toMoney(commitmentLine.amount - paidAmount)
+        weightAmount: fromCents(toCents(existingInput?.weightAmount ?? '0.00') + toCents(commitmentLineWeight)),
+        remainingAmount: subtractMoney(commitmentLine.amount, paidAmount)
       })
     }
   }
@@ -2325,7 +2334,7 @@ export const getGeneratedPaymentLines = async (
   streamId: string,
   commitmentId: string,
   agreementBudgetFiscalYearId: string,
-  paymentAmount: number,
+  paymentAmount: AllocationDecimalInput,
   config: unknown
 ): Promise<{
   status: 'continue'
@@ -2385,7 +2394,7 @@ export const getGeneratedPaymentLines = async (
 
     const remainingTotalCents = paymentLineInputs.reduce(
       (sum, line) => sum + toCents(line.remainingAmount),
-      0
+      0n
     )
     if (toCents(paymentAmount) > remainingTotalCents) {
       return {
@@ -2406,7 +2415,7 @@ export const getGeneratedPaymentLines = async (
       commitmentLineId: line.commitmentLineId,
       amount: line.paymentAmount
     }))
-    const generatedTotalCents = lines.reduce((sum, line) => sum + toCents(line.amount), 0)
+    const generatedTotalCents = lines.reduce((sum, line) => sum + toCents(line.amount), 0n)
     if (generatedTotalCents !== toCents(paymentAmount)) {
       return {
         status: 'handled' as const,
@@ -2462,7 +2471,7 @@ export const getGeneratedPaymentLines = async (
   )
   const paymentAllocations = resolvedAllocations.filter(allocation =>
     allocation.agreementBudgetFiscalYearId === agreementBudgetFiscalYearId
-    && allocation.amount > 0
+    && toCents(allocation.amount) > 0n
   )
 
   const desiredStreamCommitmentIds = getDesiredStreamCommitmentIds(
@@ -2509,7 +2518,7 @@ export const getGeneratedPaymentLines = async (
   )
   const remainingTotalCents = paymentLineInputs.reduce(
     (sum, line) => sum + toCents(line.remainingAmount),
-    0
+    0n
   )
   if (toCents(paymentAmount) > remainingTotalCents) {
     paymentLineIssues.push({
@@ -2527,11 +2536,11 @@ export const getGeneratedPaymentLines = async (
     }
   }
 
-  const lines = allocatePaymentAmountToCommitmentLines(paymentLineInputs, Number(paymentAmount)).map(line => ({
+  const lines = allocatePaymentAmountToCommitmentLines(paymentLineInputs, paymentAmount).map(line => ({
     commitmentLineId: line.commitmentLineId,
     amount: line.paymentAmount
   }))
-  const generatedTotalCents = lines.reduce((sum, line) => sum + toCents(line.amount), 0)
+  const generatedTotalCents = lines.reduce((sum, line) => sum + toCents(line.amount), 0n)
   if (generatedTotalCents !== toCents(paymentAmount)) {
     return {
       status: 'handled' as const,

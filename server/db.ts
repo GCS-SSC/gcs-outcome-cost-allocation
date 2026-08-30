@@ -115,14 +115,14 @@ export interface OutcomeCostAllocationHostDatabase {
     egcs_fc_commitment: string
     egcs_fc_commitmentlinenumber: number
     egcs_fc_transferpaymentstreamchartofaccount: string
-    egcs_fc_amount: number
+    egcs_fc_amount: string
     _deleted?: boolean
   }
   'Funding_Case_Agreement_Payment': {
     id: Generated<string>
     egcs_fc_fundingagreementcommitment: string
     egcs_fc_fiscalyear: string
-    egcs_fc_paymentamount: number
+    egcs_fc_paymentamount: string
     egcs_fc_status: string
     _deleted?: boolean
   }
@@ -130,7 +130,7 @@ export interface OutcomeCostAllocationHostDatabase {
     id: Generated<string>
     egcs_fc_fundingagreementpayment: string
     egcs_fc_fundingagreementcommitmentline: string
-    egcs_fc_amount: number
+    egcs_fc_amount: string
     _deleted?: boolean
   }
   'extensions.gcs_outcome_cost_allocation_versions': {
@@ -141,7 +141,7 @@ export interface OutcomeCostAllocationHostDatabase {
     lifecycle_status_id: Generated<string>
     created_at: Generated<Date | string>
     completed_at: Date | string | null
-    funding_basis_amount: number | null
+    funding_basis_amount: string | null
     _deleted?: boolean
   }
   'extensions.gcs_outcome_cost_allocation_allocations': {
@@ -153,9 +153,9 @@ export interface OutcomeCostAllocationHostDatabase {
     agreement_budget_fiscal_year_id: string
     outcome_id: string
     allocation_method: 'amount' | 'percentage'
-    allocation_value: number
-    resolved_amount: number | null
-    funding_basis_amount: number | null
+    allocation_value: string
+    resolved_amount: string | null
+    funding_basis_amount: string | null
     outcome_label_en: string | null
     outcome_label_fr: string | null
     commitment_label_en: string | null
@@ -172,7 +172,7 @@ export interface OutcomeCostAllocationHostDatabase {
     agreement_budget_fiscal_year_id: string
     outcome_id: string
     stream_commitment_id: string
-    generated_amount: number
+    generated_amount: string
     _deleted?: boolean
   }
   'extensions.agency_enablement': {

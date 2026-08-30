@@ -4,7 +4,6 @@ import { KyselyPGlite } from 'kysely-pglite'
 import migration0001 from '../../server/migrations/0001_outcome_cost_allocation'
 import migration0002 from '../../server/migrations/0002_versioned_allocations'
 import migration0003 from '../../server/migrations/0003_scoped_allocations'
-import migration0004 from '../../server/migrations/0004_showcase_seed'
 
 interface GuardTestDatabase {
   Funding_Case_Agreement_Profile: {
@@ -39,6 +38,7 @@ const managedMutation = async <T>(
 describe('outcome allocation generated-record database guards', () => {
   let db: Kysely<GuardTestDatabase>
   let managedGuardDefinition = ''
+  let versionGuardDefinition = ''
 
   beforeAll(async () => {
     const pglite = await KyselyPGlite.create(`memory://outcome-allocation-guards-${Date.now()}`)
@@ -49,10 +49,13 @@ describe('outcome allocation generated-record database guards', () => {
     await sql`CREATE SCHEMA extensions`.execute(db)
     await sql`CREATE TABLE "Common_Entity_Type" (
         egcs_cn_type text PRIMARY KEY,
+        egcs_cn_ownerkind text,
         _deleted boolean NOT NULL DEFAULT false
       )`.execute(db)
-    await sql`INSERT INTO "Common_Entity_Type" (egcs_cn_type)
-      VALUES ('gcs-outcome-cost-allocation:allocation-version')`.execute(db)
+    await sql`INSERT INTO "Common_Entity_Type" (egcs_cn_type, egcs_cn_ownerkind)
+      VALUES
+        ('fundingcaseagreement', NULL),
+        ('gcs-outcome-cost-allocation:allocation-version', 'agreement')`.execute(db)
     await sql`CREATE TABLE "Common_Entity" (
         id bigserial PRIMARY KEY,
         egcs_cn_entitytype text NOT NULL,
@@ -60,11 +63,52 @@ describe('outcome allocation generated-record database guards', () => {
       )`.execute(db)
     await sql`CREATE OR REPLACE FUNCTION register_entity() RETURNS trigger AS $$
       BEGIN
-        IF NEW.id IS NULL THEN NEW.id := nextval(pg_get_serial_sequence(TG_TABLE_SCHEMA || '.' || TG_TABLE_NAME, 'id')); END IF;
+        IF NEW.id IS NULL OR EXISTS (SELECT 1 FROM "Common_Entity" WHERE id = NEW.id) THEN
+          NEW.id := nextval(pg_get_serial_sequence('"Common_Entity"', 'id'));
+        END IF;
         INSERT INTO "Common_Entity" (id, egcs_cn_entitytype) VALUES (NEW.id, TG_ARGV[0]);
+        PERFORM setval(pg_get_serial_sequence('"Common_Entity"', 'id'), (SELECT max(id) FROM "Common_Entity"), true);
         RETURN NEW;
       END;
       $$ LANGUAGE plpgsql`.execute(db)
+    await sql`CREATE TABLE "Common_Extension_Entity_Owner" (
+        egcs_cn_entityid bigint NOT NULL,
+        egcs_cn_entitytype text NOT NULL,
+        egcs_cn_ownerid bigint NOT NULL,
+        egcs_cn_ownertype text NOT NULL,
+        CONSTRAINT cn_pk_extensionentityowner PRIMARY KEY (egcs_cn_entityid, egcs_cn_entitytype),
+        CONSTRAINT cn_chk_extensionentityownertype CHECK (egcs_cn_ownertype IN ('fundingcaseagreement', 'applicantrecipient')),
+        CONSTRAINT cn_ref_extensionentityowner_target FOREIGN KEY (egcs_cn_entityid, egcs_cn_entitytype) REFERENCES "Common_Entity" (id, egcs_cn_entitytype) ON DELETE RESTRICT,
+        CONSTRAINT cn_ref_extensionentityowner_owner FOREIGN KEY (egcs_cn_ownerid, egcs_cn_ownertype) REFERENCES "Common_Entity" (id, egcs_cn_entitytype) ON DELETE RESTRICT
+      )`.execute(db)
+    await sql`CREATE OR REPLACE FUNCTION bind_extension_entity_owner() RETURNS trigger AS $$
+      DECLARE target_id bigint; owner_id bigint;
+      BEGIN
+        target_id := (to_jsonb(NEW) ->> TG_ARGV[1])::bigint;
+        owner_id := (to_jsonb(NEW) ->> TG_ARGV[3])::bigint;
+        INSERT INTO "Common_Extension_Entity_Owner" (egcs_cn_entityid, egcs_cn_entitytype, egcs_cn_ownerid, egcs_cn_ownertype)
+        VALUES (target_id, TG_ARGV[0], owner_id, TG_ARGV[2]);
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql`.execute(db)
+    await sql`CREATE OR REPLACE FUNCTION lock_extension_entity_owner_column() RETURNS trigger AS $$
+      BEGIN
+        IF (to_jsonb(NEW) -> TG_ARGV[0]) IS DISTINCT FROM (to_jsonb(OLD) -> TG_ARGV[0]) THEN
+          RAISE EXCEPTION 'Extension lifecycle entity owner identity is immutable'
+            USING ERRCODE = '23514', CONSTRAINT = 'cn_chk_extensionentityownercolumnimmutable';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql`.execute(db)
+    await sql`CREATE OR REPLACE FUNCTION lock_extension_entity_owner_binding() RETURNS trigger AS $$
+      BEGIN
+        RAISE EXCEPTION 'Extension lifecycle entity owner binding is immutable'
+          USING ERRCODE = '23514', CONSTRAINT = 'cn_chk_extensionentityownerbindingimmutable';
+      END;
+      $$ LANGUAGE plpgsql`.execute(db)
+    await sql`CREATE TRIGGER trg_lock_extension_entity_owner_binding
+      BEFORE UPDATE OR DELETE ON "Common_Extension_Entity_Owner"
+      FOR EACH ROW EXECUTE FUNCTION lock_extension_entity_owner_binding()`.execute(db)
     await sql`CREATE OR REPLACE FUNCTION trg_fn_soft_delete_entity_assignments() RETURNS trigger AS $$
       BEGIN RETURN NEW; END;
       $$ LANGUAGE plpgsql`.execute(db)
@@ -91,6 +135,16 @@ describe('outcome allocation generated-record database guards', () => {
         _deleted boolean NOT NULL DEFAULT false
       )
     `.execute(db)
+    await sql`CREATE OR REPLACE FUNCTION test_register_agreement_entity() RETURNS trigger AS $$
+      BEGIN
+        INSERT INTO "Common_Entity" (id, egcs_cn_entitytype) VALUES (NEW.id, 'fundingcaseagreement');
+        PERFORM setval(pg_get_serial_sequence('"Common_Entity"', 'id'), (SELECT max(id) FROM "Common_Entity"), true);
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql`.execute(db)
+    await sql`CREATE TRIGGER test_register_agreement_entity
+      AFTER INSERT ON "Funding_Case_Agreement_Profile"
+      FOR EACH ROW EXECUTE FUNCTION test_register_agreement_entity()`.execute(db)
     await sql`
       CREATE TABLE "Transfer_Payment_Stream" (
         id bigint PRIMARY KEY,
@@ -226,6 +280,12 @@ describe('outcome allocation generated-record database guards', () => {
       ) AS definition
     `.execute(db)
     managedGuardDefinition = guardFunction.rows[0]?.definition ?? ''
+    const versionGuardFunction = await sql<{ definition: string }>`
+      SELECT pg_get_functiondef(
+        'extensions.gcs_outcome_cost_allocation_guard_version()'::regprocedure
+      ) AS definition
+    `.execute(db)
+    versionGuardDefinition = versionGuardFunction.rows[0]?.definition ?? ''
     await sql`INSERT INTO "Funding_Case_Agreement_Profile" (id, egcs_fc_transferpaymentstream) VALUES (1, 200)`.execute(db)
     await sql`INSERT INTO "Funding_Case_Agreement_Budget_Version" (id, egcs_fc_fundingagreement, egcs_fc_iscurrent) VALUES (2, 1, true)`.execute(db)
     await sql`INSERT INTO "Transfer_Payment_Stream" (id, egcs_tp_transferpaymentprofile) VALUES (200, 300)`.execute(db)
@@ -266,6 +326,13 @@ describe('outcome allocation generated-record database guards', () => {
         egcs_fc_budgetversion,
         egcs_fc_fiscalyear
       ) VALUES ('00000000-0000-4000-8000-000000000020', 1, 2, 400)
+    `.execute(db)
+    await sql`
+      INSERT INTO "Funding_Case_Agreement_Budget_Line_Item" (
+        id,
+        egcs_fc_fundingagreementbudgetfiscalyear,
+        egcs_fc_programfunding
+      ) VALUES (20, '00000000-0000-4000-8000-000000000020', 100)
     `.execute(db)
     await sql`
       INSERT INTO "Transfer_Payment_Outcome" (
@@ -402,6 +469,9 @@ describe('outcome allocation generated-record database guards', () => {
     expect(managedGuardDefinition).toContain('pg_locks')
     expect(managedGuardDefinition).toContain('compiled by emcc')
     expect(managedGuardDefinition).toContain('current_setting')
+    expect(versionGuardDefinition).toContain('gcs_outcome_cost_allocation_snapshot_economics_guard')
+    expect(versionGuardDefinition).toContain('Funding_Case_Agreement_Budget_Line_Item')
+    expect(versionGuardDefinition).toContain('SUM(allocation.resolved_amount)')
   })
 
   it('rejects negative allocations and percentages above one hundred at the database boundary', async () => {
@@ -852,71 +922,4 @@ describe('outcome allocation generated-record database guards', () => {
     await sql`UPDATE "Funding_Case_Agreement_Profile" SET _deleted = false WHERE id = 1`.execute(db)
   })
 
-  it('materializes the unmistakable agreement 51 showcase allocation and commitment provenance', async () => {
-    await sql`
-      DO $showcase$
-      BEGIN
-      INSERT INTO "Transfer_Payment_Profile" (id, egcs_tp_agency) VALUES (310, 1);
-      INSERT INTO "Transfer_Payment_Stream" (id, egcs_tp_transferpaymentprofile) VALUES (31, 310);
-      INSERT INTO "Funding_Case_Agreement_Profile" (id, egcs_fc_transferpaymentstream, egcs_fc_title_en)
-        VALUES (51, 31, 'Health Canada Cost Agreement 1 - Showcase');
-      UPDATE "Common_Status" SET egcs_cn_name_en = 'Active' WHERE id = 4;
-      INSERT INTO "Transfer_Payment_Stream_Commitment_Type" (id, egcs_tp_transferpaymentstream, egcs_tp_name_en)
-        VALUES (31, 31, 'Commitment');
-      INSERT INTO "Agency_Fiscal_Year" (id, egcs_ay_fiscalyeardisplay, egcs_ay_fiscalyear)
-        VALUES (410, '2026-2027', 2026), (411, '2027-2028', 2027);
-      INSERT INTO "Transfer_Payment_Fiscal_Year_Budget" (id, egcs_tp_transferpaymentprofile, egcs_tp_fiscalyear)
-        VALUES (510, 310, 410), (511, 310, 411);
-      INSERT INTO "Transfer_Payment_Stream_Budget" (id, egcs_tp_transferpaymentstream, egcs_tp_transferpaymentbudget)
-        VALUES (310, 31, 510), (311, 31, 511);
-      INSERT INTO "Transfer_Payment_Stream_Chart_of_Account" (id, egcs_tp_streambudget, egcs_tp_transferpaymentstream)
-        VALUES (311, 310, 31), (312, 310, 31), (313, 311, 31), (314, 311, 31);
-      INSERT INTO "Funding_Case_Agreement_Budget_Version" (id, egcs_fc_fundingagreement, egcs_fc_iscurrent)
-        VALUES (51, 51, true);
-      INSERT INTO "Funding_Case_Agreement_Budget_Fiscal_Year"
-        (id, egcs_fc_fundingagreement, egcs_fc_budgetversion, egcs_fc_fiscalyear)
-        VALUES ('00000000-0000-4000-8000-000000000051', 51, 51, 410),
-          ('00000000-0000-4000-8000-000000000052', 51, 51, 411);
-      INSERT INTO "Funding_Case_Agreement_Budget_Line_Item"
-        (id, egcs_fc_fundingagreementbudgetfiscalyear, egcs_fc_programfunding)
-        VALUES (511, '00000000-0000-4000-8000-000000000051', 60),
-          (512, '00000000-0000-4000-8000-000000000051', 15),
-          (513, '00000000-0000-4000-8000-000000000052', 70),
-          (514, '00000000-0000-4000-8000-000000000052', 20);
-      INSERT INTO "Transfer_Payment_Outcome" (id, egcs_tp_transferpaymentprofile, egcs_tp_name_en, egcs_tp_name_fr)
-        VALUES (311, 310, 'Outcome one', 'Résultat un'), (312, 310, 'Outcome two', 'Résultat deux');
-      INSERT INTO "Funding_Case_Agreement_Commitment"
-        (id, egcs_fc_fundingagreement, egcs_fc_type, egcs_fc_status, egcs_fc_financialsystemnumber)
-        VALUES (510001, 51, 31, 4, 510001);
-      INSERT INTO "Funding_Case_Agreement_Commitment_Line"
-        (id, egcs_fc_commitment, egcs_fc_commitmentlinenumber, egcs_fc_transferpaymentstreamchartofaccount, egcs_fc_amount)
-        VALUES (510011, 510001, 1, 311, 60), (510012, 510001, 2, 312, 15);
-      END;
-      $showcase$;
-    `.execute(db)
-
-    await db.transaction().execute(async trx => {
-      await migration0004.up(trx)
-    })
-
-    const version = await sql<{ status: string, funding_basis_amount: string }>`
-      SELECT status, funding_basis_amount::text FROM extensions.gcs_outcome_cost_allocation_versions
-      WHERE agreement_id = 51
-    `.execute(db)
-    expect(version.rows).toEqual([{ status: 'active', funding_basis_amount: '165.00' }])
-    const allocations = await sql<{ fiscal_year: string, allocated: string }>`
-      SELECT fiscal_year_display AS fiscal_year, sum(resolved_amount)::text AS allocated
-      FROM extensions.gcs_outcome_cost_allocation_allocations WHERE agreement_id = 51
-      GROUP BY fiscal_year_display ORDER BY fiscal_year_display
-    `.execute(db)
-    expect(allocations.rows).toEqual([
-      { fiscal_year: '2026-2027', allocated: '75.00' },
-      { fiscal_year: '2027-2028', allocated: '90.00' }
-    ])
-    const provenance = await sql<{ count: string }>`
-      SELECT count(*)::text AS count FROM extensions.gcs_outcome_cost_allocation_commitment_lines
-      WHERE agreement_id = 51 AND generated_commitment_id = 510001
-    `.execute(db)
-    expect(provenance.rows).toEqual([{ count: '2' }])
-  })
 })

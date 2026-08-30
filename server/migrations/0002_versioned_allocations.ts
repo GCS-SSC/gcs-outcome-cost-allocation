@@ -12,7 +12,7 @@ export default defineGcsExtensionMigration({
         lifecycle_status_id bigint NOT NULL REFERENCES "Common_Status" (id) ON DELETE RESTRICT,
         created_at timestamp NOT NULL DEFAULT now(),
         completed_at timestamp,
-        funding_basis_amount numeric(19, 2),
+        funding_basis_amount numeric,
         _deleted boolean NOT NULL DEFAULT false,
         CONSTRAINT gcs_outcome_cost_allocation_version_status
           CHECK (status IN ('draft', 'active', 'inactive'))
@@ -39,7 +39,13 @@ export default defineGcsExtensionMigration({
 
     await sql`
       ALTER TABLE extensions.gcs_outcome_cost_allocation_versions
-      ADD COLUMN IF NOT EXISTS funding_basis_amount numeric(19, 2)
+      ADD COLUMN IF NOT EXISTS funding_basis_amount numeric
+    `.execute(db)
+
+    await sql`
+      ALTER TABLE extensions.gcs_outcome_cost_allocation_versions
+      ALTER COLUMN funding_basis_amount TYPE numeric
+      USING funding_basis_amount::numeric
     `.execute(db)
 
     await sql`

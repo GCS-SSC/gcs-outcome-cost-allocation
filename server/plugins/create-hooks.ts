@@ -34,11 +34,14 @@ import {
 } from '../errors.ts'
 import {
   type AllocationValidationIssue,
+  type AllocationMoney,
   type CommitmentType,
   EXTENSION_KEY,
   isCommitmentType,
-  parseExactNumeric19Scale4
+  parseAllocationMoney,
+  toCents
 } from '../../shared/allocation.ts'
+import { databaseMoneyValue } from '../numeric.ts'
 
 type CreateOperationContext = GcsExtensionCreateOperationContext
 type CreateOperationResult = GcsExtensionCreateOperationResult
@@ -518,9 +521,9 @@ const createGeneratedCommitment = async (
       egcs_fc_commitment: commitmentId,
       egcs_fc_commitmentlinenumber: index + 1,
       egcs_fc_transferpaymentstreamchartofaccount: line.streamCommitmentId,
-      egcs_fc_amount: line.allocation.amount
+      egcs_fc_amount: databaseMoneyValue(line.allocation.amount)
     })))
-    .returningAll()
+    .returning(['id', 'egcs_fc_commitmentlinenumber'])
     .execute()
 
   await db
@@ -539,7 +542,7 @@ const createGeneratedCommitment = async (
         agreement_budget_fiscal_year_id: generatedLine.allocation.agreementBudgetFiscalYearId,
         outcome_id: generatedLine.allocation.outcomeId,
         stream_commitment_id: generatedLine.streamCommitmentId,
-        generated_amount: generatedLine.allocation.amount
+        generated_amount: databaseMoneyValue(generatedLine.allocation.amount)
       }
     }))
     .execute()
@@ -603,14 +606,13 @@ const getPaymentCreateCommitmentId = (context: CreateOperationContext): string =
   return validatedCommitmentId || getRecordStringValue(context.createdRecord, 'egcs_fc_fundingagreementcommitment')
 }
 
-const getPaymentCreateAmount = (context: CreateOperationContext): number => {
+const getPaymentCreateAmount = (context: CreateOperationContext): AllocationMoney | null => {
   const value = context.validatedBody.egcs_fc_paymentamount
   if (value === undefined || value === null || value === '') {
-    return 0
+    return null
   }
 
-  const parsed = parseExactNumeric19Scale4(value)
-  return parsed === null ? Number.NaN : parsed
+  return parseAllocationMoney(value)
 }
 
 const getPaymentCreateInputs = (context: CreateOperationContext) => {
@@ -626,12 +628,14 @@ const paymentCreateInputsAreComplete = (inputs: ReturnType<typeof getPaymentCrea
   Boolean(inputs.paymentId)
   && Boolean(inputs.commitmentId)
   && Boolean(inputs.agreementBudgetFiscalYearId)
-  && inputs.paymentAmount > 0
+  && inputs.paymentAmount !== null
+  && toCents(inputs.paymentAmount) > 0n
 
 const paymentCreateRequestInputsAreComplete = (inputs: ReturnType<typeof getPaymentCreateInputs>): boolean =>
   Boolean(inputs.commitmentId)
   && Boolean(inputs.agreementBudgetFiscalYearId)
-  && inputs.paymentAmount > 0
+  && inputs.paymentAmount !== null
+  && toCents(inputs.paymentAmount) > 0n
 
 /**
  * Inserts generated payment lines for the host-created draft payment.
@@ -647,7 +651,7 @@ const createGeneratedPaymentLines = async (
     .values(generated.lines.map(line => ({
       egcs_fc_fundingagreementpayment: paymentId,
       egcs_fc_fundingagreementcommitmentline: line.commitmentLineId,
-      egcs_fc_amount: line.amount
+      egcs_fc_amount: databaseMoneyValue(line.amount)
     })))
     .execute()
 
@@ -658,7 +662,7 @@ const createGeneratedPaymentLines = async (
  */
 const handlePaymentCreate = async (context: CreateOperationContext): Promise<CreateOperationResult> => {
   const inputs = getPaymentCreateInputs(context)
-  if (!Number.isFinite(inputs.paymentAmount)) {
+  if (inputs.paymentAmount === null && context.validatedBody.egcs_fc_paymentamount !== undefined) {
     throwOutcomeCostAllocationIssues([{
       code: 'GCS_OUTCOME_COST_ALLOCATION_INVALID',
       path: 'egcs_fc_paymentamount',
@@ -696,6 +700,7 @@ const handlePaymentCreate = async (context: CreateOperationContext): Promise<Cre
   if (!paymentCreateInputsAreComplete({ paymentId, commitmentId, agreementBudgetFiscalYearId, paymentAmount })) {
     return continueCreateOperation()
   }
+  if (paymentAmount === null) return continueCreateOperation()
 
   const generated = await getGeneratedPaymentLines(
     db,

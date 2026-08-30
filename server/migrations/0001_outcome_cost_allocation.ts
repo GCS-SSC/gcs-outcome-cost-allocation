@@ -12,7 +12,7 @@ export default defineGcsExtensionMigration({
       .addColumn('lifecycle_status_id', 'bigint', col => col.notNull().references('Common_Status.id').onDelete('restrict'))
       .addColumn('created_at', 'timestamp', col => col.defaultTo(sql`now()`).notNull())
       .addColumn('completed_at', 'timestamp')
-      .addColumn('funding_basis_amount', 'numeric(19, 2)')
+      .addColumn('funding_basis_amount', 'numeric')
       .addColumn('_deleted', 'boolean', col => col.defaultTo(false).notNull())
       .addCheckConstraint(
         'gcs_outcome_cost_allocation_version_status',
@@ -27,7 +27,9 @@ export default defineGcsExtensionMigration({
     await attachGcsLifecycleEntityIdentity(db, {
       extensionKey: 'gcs-outcome-cost-allocation',
       localType: 'allocation-version',
-      table: 'gcs_outcome_cost_allocation_versions'
+      table: 'gcs_outcome_cost_allocation_versions',
+      ownerKind: 'agreement',
+      ownerIdColumn: 'agreement_id'
     })
 
     await sql`
@@ -355,6 +357,63 @@ export default defineGcsExtensionMigration({
             RAISE EXCEPTION 'Outcome cost allocation labels and economics must be snapshotted before activation.'
               USING ERRCODE = '23514',
                 CONSTRAINT = 'gcs_outcome_cost_allocation_snapshot_guard';
+          END IF;
+
+          IF EXISTS (
+            WITH expected_years AS (
+              SELECT
+                COALESCE(agreement_year.egcs_fc_originalbudgetfiscalyear, agreement_year.id) AS stable_year_id,
+                COALESCE(SUM(line_item.egcs_fc_programfunding), 0) AS funding_basis_amount
+              FROM "Funding_Case_Agreement_Budget_Fiscal_Year" agreement_year
+              INNER JOIN "Funding_Case_Agreement_Budget_Version" budget_version
+                ON budget_version.id = agreement_year.egcs_fc_budgetversion
+               AND budget_version.egcs_fc_fundingagreement = agreement_year.egcs_fc_fundingagreement
+               AND budget_version.egcs_fc_iscurrent = true
+               AND budget_version._deleted = false
+              LEFT JOIN "Funding_Case_Agreement_Budget_Line_Item" line_item
+                ON line_item.egcs_fc_fundingagreementbudgetfiscalyear = agreement_year.id
+               AND line_item._deleted = false
+              WHERE agreement_year.egcs_fc_fundingagreement = NEW.agreement_id
+                AND agreement_year._deleted = false
+              GROUP BY COALESCE(agreement_year.egcs_fc_originalbudgetfiscalyear, agreement_year.id)
+            ), allocation_years AS (
+              SELECT
+                allocation.agreement_budget_fiscal_year_id AS stable_year_id,
+                SUM(allocation.resolved_amount) AS resolved_amount,
+                MIN(allocation.funding_basis_amount) AS minimum_funding_basis_amount,
+                MAX(allocation.funding_basis_amount) AS maximum_funding_basis_amount
+              FROM extensions.gcs_outcome_cost_allocation_allocations allocation
+              WHERE allocation.allocation_version_id = NEW.id
+                AND allocation._deleted = false
+              GROUP BY allocation.agreement_budget_fiscal_year_id
+            )
+            SELECT 1
+            FROM expected_years expected
+            FULL JOIN allocation_years allocation
+              ON allocation.stable_year_id = expected.stable_year_id
+            WHERE COALESCE(allocation.resolved_amount, 0)
+                IS DISTINCT FROM COALESCE(expected.funding_basis_amount, 0)
+              OR allocation.minimum_funding_basis_amount
+                IS DISTINCT FROM expected.funding_basis_amount
+              OR allocation.maximum_funding_basis_amount
+                IS DISTINCT FROM expected.funding_basis_amount
+          ) OR NEW.funding_basis_amount IS DISTINCT FROM (
+            SELECT COALESCE(SUM(line_item.egcs_fc_programfunding), 0)
+            FROM "Funding_Case_Agreement_Budget_Fiscal_Year" agreement_year
+            INNER JOIN "Funding_Case_Agreement_Budget_Version" budget_version
+              ON budget_version.id = agreement_year.egcs_fc_budgetversion
+             AND budget_version.egcs_fc_fundingagreement = agreement_year.egcs_fc_fundingagreement
+             AND budget_version.egcs_fc_iscurrent = true
+             AND budget_version._deleted = false
+            LEFT JOIN "Funding_Case_Agreement_Budget_Line_Item" line_item
+              ON line_item.egcs_fc_fundingagreementbudgetfiscalyear = agreement_year.id
+             AND line_item._deleted = false
+            WHERE agreement_year.egcs_fc_fundingagreement = NEW.agreement_id
+              AND agreement_year._deleted = false
+          ) THEN
+            RAISE EXCEPTION 'Outcome cost allocation snapshot economics do not match the current Agreement budget.'
+              USING ERRCODE = '23514',
+                CONSTRAINT = 'gcs_outcome_cost_allocation_snapshot_economics_guard';
           END IF;
 
           RETURN NEW;

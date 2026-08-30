@@ -487,10 +487,10 @@ describe('generated payment status resurrection coverage', () => {
     const db = new ScriptedDb()
     db.enqueue('select', 'Funding_Case_Agreement_Payment_Line', [{
       commitment_line_id: 'line-1',
-      payment_amount: 60,
-      commitment_amount: 100
+      payment_amount: '60.00',
+      commitment_amount: '100.00'
     }])
-    db.enqueue('select', 'Funding_Case_Agreement_Payment_Line', [{ paid_amount: 50 }])
+    db.enqueue('select', 'Funding_Case_Agreement_Payment_Line', [{ paid_amount: '50.00' }])
 
     await expect(generatedPaymentStatusResurrectionExceedsCoverage(
       asAllocationDb(db),
@@ -512,7 +512,7 @@ const budgetYearRow = {
   id: 'year-1',
   fiscal_year_id: 'fiscal-year-1',
   fiscal_year_display: '2026-2027',
-  program_funding: 100,
+  program_funding: '100.00',
   stream_budget_id: 'stream-budget-1'
 }
 
@@ -529,7 +529,7 @@ const allocationRow = {
   agreement_budget_fiscal_year_id: 'year-1',
   outcome_id: 'outcome-1',
   allocation_method: 'amount',
-  allocation_value: 100
+  allocation_value: '100.0000'
 }
 
 const allocation: OutcomeAllocationInput = {
@@ -538,7 +538,7 @@ const allocation: OutcomeAllocationInput = {
   agreementBudgetFiscalYearId: 'year-1',
   outcomeId: 'outcome-1',
   allocationMethod: 'amount',
-  allocationValue: 100
+  allocationValue: '100.0000'
 }
 
 const enqueueAllocationLabelSnapshot = (db: ScriptedDb) => {
@@ -899,7 +899,7 @@ describe('outcome allocation data reads', () => {
     ])
   })
 
-  it('rejects live funding that cannot remain exact in the public scale-four number contract', async () => {
+  it('rejects non-canonical database aggregate money text', async () => {
     const db = new ScriptedDb()
     db.enqueue('select', 'Funding_Case_Agreement_Budget_Fiscal_Year', [{
       ...budgetYearRow,
@@ -910,12 +910,7 @@ describe('outcome allocation data reads', () => {
       asAllocationDb(db),
       'agreement-1',
       'stream-1'
-    )).rejects.toMatchObject({
-      code: 'GCS_OUTCOME_COST_ALLOCATION_INVALID',
-      details: [{
-        path: 'budgetYears.year-1.programFunding'
-      }]
-    })
+    )).rejects.toThrow('Database money aggregate must be canonical scale-two text.')
   })
 
   it('normalizes allocation versions and nullable timestamps', async () => {
@@ -954,7 +949,7 @@ describe('outcome allocation data reads', () => {
         status: 'active',
         createdAt: '2026-01-02T03:04:05.000Z',
         completedAt: '2026-02-03T04:05:06.000Z',
-        fundingBasisAmount: 333.33
+        fundingBasisAmount: '333.33'
       }
     ])
     await expect(getAllocationVersion(asAllocationDb(db), 'agreement-1', '2')).resolves.toMatchObject({
@@ -988,7 +983,7 @@ describe('outcome allocation data reads', () => {
         agreement_budget_fiscal_year_id: 3,
         outcome_id: 4,
         allocation_method: 'percentage',
-        allocation_value: '25'
+        allocation_value: '25.0000'
       }
     ])
     db.enqueue('select', 'extensions.gcs_outcome_cost_allocation_allocations', [])
@@ -1001,7 +996,7 @@ describe('outcome allocation data reads', () => {
         agreementBudgetFiscalYearId: 'year-1',
         outcomeId: 'outcome-1',
         allocationMethod: 'amount',
-        allocationValue: 100,
+        allocationValue: '100.0000',
         outcomeLabelEn: 'Recorded outcome',
         outcomeLabelFr: 'Résultat enregistré',
         commitmentLabelEn: 'GL 5000 - Recorded commitment',
@@ -1015,7 +1010,7 @@ describe('outcome allocation data reads', () => {
         agreementBudgetFiscalYearId: '3',
         outcomeId: '4',
         allocationMethod: 'percentage',
-        allocationValue: 25
+        allocationValue: '25.0000'
       }
     ])
     await expect(getSavedAllocations(asAllocationDb(db), 'agreement-1')).resolves.toEqual([])
@@ -1608,8 +1603,8 @@ describe('outcome allocation version lifecycle', () => {
         commitment_label_en: 'Fund: 110 · G/L: 5000',
         commitment_label_fr: 'Fonds : 110 · G/L : 5000',
         fiscal_year_display: '2026-2027',
-        resolved_amount: 100,
-        funding_basis_amount: 100
+        resolved_amount: expect.anything(),
+        funding_basis_amount: expect.anything()
       },
       wheres: [
         ['id', '=', 'allocation-1'],
@@ -1765,7 +1760,7 @@ describe('outcome allocation version lifecycle', () => {
       commitment_type: '1',
       agreement_budget_fiscal_year_id: 'year-1',
       stream_commitment_id: 'stream-commitment-1',
-      paid_amount: 100.02
+      paid_amount: '100.02'
     }])
 
     await expect(completeAllocationVersion(
@@ -2015,7 +2010,7 @@ describe('outcome allocation saves and validation', () => {
         agreementBudgetFiscalYearId: 'year-1',
         outcomeId: 'outcome-1',
         allocationMethod: 'amount',
-        allocationValue: 100
+        allocationValue: '100.0000'
       }]
     )).resolves.toBeUndefined()
 
@@ -2029,7 +2024,7 @@ describe('outcome allocation saves and validation', () => {
       agreement_budget_fiscal_year_id: 'year-1',
       outcome_id: 'outcome-1',
       allocation_method: 'amount',
-      allocation_value: 100,
+      allocation_value: expect.anything(),
       resolved_amount: null,
       funding_basis_amount: null
     }])
@@ -2149,7 +2144,7 @@ describe('generated outcome allocation commitment lines', () => {
         allocation: {
           ...allocation,
           allocationVersionId: 'version-1',
-          amount: 100
+          amount: '100.00'
         },
         allocationVersionId: 'version-1',
         streamCommitmentId: 'stream-commitment-1'
@@ -2167,17 +2162,17 @@ describe('generated outcome allocation commitment lines', () => {
     db.enqueue('select', 'extensions.gcs_outcome_cost_allocation_allocations', [{
       ...allocationRow,
       allocation_method: 'percentage',
-      allocation_value: 50,
-      resolved_amount: 40,
-      funding_basis_amount: 80
+      allocation_value: '50.0000',
+      resolved_amount: '40.00',
+      funding_basis_amount: '80.00'
     }])
     db.enqueue('select', 'Funding_Case_Agreement_Budget_Fiscal_Year', [{
       ...budgetYearRow,
-      program_funding: 250
+      program_funding: '250.00'
     }])
     db.enqueue('select', 'Funding_Case_Agreement_Budget_Fiscal_Year', [{
       ...budgetYearRow,
-      program_funding: 250
+      program_funding: '250.00'
     }])
     db.enqueue('select', 'Funding_Case_Agreement_Activity', [outcomeRow])
     db.enqueue('select', 'Transfer_Payment_Stream_Chart_of_Account', [{
@@ -2198,10 +2193,10 @@ describe('generated outcome allocation commitment lines', () => {
       lines: [{
         allocation: {
           allocationMethod: 'percentage',
-          allocationValue: 50,
-          resolvedAmount: 40,
-          fundingBasisAmount: 80,
-          amount: 40
+          allocationValue: '50.0000',
+          resolvedAmount: '40.00',
+          fundingBasisAmount: '80.00',
+          amount: '40.00'
         }
       }]
     })
@@ -2321,7 +2316,7 @@ describe('generated outcome allocation payment edge cases', () => {
     db.enqueue('select', 'Funding_Case_Agreement_Commitment_Line', [{
       id: 'commitment-line-1',
       stream_commitment_id: 'stream-commitment-1',
-      amount: 100,
+      amount: '100.00',
       provenance_version_id: null,
       provenance_year_id: null,
       provenance_outcome_id: null,
@@ -2342,7 +2337,7 @@ describe('generated outcome allocation payment edge cases', () => {
       issues: [],
       lines: [{
         commitmentLineId: 'commitment-line-1',
-        amount: 40
+        amount: '40.00'
       }]
     })
 

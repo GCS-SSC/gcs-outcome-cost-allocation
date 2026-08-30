@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { parseExactNumeric19Scale4 } from '../shared/allocation.ts'
+import { parseExactNumeric19Scale4, toExactNumeric19Scale4Units } from '../shared/allocation.ts'
 
 const MAX_POSTGRES_BIGINT_TEXT = '9223372036854775807'
 
@@ -22,7 +22,7 @@ export const Numeric19Scale4Schema = z
       addInvalidNumericIssue(context)
     }
   })
-  .transform(value => parseExactNumeric19Scale4(value) as number)
+  .transform(value => parseExactNumeric19Scale4(value)!)
 
 /** Canonical positive decimal identity accepted by PostgreSQL signed bigint columns. */
 export const PositivePostgresBigintIdSchema = z.preprocess(
@@ -59,7 +59,8 @@ const OutcomeAllocationRequestBaseSchema = z.object({
 })
 
 export const OutcomeAllocationRequestSchema = OutcomeAllocationRequestBaseSchema.superRefine((allocation, context) => {
-  if (allocation.allocationMethod === 'percentage' && allocation.allocationValue > 100) {
+  if (allocation.allocationMethod === 'percentage'
+    && (toExactNumeric19Scale4Units(allocation.allocationValue) ?? 0n) > 1_000_000n) {
     context.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['allocationValue'],

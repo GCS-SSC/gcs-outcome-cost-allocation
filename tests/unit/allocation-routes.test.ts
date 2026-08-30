@@ -240,7 +240,7 @@ describe('outcome allocation routes', () => {
         agreementBudgetFiscalYearId: BUDGET_YEAR_ID,
         outcomeId: '5',
         allocationMethod: 'percentage',
-        allocationValue: 25.5
+        allocationValue: '25.5000'
       }],
       { agencyId: 'agency-1', streamId: 'stream-1' },
       expect.objectContaining({
@@ -263,7 +263,7 @@ describe('outcome allocation routes', () => {
           agreementBudgetFiscalYearId: BUDGET_YEAR_ID.toUpperCase(),
           outcomeId: 4,
           allocationMethod: 'amount',
-          allocationValue: 25
+          allocationValue: '25.0000'
         }]
       })
     })
@@ -279,7 +279,7 @@ describe('outcome allocation routes', () => {
         agreementBudgetFiscalYearId: BUDGET_YEAR_ID,
         outcomeId: '4',
         allocationMethod: 'amount',
-        allocationValue: 25
+        allocationValue: '25.0000'
       }],
       { agencyId: 'agency-1', streamId: 'stream-1' },
       expect.objectContaining({

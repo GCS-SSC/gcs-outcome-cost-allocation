@@ -1,6 +1,8 @@
 import {
   type CommitmentType,
   type CostAllocationVersion,
+  type AllocationDecimalInput,
+  type AllocationMoney,
   type VersionedOutcomeAllocationInput
 } from './allocation'
 
@@ -12,7 +14,8 @@ export interface ConfiguredAssociationRow {
   commitmentTypeLabel: string
   yearId: string
   yearLabel: string
-  programFunding: number
+  /** Canonical strings are authoritative; safe numbers remain deprecated input compatibility. */
+  programFunding: AllocationDecimalInput
   streamBudgetId: string
   streamCommitmentId: string
   commitmentLineLabel: string
@@ -32,7 +35,7 @@ export interface AllocationTableRow {
   outcomeId: string
   outcomeLabel: string
   associationCount: number
-  programFunding: number
+  programFunding: AllocationDecimalInput
   association?: ConfiguredAssociationRow
 }
 
@@ -115,7 +118,7 @@ export const buildOutcomeAllocationRows = (
       outcomeId: '',
       outcomeLabel: `${typeRows.length} ${options.recordsLabel}`,
       associationCount: typeRows.length,
-      programFunding: 0
+      programFunding: '0.00' as AllocationMoney
     })
 
     if (!options.isExpanded(typeGroupId)) {

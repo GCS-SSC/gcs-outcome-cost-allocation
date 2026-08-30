@@ -442,10 +442,13 @@ describe('outcome allocation PostgreSQL concurrency', () => {
     await sql`CREATE SCHEMA extensions`.execute(observerDb)
     await sql`CREATE TABLE "Common_Entity_Type" (
       egcs_cn_type text PRIMARY KEY,
+      egcs_cn_ownerkind text,
       _deleted boolean NOT NULL DEFAULT false
     )`.execute(observerDb)
-    await sql`INSERT INTO "Common_Entity_Type" (egcs_cn_type)
-      VALUES ('gcs-outcome-cost-allocation:allocation-version')`.execute(observerDb)
+    await sql`INSERT INTO "Common_Entity_Type" (egcs_cn_type, egcs_cn_ownerkind)
+      VALUES
+        ('fundingcaseagreement', NULL),
+        ('gcs-outcome-cost-allocation:allocation-version', 'agreement')`.execute(observerDb)
     await sql`CREATE TABLE "Common_Entity" (
       id bigserial PRIMARY KEY,
       egcs_cn_entitytype text NOT NULL,
@@ -453,11 +456,52 @@ describe('outcome allocation PostgreSQL concurrency', () => {
     )`.execute(observerDb)
     await sql`CREATE OR REPLACE FUNCTION register_entity() RETURNS trigger AS $$
       BEGIN
-        IF NEW.id IS NULL THEN NEW.id := nextval(pg_get_serial_sequence(TG_TABLE_SCHEMA || '.' || TG_TABLE_NAME, 'id')); END IF;
+        IF NEW.id IS NULL OR EXISTS (SELECT 1 FROM "Common_Entity" WHERE id = NEW.id) THEN
+          NEW.id := nextval(pg_get_serial_sequence('"Common_Entity"', 'id'));
+        END IF;
         INSERT INTO "Common_Entity" (id, egcs_cn_entitytype) VALUES (NEW.id, TG_ARGV[0]);
+        PERFORM setval(pg_get_serial_sequence('"Common_Entity"', 'id'), (SELECT max(id) FROM "Common_Entity"), true);
         RETURN NEW;
       END;
       $$ LANGUAGE plpgsql`.execute(observerDb)
+    await sql`CREATE TABLE "Common_Extension_Entity_Owner" (
+      egcs_cn_entityid bigint NOT NULL,
+      egcs_cn_entitytype text NOT NULL,
+      egcs_cn_ownerid bigint NOT NULL,
+      egcs_cn_ownertype text NOT NULL,
+      CONSTRAINT cn_pk_extensionentityowner PRIMARY KEY (egcs_cn_entityid, egcs_cn_entitytype),
+      CONSTRAINT cn_chk_extensionentityownertype CHECK (egcs_cn_ownertype IN ('fundingcaseagreement', 'applicantrecipient')),
+      CONSTRAINT cn_ref_extensionentityowner_target FOREIGN KEY (egcs_cn_entityid, egcs_cn_entitytype) REFERENCES "Common_Entity" (id, egcs_cn_entitytype) ON DELETE RESTRICT,
+      CONSTRAINT cn_ref_extensionentityowner_owner FOREIGN KEY (egcs_cn_ownerid, egcs_cn_ownertype) REFERENCES "Common_Entity" (id, egcs_cn_entitytype) ON DELETE RESTRICT
+    )`.execute(observerDb)
+    await sql`CREATE OR REPLACE FUNCTION bind_extension_entity_owner() RETURNS trigger AS $$
+      DECLARE target_id bigint; owner_id bigint;
+      BEGIN
+        target_id := (to_jsonb(NEW) ->> TG_ARGV[1])::bigint;
+        owner_id := (to_jsonb(NEW) ->> TG_ARGV[3])::bigint;
+        INSERT INTO "Common_Extension_Entity_Owner" (egcs_cn_entityid, egcs_cn_entitytype, egcs_cn_ownerid, egcs_cn_ownertype)
+        VALUES (target_id, TG_ARGV[0], owner_id, TG_ARGV[2]);
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql`.execute(observerDb)
+    await sql`CREATE OR REPLACE FUNCTION lock_extension_entity_owner_column() RETURNS trigger AS $$
+      BEGIN
+        IF (to_jsonb(NEW) -> TG_ARGV[0]) IS DISTINCT FROM (to_jsonb(OLD) -> TG_ARGV[0]) THEN
+          RAISE EXCEPTION 'Extension lifecycle entity owner identity is immutable'
+            USING ERRCODE = '23514', CONSTRAINT = 'cn_chk_extensionentityownercolumnimmutable';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql`.execute(observerDb)
+    await sql`CREATE OR REPLACE FUNCTION lock_extension_entity_owner_binding() RETURNS trigger AS $$
+      BEGIN
+        RAISE EXCEPTION 'Extension lifecycle entity owner binding is immutable'
+          USING ERRCODE = '23514', CONSTRAINT = 'cn_chk_extensionentityownerbindingimmutable';
+      END;
+      $$ LANGUAGE plpgsql`.execute(observerDb)
+    await sql`CREATE TRIGGER trg_lock_extension_entity_owner_binding
+      BEFORE UPDATE OR DELETE ON "Common_Extension_Entity_Owner"
+      FOR EACH ROW EXECUTE FUNCTION lock_extension_entity_owner_binding()`.execute(observerDb)
     await sql`CREATE OR REPLACE FUNCTION trg_fn_soft_delete_entity_assignments() RETURNS trigger AS $$
       BEGIN RETURN NEW; END;
       $$ LANGUAGE plpgsql`.execute(observerDb)
@@ -523,6 +567,16 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         _deleted boolean NOT NULL DEFAULT false
       )
     `.execute(observerDb)
+    await sql`CREATE OR REPLACE FUNCTION test_register_agreement_entity() RETURNS trigger AS $$
+      BEGIN
+        INSERT INTO "Common_Entity" (id, egcs_cn_entitytype) VALUES (NEW.id, 'fundingcaseagreement');
+        PERFORM setval(pg_get_serial_sequence('"Common_Entity"', 'id'), (SELECT max(id) FROM "Common_Entity"), true);
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql`.execute(observerDb)
+    await sql`CREATE TRIGGER test_register_agreement_entity
+      AFTER INSERT ON "Funding_Case_Agreement_Profile"
+      FOR EACH ROW EXECUTE FUNCTION test_register_agreement_entity()`.execute(observerDb)
     await sql`
       CREATE TABLE "Transfer_Payment_Outcome" (
         id bigint PRIMARY KEY,
@@ -1037,13 +1091,98 @@ describe('outcome allocation PostgreSQL concurrency', () => {
     })
   })
 
+  it('atomically binds each allocation version to its exact Agreement owner and rejects owner drift', async () => {
+    const created = await managedMutation(observerDb, '3', async trx => await trx
+      .insertInto('extensions.gcs_outcome_cost_allocation_versions')
+      .values({
+        id: '90001',
+        agreement_id: '3',
+        version_number: 90001,
+        status: 'draft'
+      })
+      .returning('id')
+      .executeTakeFirstOrThrow())
+
+    const binding = await sql<{
+      entity_id: string
+      entity_type: string
+      owner_id: string
+      owner_type: string
+    }>`
+      SELECT
+        egcs_cn_entityid::text AS entity_id,
+        egcs_cn_entitytype AS entity_type,
+        egcs_cn_ownerid::text AS owner_id,
+        egcs_cn_ownertype AS owner_type
+      FROM "Common_Extension_Entity_Owner"
+      WHERE egcs_cn_entityid = ${String(created.id)}::bigint
+        AND egcs_cn_entitytype = 'gcs-outcome-cost-allocation:allocation-version'
+    `.execute(observerDb)
+    expect(binding.rows).toEqual([{
+      entity_id: '90001',
+      entity_type: 'gcs-outcome-cost-allocation:allocation-version',
+      owner_id: '3',
+      owner_type: 'fundingcaseagreement'
+    }])
+
+    await expect(managedMutation(observerDb, '3', async trx => await trx
+      .updateTable('extensions.gcs_outcome_cost_allocation_versions')
+      .set({ agreement_id: '4' })
+      .where('id', '=', '90001')
+      .execute())).rejects.toMatchObject({
+      code: '23514',
+      constraint: 'gcs_outcome_cost_allocation_version_identity_guard'
+    })
+    await expect(sql`
+      UPDATE "Common_Extension_Entity_Owner"
+      SET egcs_cn_ownerid = 4
+      WHERE egcs_cn_entityid = 90001
+        AND egcs_cn_entitytype = 'gcs-outcome-cost-allocation:allocation-version'
+    `.execute(observerDb)).rejects.toMatchObject({
+      code: '23514',
+      constraint: 'cn_chk_extensionentityownerbindingimmutable'
+    })
+
+    await sql`DELETE FROM "Common_Entity" WHERE id = 4 AND egcs_cn_entitytype = 'fundingcaseagreement'`.execute(observerDb)
+    await expect(managedMutation(observerDb, '4', async trx => await trx
+      .insertInto('extensions.gcs_outcome_cost_allocation_versions')
+      .values({
+        id: '90002',
+        agreement_id: '4',
+        version_number: 90002,
+        status: 'draft'
+      })
+      .execute())).rejects.toMatchObject({
+      code: '23503',
+      constraint: 'cn_ref_extensionentityowner_owner'
+    })
+    await expect(observerDb
+      .selectFrom('extensions.gcs_outcome_cost_allocation_versions')
+      .select('id')
+      .where('id', '=', '90002')
+      .executeTakeFirst()).resolves.toBeUndefined()
+    await expect(sql<{ count: string }>`
+      SELECT count(*)::text AS count
+      FROM "Common_Entity"
+      WHERE id = 90002
+        AND egcs_cn_entitytype = 'gcs-outcome-cost-allocation:allocation-version'
+    `.execute(observerDb)).resolves.toMatchObject({ rows: [{ count: '0' }] })
+    await sql`INSERT INTO "Common_Entity" (id, egcs_cn_entitytype) VALUES (4, 'fundingcaseagreement')`.execute(observerDb)
+
+    await managedMutation(observerDb, '3', async trx => await trx
+      .updateTable('extensions.gcs_outcome_cost_allocation_versions')
+      .set({ _deleted: true })
+      .where('id', '=', '90001')
+      .execute())
+  })
+
   it('uses only the requested stream profile fiscal-year budget when profiles share a fiscal year', async () => {
     const budgetYears = await getAgreementBudgetYears(observerDb, '4', '4')
     expect(budgetYears).toEqual([{
       id: budgetYearStableId(24),
       fiscal_year_id: '50',
       fiscal_year_display: '2026-2027',
-      program_funding: 100,
+      program_funding: '100.00',
       stream_budget_id: '72'
     }])
 
@@ -1067,7 +1206,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
           agreement_budget_fiscal_year_id: budgetYearStableId(24),
           outcome_id: '32',
           allocation_method: 'amount',
-          allocation_value: 100
+          allocation_value: '100.0000'
         })
         .execute()
       return createdVersion
@@ -1104,8 +1243,8 @@ describe('outcome allocation PostgreSQL concurrency', () => {
     )
     expect(completedAllocations).toEqual([
       expect.objectContaining({
-        resolvedAmount: 100,
-        fundingBasisAmount: 100
+        resolvedAmount: '100.00',
+        fundingBasisAmount: '100.00'
       })
     ])
     await expect(getGeneratedCommitmentLines(
@@ -1127,9 +1266,9 @@ describe('outcome allocation PostgreSQL concurrency', () => {
       issues: [],
       lines: [{
         allocation: {
-          amount: 100,
-          resolvedAmount: 100,
-          fundingBasisAmount: 100
+          amount: '100.00',
+          resolvedAmount: '100.00',
+          fundingBasisAmount: '100.00'
         }
       }]
     })
@@ -1170,7 +1309,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
       id: historicalYearId,
       fiscal_year_id: '50',
       fiscal_year_display: '2026-2027',
-      program_funding: 175,
+      program_funding: '175.00',
       stream_budget_id: '72'
     }])
   })
@@ -1250,10 +1389,10 @@ describe('outcome allocation PostgreSQL concurrency', () => {
       })
 
       releaseCompletion.release()
-      await expect(completion).resolves.toMatchObject({
+      const completedVersion = await completion
+      expect(completedVersion).toMatchObject({
         id: version.id,
-        status: 'active',
-        fundingBasisAmount: 100
+        status: 'active'
       })
       await expect(fundingUpdate).resolves.toBeDefined()
       await expect(budgetLineInsert).resolves.toBeDefined()
@@ -1261,12 +1400,12 @@ describe('outcome allocation PostgreSQL concurrency', () => {
       const snapshots = await getSavedAllocations(observerDb, '4', version.id)
       expect(snapshots).toEqual([
         expect.objectContaining({
-          resolvedAmount: 100,
-          fundingBasisAmount: 100
+          resolvedAmount: completedVersion.fundingBasisAmount,
+          fundingBasisAmount: completedVersion.fundingBasisAmount
         })
       ])
       const liveFunding = await getAgreementBudgetYears(observerDb, '4', '4')
-      expect(liveFunding[0]?.program_funding).toBe(300)
+      expect(liveFunding[0]?.program_funding).toBe('300.00')
     } finally {
       releaseCompletion.release()
       await Promise.allSettled([
@@ -1312,19 +1451,19 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         agreement_budget_fiscal_year_id: budgetYearStableId(26),
         outcome_id: '33',
         allocation_method: 'amount',
-        allocation_value: 100
+        allocation_value: '100.0000'
       })
       .returning('id')
       .executeTakeFirstOrThrow())
 
     await expect(managedMutation(observerDb, '5', async trx => await trx
       .updateTable('extensions.gcs_outcome_cost_allocation_allocations')
-      .set({ allocation_value: 99 })
+      .set({ allocation_value: '99.0000' })
       .where('id', '=', String(allocation.id))
       .execute())).resolves.toBeDefined()
     await managedMutation(observerDb, '5', async trx => await trx
       .updateTable('extensions.gcs_outcome_cost_allocation_allocations')
-      .set({ allocation_value: 100 })
+      .set({ allocation_value: '100.0000' })
       .where('id', '=', String(allocation.id))
       .execute())
 
@@ -1338,7 +1477,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         agreement_budget_fiscal_year_id: budgetYearStableId(26),
         outcome_id: '33',
         allocation_method: 'amount',
-        allocation_value: 0
+        allocation_value: '0.0000'
       })
       .returning('id')
       .executeTakeFirstOrThrow())
@@ -1365,7 +1504,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         agreement_budget_fiscal_year_id: budgetYearStableId(26),
         outcome_id: '33',
         allocation_method: 'amount',
-        allocation_value: 0
+        allocation_value: '0.0000'
       })
       .execute())).rejects.toMatchObject({
       code: '23514',
@@ -1381,7 +1520,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         agreement_budget_fiscal_year_id: budgetYearStableId(28),
         outcome_id: '34',
         allocation_method: 'amount',
-        allocation_value: 0
+        allocation_value: '0.0000'
       })
       .execute())).rejects.toMatchObject({
       code: '23514',
@@ -1415,18 +1554,84 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         commitment_label_en: 'GL 5003 - Program 4',
         commitment_label_fr: 'GL 5003 - Program 4',
         fiscal_year_display: '2026-2027',
-        resolved_amount: 100,
-        funding_basis_amount: 100
+        resolved_amount: '100.00',
+        funding_basis_amount: '100.00'
       })
       .where('id', '=', String(allocation.id))
       .execute())
     const completedAt = new Date('2026-07-25T00:00:00.000Z')
+
+    await managedMutation(observerDb, '5', async trx => await trx
+      .updateTable('extensions.gcs_outcome_cost_allocation_allocations')
+      .set({ resolved_amount: '99.00' })
+      .where('id', '=', String(allocation.id))
+      .execute())
     await expect(managedMutation(observerDb, '5', async trx => await trx
       .updateTable('extensions.gcs_outcome_cost_allocation_versions')
       .set({
         status: 'active',
         completed_at: completedAt,
-        funding_basis_amount: 100
+        funding_basis_amount: '100.00'
+      })
+      .where('id', '=', String(version.id))
+      .execute())).rejects.toMatchObject({
+      code: '23514',
+      constraint: 'gcs_outcome_cost_allocation_snapshot_economics_guard'
+    })
+
+    await managedMutation(observerDb, '5', async trx => await trx
+      .updateTable('extensions.gcs_outcome_cost_allocation_allocations')
+      .set({ resolved_amount: '100.00', funding_basis_amount: '99.00' })
+      .where('id', '=', String(allocation.id))
+      .execute())
+    await expect(managedMutation(observerDb, '5', async trx => await trx
+      .updateTable('extensions.gcs_outcome_cost_allocation_versions')
+      .set({
+        status: 'active',
+        completed_at: completedAt,
+        funding_basis_amount: '100.00'
+      })
+      .where('id', '=', String(version.id))
+      .execute())).rejects.toMatchObject({
+      code: '23514',
+      constraint: 'gcs_outcome_cost_allocation_snapshot_economics_guard'
+    })
+
+    await managedMutation(observerDb, '5', async trx => await trx
+      .updateTable('extensions.gcs_outcome_cost_allocation_allocations')
+      .set({ funding_basis_amount: '100.00' })
+      .where('id', '=', String(allocation.id))
+      .execute())
+    await expect(managedMutation(observerDb, '5', async trx => await trx
+      .updateTable('extensions.gcs_outcome_cost_allocation_versions')
+      .set({
+        status: 'active',
+        completed_at: completedAt,
+        funding_basis_amount: '99.00'
+      })
+      .where('id', '=', String(version.id))
+      .execute())).rejects.toMatchObject({
+      code: '23514',
+      constraint: 'gcs_outcome_cost_allocation_snapshot_economics_guard'
+    })
+
+    const rejectedVersion = await observerDb
+      .selectFrom('extensions.gcs_outcome_cost_allocation_versions')
+      .where('id', '=', String(version.id))
+      .select(['status', 'completed_at', 'funding_basis_amount'])
+      .executeTakeFirstOrThrow()
+    expect(rejectedVersion).toMatchObject({
+      status: 'draft',
+      completed_at: null,
+      funding_basis_amount: null
+    })
+
+    await expect(managedMutation(observerDb, '5', async trx => await trx
+      .updateTable('extensions.gcs_outcome_cost_allocation_versions')
+      .set({
+        status: 'active',
+        completed_at: completedAt,
+        funding_basis_amount: '100.00'
       })
       .where('id', '=', String(version.id))
       .execute())).resolves.toBeDefined()
@@ -1434,7 +1639,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
     const immutableAllocationOperations = [
       () => managedMutation(observerDb, '5', async trx => await trx
         .updateTable('extensions.gcs_outcome_cost_allocation_allocations')
-        .set({ allocation_value: 90 })
+        .set({ allocation_value: '90.0000' })
         .where('id', '=', String(allocation.id))
         .execute()),
       () => managedMutation(observerDb, '5', async trx => await trx
@@ -1498,7 +1703,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         egcs_fc_commitment: '100',
         egcs_fc_commitmentlinenumber: 1,
         egcs_fc_transferpaymentstreamchartofaccount: '13',
-        egcs_fc_amount: 100,
+        egcs_fc_amount: '100.00',
         _deleted: false
       })
       .execute()
@@ -1520,7 +1725,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         egcs_fc_commitment: '102',
         egcs_fc_commitmentlinenumber: 1,
         egcs_fc_transferpaymentstreamchartofaccount: '13',
-        egcs_fc_amount: 99,
+        egcs_fc_amount: '99.00',
         _deleted: false
       })
       .execute()
@@ -1542,7 +1747,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         egcs_fc_commitment: '101',
         egcs_fc_commitmentlinenumber: 1,
         egcs_fc_transferpaymentstreamchartofaccount: '14',
-        egcs_fc_amount: 100,
+        egcs_fc_amount: '100.00',
         _deleted: false
       })
       .execute()
@@ -1557,7 +1762,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         agreement_budget_fiscal_year_id: budgetYearStableId(26),
         outcome_id: '33',
         stream_commitment_id: '13',
-        generated_amount: 100,
+        generated_amount: '100.00',
         _deleted: false
       })
       .execute())).rejects.toMatchObject({
@@ -1574,7 +1779,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         agreement_budget_fiscal_year_id: budgetYearStableId(26),
         outcome_id: '33',
         stream_commitment_id: '13',
-        generated_amount: 99,
+        generated_amount: '99.00',
         _deleted: false
       })
       .execute())).rejects.toMatchObject({
@@ -1591,7 +1796,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         agreement_budget_fiscal_year_id: budgetYearStableId(26),
         outcome_id: '33',
         stream_commitment_id: '13',
-        generated_amount: 100,
+        generated_amount: '100.00',
         _deleted: true
       })
       .execute())).rejects.toMatchObject({
@@ -1609,14 +1814,14 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         agreement_budget_fiscal_year_id: budgetYearStableId(26),
         outcome_id: '33',
         stream_commitment_id: '13',
-        generated_amount: 100,
+        generated_amount: '100.00',
         _deleted: false
       })
       .returning('id')
       .executeTakeFirstOrThrow())
     await expect(observerDb
       .updateTable('extensions.gcs_outcome_cost_allocation_commitment_lines')
-      .set({ generated_amount: 99 })
+      .set({ generated_amount: '99.00' })
       .where('id', '=', String(provenance.id))
       .execute()).rejects.toMatchObject({
       code: '23514',
@@ -1652,7 +1857,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
     })
     await expect(managedMutation(observerDb, '5', async trx => await trx
       .updateTable('extensions.gcs_outcome_cost_allocation_allocations')
-      .set({ allocation_value: 90 })
+      .set({ allocation_value: '90.0000' })
       .where('id', '=', String(allocation.id))
       .execute())).rejects.toMatchObject({
       code: '23514',
@@ -1671,6 +1876,106 @@ describe('outcome allocation PostgreSQL concurrency', () => {
       code: '23514',
       constraint: 'gcs_outcome_cost_allocation_version_transition_guard'
     })
+  })
+
+  it('activates an exact version funding aggregate larger than one numeric(19,2) row', async () => {
+    const firstYearId = '00000000-0000-4000-8000-000000000050'
+    const secondYearId = '00000000-0000-4000-8000-000000000051'
+    const perYearAmount = '60000000000000000.00'
+    const aggregateAmount = '120000000000000000.00'
+
+    await sql`
+      INSERT INTO "Funding_Case_Agreement_Profile" (
+        id,
+        egcs_fc_transferpaymentstream
+      ) VALUES (50, 5)
+    `.execute(observerDb)
+    await sql`
+      INSERT INTO "Funding_Case_Agreement_Budget_Version" (
+        id,
+        egcs_fc_fundingagreement,
+        egcs_fc_iscurrent
+      ) VALUES (150, 50, true)
+    `.execute(observerDb)
+    await sql`
+      INSERT INTO "Funding_Case_Agreement_Budget_Fiscal_Year" (
+        id,
+        egcs_fc_fundingagreement,
+        egcs_fc_fiscalyear,
+        egcs_fc_budgetversion
+      ) VALUES
+        (${firstYearId}::uuid, 50, 50, 150),
+        (${secondYearId}::uuid, 50, 50, 150)
+    `.execute(observerDb)
+    await sql`
+      INSERT INTO "Funding_Case_Agreement_Budget_Line_Item" (
+        id,
+        egcs_fc_fundingagreementbudgetfiscalyear,
+        egcs_fc_programfunding
+      ) VALUES
+        (150, ${firstYearId}::uuid, ${perYearAmount}::numeric),
+        (151, ${secondYearId}::uuid, ${perYearAmount}::numeric)
+    `.execute(observerDb)
+
+    const versionId = await managedMutation(observerDb, '50', async trx => {
+      const version = await sql<{ id: string }>`
+        INSERT INTO extensions.gcs_outcome_cost_allocation_versions (
+          agreement_id,
+          version_number,
+          status
+        ) VALUES (50, 1, 'draft')
+        RETURNING id::text
+      `.execute(trx)
+      const id = version.rows[0]?.id
+      if (!id) throw new Error('Expected an allocation version id.')
+
+      await sql`
+        INSERT INTO extensions.gcs_outcome_cost_allocation_allocations (
+          allocation_version_id,
+          agreement_id,
+          commitment_type,
+          stream_commitment_id,
+          agreement_budget_fiscal_year_id,
+          outcome_id,
+          allocation_method,
+          allocation_value,
+          resolved_amount,
+          funding_basis_amount,
+          outcome_label_en,
+          outcome_label_fr,
+          commitment_label_en,
+          commitment_label_fr,
+          fiscal_year_display
+        ) VALUES
+          (${id}::bigint, 50, 5, 13, ${firstYearId}::uuid, 33, 'percentage', 100,
+            ${perYearAmount}::numeric, ${perYearAmount}::numeric, 'Outcome', 'Resultat', 'Commitment', 'Engagement', '2026-2027'),
+          (${id}::bigint, 50, 5, 13, ${secondYearId}::uuid, 33, 'percentage', 100,
+            ${perYearAmount}::numeric, ${perYearAmount}::numeric, 'Outcome', 'Resultat', 'Commitment', 'Engagement', '2026-2027')
+      `.execute(trx)
+      await sql`
+        UPDATE extensions.gcs_outcome_cost_allocation_versions
+        SET status = 'active',
+          completed_at = now(),
+          funding_basis_amount = ${aggregateAmount}::numeric
+        WHERE id = ${id}::bigint
+      `.execute(trx)
+      return id
+    })
+
+    const stored = await sql<{ funding_basis_amount: string, data_type: string }>`
+      SELECT
+        version.funding_basis_amount::text AS funding_basis_amount,
+        format_type(attribute.atttypid, attribute.atttypmod) AS data_type
+      FROM extensions.gcs_outcome_cost_allocation_versions version
+      JOIN pg_attribute attribute
+        ON attribute.attrelid = 'extensions.gcs_outcome_cost_allocation_versions'::regclass
+       AND attribute.attname = 'funding_basis_amount'
+      WHERE version.id = ${versionId}::bigint
+    `.execute(observerDb)
+    expect(stored.rows).toEqual([{
+      funding_basis_amount: aggregateAmount,
+      data_type: 'numeric'
+    }])
   })
 
   it('serializes disable scope scanning with newly generated agreement work', async () => {
@@ -2297,6 +2602,11 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         egcs_fc_fiscalyear,
         egcs_fc_budgetversion
       ) VALUES ('00000000-0000-4000-8000-000000000035', 12, 50, 12035);
+      INSERT INTO "Funding_Case_Agreement_Budget_Line_Item" (
+        id,
+        egcs_fc_fundingagreementbudgetfiscalyear,
+        egcs_fc_programfunding
+      ) VALUES (120350, '00000000-0000-4000-8000-000000000035', 100);
       INSERT INTO "Transfer_Payment_Fiscal_Year_Budget" (
         id,
         egcs_tp_transferpaymentprofile,
@@ -2345,9 +2655,9 @@ describe('outcome allocation PostgreSQL concurrency', () => {
           agreement_budget_fiscal_year_id: budgetYearStableId(35),
           outcome_id: '38',
           allocation_method: 'amount',
-          allocation_value: 100,
-          resolved_amount: 100,
-          funding_basis_amount: 100,
+          allocation_value: '100.0000',
+          resolved_amount: '100.00',
+          funding_basis_amount: '100.00',
           outcome_label_en: 'Outcome 8',
           outcome_label_fr: 'Resultat 8',
           commitment_label_en: 'GL 5009 - Program 9',
@@ -2357,7 +2667,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         .execute()
       await trx
         .updateTable('extensions.gcs_outcome_cost_allocation_versions')
-        .set({ status: 'active', completed_at: sql`now()`, funding_basis_amount: 100 })
+        .set({ status: 'active', completed_at: sql`now()`, funding_basis_amount: '100.00' })
         .where('id', '=', String(version.id))
         .execute()
       await trx
@@ -2370,7 +2680,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
           agreement_budget_fiscal_year_id: budgetYearStableId(35),
           outcome_id: '38',
           stream_commitment_id: '20',
-          generated_amount: 100
+          generated_amount: '100.00'
         })
         .execute()
       await trx
@@ -2379,7 +2689,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
           id: '190',
           egcs_fc_fundingagreementcommitment: '190',
           egcs_fc_fiscalyear: budgetYearStableId(35),
-          egcs_fc_paymentamount: 60,
+          egcs_fc_paymentamount: '60.00',
           egcs_fc_status: '1'
         })
         .execute()
@@ -2389,7 +2699,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
           id: '190',
           egcs_fc_fundingagreementpayment: '190',
           egcs_fc_fundingagreementcommitmentline: '190',
-          egcs_fc_amount: 60
+          egcs_fc_amount: '60.00'
         })
         .execute()
       await trx
@@ -2440,7 +2750,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
           id: '191',
           egcs_fc_fundingagreementcommitment: '190',
           egcs_fc_fiscalyear: budgetYearStableId(35),
-          egcs_fc_paymentamount: 50,
+          egcs_fc_paymentamount: '50.00',
           egcs_fc_status: '1'
         })
         .execute()
@@ -2450,7 +2760,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
           id: '191',
           egcs_fc_fundingagreementpayment: '191',
           egcs_fc_fundingagreementcommitmentline: line.commitmentLineId,
-          egcs_fc_amount: line.amount
+          egcs_fc_amount: sql`${line.amount}::numeric`
         })))
         .execute()
       await trx
@@ -2935,7 +3245,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
       await lockAgreementAllocationLifecycle(trx, '4')
       await trx
         .updateTable('extensions.gcs_outcome_cost_allocation_allocations')
-        .set({ allocation_value: 100 })
+        .set({ allocation_value: '100.0000' })
         .where('allocation_version_id', '=', editVersion.id)
         .where('_deleted', '=', false)
         .execute()
@@ -3037,7 +3347,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
           agreement_budget_fiscal_year_id: budgetYearStableId(20),
           outcome_id: '30',
           allocation_method: 'amount',
-          allocation_value: 100
+          allocation_value: '100.0000'
         })
         .execute()
       return createdVersion
@@ -3199,7 +3509,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
       INSERT INTO "Transfer_Payment_Stream" (id, egcs_tp_transferpaymentprofile)
       VALUES (10, 800);
       INSERT INTO "Funding_Case_Agreement_Profile" (id, egcs_fc_transferpaymentstream)
-      VALUES (10, 10);
+      VALUES (910000, 10);
       INSERT INTO "Transfer_Payment_Outcome" (
         id,
         egcs_tp_transferpaymentprofile,
@@ -3207,7 +3517,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         egcs_tp_name_fr
       ) VALUES (36, 800, 'Outcome 6', 'Resultat 6');
       INSERT INTO "Funding_Case_Agreement_Activity" (id, egcs_fc_fundingagreement)
-      VALUES (46, 10);
+      VALUES (46, 910000);
       INSERT INTO "Funding_Case_Agreement_Outcome_Activity" (
         egcs_fc_activity,
         egcs_fc_outcomes
@@ -3216,13 +3526,13 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         id,
         egcs_fc_fundingagreement,
         egcs_fc_iscurrent
-      ) VALUES (10032, 10, true);
+      ) VALUES (10032, 910000, true);
       INSERT INTO "Funding_Case_Agreement_Budget_Fiscal_Year" (
         id,
         egcs_fc_fundingagreement,
         egcs_fc_fiscalyear,
         egcs_fc_budgetversion
-      ) VALUES ('00000000-0000-4000-8000-000000000032', 10, 50, 10032);
+      ) VALUES ('00000000-0000-4000-8000-000000000032', 910000, 50, 10032);
       INSERT INTO "Funding_Case_Agreement_Budget_Line_Item" (
         id,
         egcs_fc_fundingagreementbudgetfiscalyear,
@@ -3247,11 +3557,11 @@ describe('outcome allocation PostgreSQL concurrency', () => {
       ) VALUES (17, 76, 10, 5006, 'Program 6')
     `.execute(observerDb)
 
-    const version = await managedMutation(observerDb, '10', async trx => {
+    const version = await managedMutation(observerDb, '910000', async trx => {
       const createdVersion = await trx
         .insertInto('extensions.gcs_outcome_cost_allocation_versions')
         .values({
-          agreement_id: '10',
+          agreement_id: '910000',
           version_number: 1,
           status: 'draft'
         })
@@ -3261,13 +3571,13 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         .insertInto('extensions.gcs_outcome_cost_allocation_allocations')
         .values({
           allocation_version_id: String(createdVersion.id),
-          agreement_id: '10',
+          agreement_id: '910000',
           commitment_type: '10',
           stream_commitment_id: '17',
           agreement_budget_fiscal_year_id: budgetYearStableId(32),
           outcome_id: '36',
           allocation_method: 'amount',
-          allocation_value: 100
+          allocation_value: '100.0000'
         })
         .execute()
       return createdVersion
@@ -3308,7 +3618,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
       )
       completingAfterFiscalMutation = completeAllocationVersion(
         waiterDb,
-        '10',
+        '910000',
         '10',
         String(version.id),
         config
@@ -3351,7 +3661,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
     const activating = holderDb.transaction().execute(async trx => {
       const completed = await completeAllocationVersionInTransaction(
         trx,
-        '10',
+        '910000',
         '10',
         String(version.id),
         config
@@ -3377,7 +3687,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
 
       releaseActivation.release()
       await expect(activating).resolves.toMatchObject({
-        agreementId: '10',
+        agreementId: '910000',
         status: 'active'
       })
       await expect(changingStreamBudget).rejects.toMatchObject({
@@ -3400,7 +3710,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
       INSERT INTO "Transfer_Payment_Stream" (id, egcs_tp_transferpaymentprofile)
       VALUES (11, 900);
       INSERT INTO "Funding_Case_Agreement_Profile" (id, egcs_fc_transferpaymentstream)
-      VALUES (11, 11);
+      VALUES (920000, 11);
       INSERT INTO "Transfer_Payment_Outcome" (
         id,
         egcs_tp_transferpaymentprofile,
@@ -3411,13 +3721,18 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         id,
         egcs_fc_fundingagreement,
         egcs_fc_iscurrent
-      ) VALUES (11034, 11, true);
+      ) VALUES (11034, 920000, true);
       INSERT INTO "Funding_Case_Agreement_Budget_Fiscal_Year" (
         id,
         egcs_fc_fundingagreement,
         egcs_fc_fiscalyear,
         egcs_fc_budgetversion
-      ) VALUES ('00000000-0000-4000-8000-000000000034', 11, 50, 11034);
+      ) VALUES ('00000000-0000-4000-8000-000000000034', 920000, 50, 11034);
+      INSERT INTO "Funding_Case_Agreement_Budget_Line_Item" (
+        id,
+        egcs_fc_fundingagreementbudgetfiscalyear,
+        egcs_fc_programfunding
+      ) VALUES (110340, '00000000-0000-4000-8000-000000000034', 100);
       INSERT INTO "Transfer_Payment_Fiscal_Year_Budget" (
         id,
         egcs_tp_transferpaymentprofile,
@@ -3442,7 +3757,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         egcs_fc_fundingagreement,
         egcs_fc_type,
         egcs_fc_status
-      ) VALUES (180, 11, 11, 4);
+      ) VALUES (180, 920000, 11, 4);
       INSERT INTO "Funding_Case_Agreement_Commitment_Line" (
         id,
         egcs_fc_commitment,
@@ -3453,11 +3768,11 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         (181, 180, 2, 19, 50),
         (179, 180, 1, 18, 50)
     `.execute(observerDb)
-    await managedMutation(observerDb, '11', async trx => {
+    await managedMutation(observerDb, '920000', async trx => {
       const version = await trx
         .insertInto('extensions.gcs_outcome_cost_allocation_versions')
         .values({
-          agreement_id: '11',
+          agreement_id: '920000',
           version_number: 1,
           status: 'draft'
         })
@@ -3468,15 +3783,15 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         .values([
           {
             allocation_version_id: String(version.id),
-            agreement_id: '11',
+            agreement_id: '920000',
             commitment_type: '11',
             stream_commitment_id: '18',
             agreement_budget_fiscal_year_id: budgetYearStableId(34),
             outcome_id: '37',
             allocation_method: 'amount',
-            allocation_value: 50,
-            resolved_amount: 50,
-            funding_basis_amount: 100,
+            allocation_value: '50.0000',
+            resolved_amount: '50.00',
+            funding_basis_amount: '100.00',
             outcome_label_en: 'Outcome 7',
             outcome_label_fr: 'Resultat 7',
             commitment_label_en: 'GL 5007 - Program 7',
@@ -3485,15 +3800,15 @@ describe('outcome allocation PostgreSQL concurrency', () => {
           },
           {
             allocation_version_id: String(version.id),
-            agreement_id: '11',
+            agreement_id: '920000',
             commitment_type: '11',
             stream_commitment_id: '19',
             agreement_budget_fiscal_year_id: budgetYearStableId(34),
             outcome_id: '37',
             allocation_method: 'amount',
-            allocation_value: 50,
-            resolved_amount: 50,
-            funding_basis_amount: 100,
+            allocation_value: '50.0000',
+            resolved_amount: '50.00',
+            funding_basis_amount: '100.00',
             outcome_label_en: 'Outcome 7',
             outcome_label_fr: 'Resultat 7',
             commitment_label_en: 'GL 5008 - Program 8',
@@ -3507,7 +3822,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         .set({
           status: 'active',
           completed_at: sql`now()`,
-          funding_basis_amount: 100
+          funding_basis_amount: '100.00'
         })
         .where('id', '=', String(version.id))
         .execute()
@@ -3518,21 +3833,21 @@ describe('outcome allocation PostgreSQL concurrency', () => {
             allocation_version_id: String(version.id),
             generated_commitment_id: '180',
             commitment_line_id: '181',
-            agreement_id: '11',
+            agreement_id: '920000',
             agreement_budget_fiscal_year_id: budgetYearStableId(34),
             outcome_id: '37',
             stream_commitment_id: '19',
-            generated_amount: 50
+            generated_amount: '50.00'
           },
           {
             allocation_version_id: String(version.id),
             generated_commitment_id: '180',
             commitment_line_id: '179',
-            agreement_id: '11',
+            agreement_id: '920000',
             agreement_budget_fiscal_year_id: budgetYearStableId(34),
             outcome_id: '37',
             stream_commitment_id: '18',
-            generated_amount: 50
+            generated_amount: '50.00'
           }
         ])
         .execute()
@@ -3541,7 +3856,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
     const generated = await observerDb.transaction().execute(async trx =>
       await getGeneratedPaymentLines(
         trx,
-        '11',
+        '920000',
         '11',
         '180',
         budgetYearStableId(34),
@@ -3554,20 +3869,20 @@ describe('outcome allocation PostgreSQL concurrency', () => {
       issues: [],
       lines: [{
         commitmentLineId: '179',
-        amount: 0.01
+        amount: '0.01'
       }]
     })
 
     await observerDb.transaction().execute(async trx => {
       if (generated.status !== 'handled') throw new Error('Expected Outcome allocation payment lines.')
-      await lockAgreementAllocationLifecycle(trx, '11')
+      await lockAgreementAllocationLifecycle(trx, '920000')
       await trx.insertInto('Funding_Case_Agreement_Payment').values({
         id: '181', egcs_fc_fundingagreementcommitment: '180',
-        egcs_fc_fiscalyear: budgetYearStableId(34), egcs_fc_paymentamount: 0.01, egcs_fc_status: '1'
+        egcs_fc_fiscalyear: budgetYearStableId(34), egcs_fc_paymentamount: '0.01', egcs_fc_status: '1'
       }).execute()
       await trx.insertInto('Funding_Case_Agreement_Payment_Line').values(generated.lines.map(line => ({
         id: '181', egcs_fc_fundingagreementpayment: '181',
-        egcs_fc_fundingagreementcommitmentline: line.commitmentLineId, egcs_fc_amount: line.amount
+        egcs_fc_fundingagreementcommitmentline: line.commitmentLineId, egcs_fc_amount: sql`${line.amount}::numeric`
       }))).execute()
     })
     expect(Number((await observerDb.selectFrom('Funding_Case_Agreement_Payment_Line')
@@ -3575,14 +3890,14 @@ describe('outcome allocation PostgreSQL concurrency', () => {
       .where('egcs_fc_fundingagreementpayment', '=', '181').executeTakeFirstOrThrow()).count)).toBe(1)
 
     await expect(observerDb.transaction().execute(async trx => {
-      await lockAgreementAllocationLifecycle(trx, '11')
+      await lockAgreementAllocationLifecycle(trx, '920000')
       await trx.insertInto('Funding_Case_Agreement_Payment').values({
         id: '182', egcs_fc_fundingagreementcommitment: '180',
-        egcs_fc_fiscalyear: budgetYearStableId(34), egcs_fc_paymentamount: 0.01, egcs_fc_status: '1'
+        egcs_fc_fiscalyear: budgetYearStableId(34), egcs_fc_paymentamount: '0.01', egcs_fc_status: '1'
       }).execute()
       await trx.insertInto('Funding_Case_Agreement_Payment_Line').values({
         id: '182', egcs_fc_fundingagreementpayment: '182',
-        egcs_fc_fundingagreementcommitmentline: '179', egcs_fc_amount: 0.01
+        egcs_fc_fundingagreementcommitmentline: '179', egcs_fc_amount: '0.01'
       }).execute()
       throw new Error('later payment create hook failed')
     })).rejects.toThrow('later payment create hook failed')
@@ -3614,7 +3929,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
           agreement_budget_fiscal_year_id: budgetYearStableId(22),
           outcome_id: '31',
           allocation_method: 'amount',
-          allocation_value: 100
+          allocation_value: '100.0000'
         })
         .execute()
       return createdVersion

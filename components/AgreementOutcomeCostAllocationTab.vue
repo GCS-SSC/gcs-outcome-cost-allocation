@@ -24,14 +24,25 @@ import {
   useExtensionToast
 } from '@gcs-ssc/extensions/ui'
 import {
-  EXACT_NUMERIC_19_4_MAX,
+  type AllocationMoney,
   type AllocationMethod,
   type AllocationVersionStatus,
   type CommitmentType,
   type CostAllocationVersion,
   type VersionedOutcomeAllocationInput,
+  compareMoney,
+  fromCents,
+  fromScale4Units,
+  moneyForPercentage,
+  parseAllocationMoney,
+  parseExactNumeric19Scale4,
+  percentageForMoney,
   parseOutcomeCostAllocationConfig,
   resolveAllocationAmounts,
+  subtractMoney,
+  sumMoney,
+  toCents,
+  toExactNumeric19Scale4Units,
   toMoney,
   validateAllocationTotals
 } from '../shared/allocation'
@@ -59,7 +70,7 @@ interface AllocationResponse {
     id: string
     stream_budget_id?: string | null
     fiscal_year_display: string
-    program_funding: number
+    program_funding: AllocationMoney
   }>
   versions: CostAllocationVersion[]
   allocations: VersionedOutcomeAllocationInput[]
@@ -177,7 +188,9 @@ const commitmentTypeOptions = computed(() => streamConfig.value.enabledCommitmen
   value: commitmentType
 })))
 
-const fundedBudgetYears = computed(() => budgetYears.value.filter((year: AllocationBudgetYear) => Number(year.program_funding) > 0))
+const fundedBudgetYears = computed(() => budgetYears.value.filter(
+  (year: AllocationBudgetYear) => compareMoney(year.program_funding, '0') > 0
+))
 
 const generationYearOptions = computed(() => fundedBudgetYears.value.map((year: AllocationBudgetYear) => ({
   label: year.fiscal_year_display,
@@ -221,10 +234,17 @@ const allocationColumns = computed(() => [
   }
 ])
 
-const formatMoney = (value: number) => new Intl.NumberFormat(
-  locale.value === 'fr' ? 'fr-CA' : 'en-CA',
-  { style: 'currency', currency: 'CAD' }
-).format(value)
+const ZERO_MONEY = parseAllocationMoney('0')!
+const formatMoney = (value: AllocationMoney) => {
+  const [integer = '0', fraction = '00'] = value.split('.')
+  const negative = integer.startsWith('-')
+  const digits = negative ? integer.slice(1) : integer
+  const grouped = digits.replace(/\B(?=(\d{3})+(?!\d))/g, locale.value === 'fr' ? '\u00a0' : ',')
+  const amount = `${grouped}${locale.value === 'fr' ? ',' : '.'}${fraction}`
+  return locale.value === 'fr'
+    ? `${negative ? '-' : ''}${amount}\u00a0$`
+    : `${negative ? '-' : ''}$${amount}`
+}
 
 const formatDate = (value?: string | null) => {
   if (!value) {
@@ -286,7 +306,7 @@ const configuredAssociationRows = computed<ConfiguredAssociationRow[]>(() => str
   if (
     !streamConfig.value.enabledCommitmentTypes.includes(mapping.commitmentType)
     || !year
-    || Number(year.program_funding) <= 0
+    || compareMoney(year.program_funding, ZERO_MONEY) <= 0
     || !hasOutcome
     || !streamCommitment
     || String(streamCommitment.stream_budget_id) !== mapping.streamBudgetId
@@ -300,7 +320,7 @@ const configuredAssociationRows = computed<ConfiguredAssociationRow[]>(() => str
     commitmentTypeLabel: getCommitmentTypeLabel(mapping.commitmentType),
     yearId: String(year.id),
     yearLabel: year.fiscal_year_display,
-    programFunding: Number(year.program_funding),
+    programFunding: year.program_funding,
     streamBudgetId: mapping.streamBudgetId,
     streamCommitmentId: mapping.streamCommitmentId,
     commitmentLineLabel: getCommitmentLineLabel(mapping.streamCommitmentId),
@@ -387,8 +407,8 @@ const createHistoricalAssociationRow = (
       && allocation.fundingBasisAmount !== undefined
       ? allocation.fundingBasisAmount
       : year
-        ? Number(year.program_funding)
-        : 0,
+        ? year.program_funding
+        : ZERO_MONEY,
     streamBudgetId: year && year.stream_budget_id ? String(year.stream_budget_id) : '',
     streamCommitmentId: allocation.streamCommitmentId,
     commitmentLineLabel: commitmentLabel || getCommitmentLineLabel(allocation.streamCommitmentId),
@@ -434,7 +454,7 @@ const createAllocation = (association: ConfiguredAssociationRow): VersionedOutco
   agreementBudgetFiscalYearId: association.yearId,
   outcomeId: association.outcomeId,
   allocationMethod: 'amount',
-  allocationValue: 0
+  allocationValue: '0'
 })
 
 const ensureAllocation = (association: ConfiguredAssociationRow) => {
@@ -455,17 +475,22 @@ const setAllocationMethod = (association: ConfiguredAssociationRow, allocationMe
   }
   const resolvedAmount = getAllocationAmount(association)
   allocation.allocationMethod = allocationMethod
-  const convertedValue = allocationMethod === 'percentage'
-    ? association.programFunding > 0
-      ? resolvedAmount / association.programFunding * 100
-      : 0
+  allocation.allocationValue = allocationMethod === 'percentage'
+    ? percentageForMoney(resolvedAmount, association.programFunding)
     : resolvedAmount
-  allocation.allocationValue = Math.min(convertedValue, getAllocationValueMaximum(association))
 }
 
 const setAllocationValue = (association: ConfiguredAssociationRow, value: string | number) => {
   const allocation = ensureAllocation(association)
-  allocation.allocationValue = Math.min(Math.max(Number(value || 0), 0), getAllocationValueMaximum(association))
+  const parsed = parseExactNumeric19Scale4(value)
+  if (parsed === null) {
+    allocation.allocationValue = String(value)
+    return
+  }
+  const maximum = getAllocationValueMaximum(association)
+  const units = toExactNumeric19Scale4Units(parsed)!
+  const maximumUnits = toExactNumeric19Scale4Units(maximum)!
+  allocation.allocationValue = units > maximumUnits ? fromScale4Units(maximumUnits) : parsed
 }
 
 const updateAllocationMethod = (association: ConfiguredAssociationRow, value: string | number) => {
@@ -516,12 +541,12 @@ const activeAllocations = computed<VersionedOutcomeAllocationInput[]>(() => sele
 
 const allocationYearTotals = computed(() => budgetYears.value.map((year: AllocationBudgetYear) => ({
   agreementBudgetFiscalYearId: String(year.id),
-  programFunding: Number(year.program_funding)
+  programFunding: year.program_funding
 })))
 
 const selectedDraftResolvedAmountByKey = computed(() => {
   if (selectedVersion.value?.status !== 'draft') {
-    return new Map<string, number>()
+    return new Map<string, AllocationMoney>()
   }
 
   return new Map(resolveAllocationAmounts(
@@ -534,29 +559,30 @@ const selectedDraftResolvedAmountByKey = computed(() => {
 })
 
 const getProgramFunding = (yearId: string) =>
-  Number(budgetYears.value.find((year: AllocationBudgetYear) => String(year.id) === yearId)?.program_funding ?? 0)
+  budgetYears.value.find((year: AllocationBudgetYear) => String(year.id) === yearId)?.program_funding ?? ZERO_MONEY
 
 const getAllocationInputAmount = (allocation: VersionedOutcomeAllocationInput) =>
   allocation.resolvedAmount !== null && allocation.resolvedAmount !== undefined
     ? toMoney(allocation.resolvedAmount)
     : allocation.allocationVersionId === selectedVersionId.value
       && selectedVersion.value?.status === 'draft'
-      ? selectedDraftResolvedAmountByKey.value.get(getAllocationKey(allocation)) ?? 0
+      ? selectedDraftResolvedAmountByKey.value.get(getAllocationKey(allocation)) ?? ZERO_MONEY
       : allocation.allocationMethod === 'percentage'
-        ? toMoney(getProgramFunding(allocation.agreementBudgetFiscalYearId) * allocation.allocationValue / 100)
+        ? moneyForPercentage(getProgramFunding(allocation.agreementBudgetFiscalYearId), allocation.allocationValue)
         : toMoney(allocation.allocationValue)
 
 const getAllocationAmount = (association: ConfiguredAssociationRow) => {
   const allocation = getAllocation(association)
-  return allocation ? getAllocationInputAmount(allocation) : 0
+  return allocation ? getAllocationInputAmount(allocation) : ZERO_MONEY
 }
 
 const getVersionAllocations = (versionId: string) => allocations.value.filter((allocation: VersionedOutcomeAllocationInput) =>
   allocation.allocationVersionId === versionId
 )
 
-const getVersionTotal = (versionId: string) => getVersionAllocations(versionId)
-  .reduce((sum: number, allocation: VersionedOutcomeAllocationInput) => toMoney(sum + getAllocationInputAmount(allocation)), 0)
+const getVersionTotal = (versionId: string) => sumMoney(
+  getVersionAllocations(versionId).map(getAllocationInputAmount)
+)
 
 const getVersionProgramFundingTotal = (versionId: string) => {
   const version = versions.value.find(candidate => candidate.id === versionId)
@@ -564,14 +590,11 @@ const getVersionProgramFundingTotal = (versionId: string) => {
     return version.fundingBasisAmount
   }
 
-  return budgetYears.value.reduce(
-    (sum, year) => toMoney(sum + Number(year.program_funding)),
-    0
-  )
+  return sumMoney(budgetYears.value.map(year => year.program_funding))
 }
 
 const getVersionUnallocated = (versionId: string) =>
-  toMoney(getVersionProgramFundingTotal(versionId) - getVersionTotal(versionId))
+  subtractMoney(getVersionProgramFundingTotal(versionId), getVersionTotal(versionId))
 
 const selectVersion = (versionId: string) => {
   selectedVersionId.value = versionId
@@ -636,8 +659,8 @@ const validationMessage = computed(() => {
   return locale.value === 'fr' ? message.fr : message.en
 })
 
-const getGroupAmountTotal = (rows: ConfiguredAssociationRow[]) => rows
-  .reduce((sum: number, row: ConfiguredAssociationRow) => sum + getAllocationAmount(row), 0)
+const getGroupAmountTotal = (rows: ConfiguredAssociationRow[]) =>
+  sumMoney(rows.map(getAllocationAmount))
 
 const getCommitmentTypeAmountTotal = (commitmentType: CommitmentType) =>
   getGroupAmountTotal(displayedAssociationRows.value.filter((row: ConfiguredAssociationRow) => row.commitmentType === commitmentType))
@@ -652,17 +675,25 @@ const getFiscalYearAllocatedTotal = (yearId: string) => getGroupAmountTotal(
 )
 
 const getFiscalYearUnallocated = (yearId: string) =>
-  toMoney(getProgramFunding(yearId) - getFiscalYearAllocatedTotal(yearId))
+  subtractMoney(getProgramFunding(yearId), getFiscalYearAllocatedTotal(yearId))
 
 const getAllocationValueMaximum = (association: ConfiguredAssociationRow) => {
   const allocation = getAllocation(association) ?? createAllocation(association)
   const currentAmount = getAllocationAmount(association)
-  const remainingIncludingCurrent = Math.max(0, toMoney(getFiscalYearUnallocated(association.yearId) + currentAmount))
+  const remainingIncludingCurrent = fromCents(
+    [toCents(getFiscalYearUnallocated(association.yearId)) + toCents(currentAmount), 0n]
+      .reduce((maximum, value) => value > maximum ? value : maximum)
+  )
   if (allocation.allocationMethod === 'percentage') {
     const funding = getProgramFunding(association.yearId)
-    return funding > 0 ? Math.min(100, remainingIncludingCurrent / funding * 100) : 0
+    const maximum = compareMoney(funding, ZERO_MONEY) > 0
+      ? percentageForMoney(remainingIncludingCurrent, funding)
+      : parseExactNumeric19Scale4('0')!
+    return (toExactNumeric19Scale4Units(maximum) ?? 0n) > 1_000_000n
+      ? parseExactNumeric19Scale4('100')!
+      : maximum
   }
-  return Math.min(EXACT_NUMERIC_19_4_MAX, remainingIncludingCurrent)
+  return remainingIncludingCurrent
 }
 
 const getAmountForRow = (row: AllocationTableRow) => {
@@ -674,10 +705,10 @@ const getAmountForRow = (row: AllocationTableRow) => {
     return getFiscalYearAmountTotal(row.commitmentType, row.yearId)
   }
 
-  return row.association ? getAllocationAmount(row.association) : 0
+  return row.association ? getAllocationAmount(row.association) : ZERO_MONEY
 }
 
-const getUnallocatedForRow = (row: AllocationTableRow): number | null => {
+const getUnallocatedForRow = (row: AllocationTableRow): AllocationMoney | null => {
   if (row.rowType === 'commitmentType') {
     return getVersionUnallocated(selectedVersionId.value)
   }
@@ -689,9 +720,9 @@ const getUnallocatedForRow = (row: AllocationTableRow): number | null => {
   return null
 }
 
-const isOverAllocated = (value: number | null) => value !== null && value < -0.01
+const isOverAllocated = (value: AllocationMoney | null) => value !== null && compareMoney(value, ZERO_MONEY) < 0
 
-const getUnallocatedClass = (value: number | null) => [
+const getUnallocatedClass = (value: AllocationMoney | null) => [
   'text-sm font-medium',
   isOverAllocated(value) ? 'text-error' : 'text-zinc-700 dark:text-zinc-200'
 ]
@@ -1239,11 +1270,8 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
           <template #value-cell="{ row }">
             <div v-if="row.original.rowType === 'association' && row.original.association">
               <ExtensionInput
-                :model-value="getAllocation(row.original.association)?.allocationValue ?? 0"
-                type="number"
-                min="0"
-                :max="getAllocationValueMaximum(row.original.association)"
-                step="0.01"
+                :model-value="getAllocation(row.original.association)?.allocationValue ?? '0'"
+                inputmode="decimal"
                 class="w-full min-w-0"
                 :disabled="!canEditSelectedVersion || hasPendingDraftMutation"
                 @update:model-value="(value: string | number) => updateAllocationRowValue(row.original, value)" />
@@ -1260,7 +1288,7 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
             <span
               v-if="getUnallocatedForRow(row.original) !== null"
               :class="getUnallocatedClass(getUnallocatedForRow(row.original))">
-              {{ formatMoney(getUnallocatedForRow(row.original) ?? 0) }}
+              {{ formatMoney(getUnallocatedForRow(row.original) ?? ZERO_MONEY) }}
             </span>
           </template>
 

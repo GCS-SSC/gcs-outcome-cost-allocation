@@ -1,4 +1,9 @@
-import { EXTENSION_KEY, parseOutcomeCostAllocationConfig } from '../shared/allocation.ts'
+import {
+  EXTENSION_KEY,
+  compareMoney,
+  parseOutcomeCostAllocationConfig,
+  type AllocationMoney
+} from '../shared/allocation.ts'
 
 export const MANAGED_DEMO_AGREEMENT_TITLE = 'Health Canada Cost Agreement 1 - Showcase'
 export const ALLOCATION_VERSION_ENTITY_TYPE = `${EXTENSION_KEY}:allocation-version`
@@ -29,7 +34,7 @@ export type ManagedDemoAllocationResponse = {
   budgetYears: Array<{
     id: string
     stream_budget_id?: string | number | null
-    program_funding: number | string
+    program_funding: AllocationMoney
   }>
   versions: Array<{
     id: string
@@ -106,7 +111,7 @@ export const seedManagedOutcomeCostAllocationDemo = async (
   const activeOutcomeIds = new Set(baseline.outcomes.map(outcome => String(outcome.id)))
   const activeCommitmentIds = new Set(baseline.streamCommitments.map(commitment => String(commitment.id)))
   const allocations = baseline.budgetYears
-    .filter(year => Number(year.program_funding) > 0)
+    .filter(year => compareMoney(year.program_funding, '0') > 0)
     .map(year => {
       const streamBudgetId = String(year.stream_budget_id ?? '')
       const mapping = config.mappings.find(candidate =>
@@ -124,7 +129,7 @@ export const seedManagedOutcomeCostAllocationDemo = async (
         agreementBudgetFiscalYearId: String(year.id),
         outcomeId: mapping.outcomeId,
         allocationMethod: 'amount' as const,
-        allocationValue: Number(year.program_funding)
+        allocationValue: year.program_funding
       }
     })
   if (allocations.length === 0) {

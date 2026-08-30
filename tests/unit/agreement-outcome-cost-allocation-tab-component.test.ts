@@ -143,13 +143,13 @@ const allocationResponse = {
       id: 1,
       stream_budget_id: 'stream-budget-1',
       fiscal_year_display: '2026-2027',
-      program_funding: 100
+      program_funding: '100.00'
     },
     {
       id: 2,
       stream_budget_id: 'stream-budget-2',
       fiscal_year_display: '2027-2028',
-      program_funding: 100
+      program_funding: '100.00'
     }
   ],
   versions: [{
@@ -530,7 +530,7 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
       ...allocationResponse,
       budgetYears: [{
         ...allocationResponse.budgetYears[0],
-        program_funding: 250
+        program_funding: '250.00'
       }],
       versions: [{
         ...allocationResponse.versions[0],
@@ -582,7 +582,7 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
       ],
       budgetYears: [{
         ...allocationResponse.budgetYears[0],
-        program_funding: 0.05
+        program_funding: '0.05'
       }],
       allocations: [
         {

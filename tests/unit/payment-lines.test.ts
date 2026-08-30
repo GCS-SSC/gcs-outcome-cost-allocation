@@ -42,7 +42,7 @@ interface FakeDbState {
     agreement_budget_fiscal_year_id: string
     outcome_id: string
     allocation_method: AllocationMethod
-    allocation_value: number
+    allocation_value: string
   }>
   versions: Array<{
     id: string
@@ -59,7 +59,7 @@ const budgetYears = [
     id: 'budget-year-1',
     fiscal_year_id: 'fy-1',
     fiscal_year_display: '2025-2026',
-    program_funding: 100,
+    program_funding: '100.00',
     stream_budget_id: 'stream-budget-1'
   }
 ]
@@ -72,7 +72,7 @@ const allocations: FakeDbState['allocations'] = [
     agreement_budget_fiscal_year_id: 'budget-year-1',
     outcome_id: 'outcome-1',
     allocation_method: 'amount',
-    allocation_value: 60
+    allocation_value: '60.0000'
   },
   {
     allocation_version_id: 'version-1',
@@ -81,7 +81,7 @@ const allocations: FakeDbState['allocations'] = [
     agreement_budget_fiscal_year_id: 'budget-year-1',
     outcome_id: 'outcome-2',
     allocation_method: 'amount',
-    allocation_value: 40
+    allocation_value: '40.0000'
   }
 ]
 
@@ -161,8 +161,8 @@ class FakeQuery {
         .filter(line => line.agreementBudgetFiscalYearId === agreementBudgetFiscalYearId)
         .map(line => ({
           commitment_line_id: line.id,
-          commitment_line_amount: line.amount,
-          generated_amount: line.generatedAmount ?? line.amount
+          commitment_line_amount: line.amount.toFixed(2),
+          generated_amount: (line.generatedAmount ?? line.amount).toFixed(2)
         }))
     }
 
@@ -215,7 +215,7 @@ class FakeQuery {
           id: line.id,
           line_number: line.lineNumber ?? 0,
           stream_commitment_id: line.streamCommitmentId,
-          amount: line.amount,
+          amount: line.amount.toFixed(2),
           provenance_version_id: line.outcomeId
             ? line.allocationVersionId ?? 'version-1'
             : null,
@@ -249,7 +249,7 @@ class FakeQuery {
             commitment_type: commitment.type,
             agreement_budget_fiscal_year_id: paidLine.agreementBudgetFiscalYearId ?? 'budget-year-1',
             stream_commitment_id: commitmentLine.streamCommitmentId,
-            paid_amount: paidLine.amount
+            paid_amount: paidLine.amount.toFixed(2)
           }]
         })
       }
@@ -264,7 +264,7 @@ class FakeQuery {
         return paidAmount > 0
           ? [{
               commitment_line_id: commitmentLineId,
-              paid_amount: paidAmount
+              paid_amount: paidAmount.toFixed(2)
             }]
           : []
       })
@@ -369,8 +369,8 @@ describe('outcome cost allocation payment generation', () => {
       status: 'handled',
       issues: [],
       lines: [
-        { commitmentLineId: 'line-1', amount: 30 },
-        { commitmentLineId: 'line-2', amount: 20 }
+        { commitmentLineId: 'line-1', amount: '30.00' },
+        { commitmentLineId: 'line-2', amount: '20.00' }
       ]
     })
     expect(state.forUpdateCount).toBe(1)
@@ -428,8 +428,8 @@ describe('outcome cost allocation payment generation', () => {
       status: 'handled',
       issues: [],
       lines: [
-        { commitmentLineId: 'line-1', amount: 30 },
-        { commitmentLineId: 'line-2', amount: 20 }
+        { commitmentLineId: 'line-1', amount: '30.00' },
+        { commitmentLineId: 'line-2', amount: '20.00' }
       ]
     })
   })
@@ -458,8 +458,8 @@ describe('outcome cost allocation payment generation', () => {
       status: 'handled',
       issues: [],
       lines: [
-        { commitmentLineId: 'line-1', amount: 10 },
-        { commitmentLineId: 'line-2', amount: 10 }
+        { commitmentLineId: 'line-1', amount: '10.00' },
+        { commitmentLineId: 'line-2', amount: '10.00' }
       ]
     })
   })
@@ -474,12 +474,12 @@ describe('outcome cost allocation payment generation', () => {
       {
         ...allocations[0],
         stream_commitment_id: 'stream-commitment-1',
-        allocation_value: 60
+        allocation_value: '60.0000'
       },
       {
         ...allocations[1],
         stream_commitment_id: 'stream-commitment-1',
-        allocation_value: 40
+        allocation_value: '40.0000'
       }
     ]
     state.commitmentLines = [
@@ -527,8 +527,8 @@ describe('outcome cost allocation payment generation', () => {
       status: 'handled',
       issues: [],
       lines: [
-        { commitmentLineId: 'line-1', amount: 30 },
-        { commitmentLineId: 'line-2', amount: 20 }
+        { commitmentLineId: 'line-1', amount: '30.00' },
+        { commitmentLineId: 'line-2', amount: '20.00' }
       ]
     })
   })
@@ -555,24 +555,24 @@ describe('outcome cost allocation payment generation', () => {
       {
         ...allocations[0],
         stream_commitment_id: 'stream-commitment-1',
-        allocation_value: 60
+        allocation_value: '60.0000'
       },
       {
         ...allocations[1],
         stream_commitment_id: 'stream-commitment-1',
-        allocation_value: 40
+        allocation_value: '40.0000'
       },
       {
         ...allocations[0],
         allocation_version_id: 'version-2',
         stream_commitment_id: 'stream-commitment-1',
-        allocation_value: 10
+        allocation_value: '10.0000'
       },
       {
         ...allocations[1],
         allocation_version_id: 'version-2',
         stream_commitment_id: 'stream-commitment-1',
-        allocation_value: 90
+        allocation_value: '90.0000'
       }
     ]
     state.commitmentLines = [
@@ -622,8 +622,8 @@ describe('outcome cost allocation payment generation', () => {
       status: 'handled',
       issues: [],
       lines: [
-        { commitmentLineId: 'line-1', amount: 30 },
-        { commitmentLineId: 'line-2', amount: 20 }
+        { commitmentLineId: 'line-1', amount: '30.00' },
+        { commitmentLineId: 'line-2', amount: '20.00' }
       ]
     })
   })
@@ -638,12 +638,12 @@ describe('outcome cost allocation payment generation', () => {
       {
         ...allocations[0],
         allocation_method: 'percentage',
-        allocation_value: 10
+        allocation_value: '10.0000'
       },
       {
         ...allocations[1],
         allocation_method: 'amount',
-        allocation_value: 90
+        allocation_value: '90.0000'
       }
     ]
     state.commitmentLines = [
@@ -686,8 +686,8 @@ describe('outcome cost allocation payment generation', () => {
       status: 'handled',
       issues: [],
       lines: [
-        { commitmentLineId: 'line-1', amount: 35 },
-        { commitmentLineId: 'line-2', amount: 15 }
+        { commitmentLineId: 'line-1', amount: '35.00' },
+        { commitmentLineId: 'line-2', amount: '15.00' }
       ]
     })
     expect(state.currentReferenceReads).toBe(0)
@@ -746,8 +746,8 @@ describe('outcome cost allocation payment generation', () => {
       status: 'handled',
       issues: [],
       lines: [
-        { commitmentLineId: 'line-1', amount: 30 },
-        { commitmentLineId: 'line-2', amount: 20 }
+        { commitmentLineId: 'line-1', amount: '30.00' },
+        { commitmentLineId: 'line-2', amount: '20.00' }
       ]
     })
   })
@@ -762,7 +762,7 @@ describe('outcome cost allocation payment generation', () => {
         agreement_budget_fiscal_year_id: 'budget-year-1',
         outcome_id: 'outcome-1',
         allocation_method: 'amount',
-        allocation_value: 60
+        allocation_value: '60.0000'
       },
       {
         allocation_version_id: 'version-1',
@@ -771,7 +771,7 @@ describe('outcome cost allocation payment generation', () => {
         agreement_budget_fiscal_year_id: 'budget-year-1',
         outcome_id: 'outcome-2',
         allocation_method: 'amount',
-        allocation_value: 40
+        allocation_value: '40.0000'
       }
     ]
     state.commitmentLines = [
@@ -800,7 +800,7 @@ describe('outcome cost allocation payment generation', () => {
       status: 'handled',
       issues: [],
       lines: [
-        { commitmentLineId: 'line-1', amount: 30 }
+        { commitmentLineId: 'line-1', amount: '30.00' }
       ]
     })
   })
@@ -823,7 +823,7 @@ describe('outcome cost allocation payment generation', () => {
         agreement_budget_fiscal_year_id: 'budget-year-1',
         outcome_id: 'outcome-1',
         allocation_method: 'amount',
-        allocation_value: 100
+        allocation_value: '100.0000'
       }
     ]
 

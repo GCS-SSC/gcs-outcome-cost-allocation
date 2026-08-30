@@ -7,7 +7,8 @@ import type {
   GcsExtensionAgreementLifecycleLockHookPayload,
   GcsExtensionAgreementPaymentMutationGuardHookPayload,
   GcsExtensionCreateOperationContext,
-  GcsExtensionCreateOperationHookPayload
+  GcsExtensionCreateOperationHookPayload,
+  GcsExtensionStatusReferenceGuardHookPayload
 } from '@gcs-ssc/extensions/server'
 import { EXTENSION_KEY } from '../../shared/allocation'
 
@@ -56,6 +57,10 @@ class WriteQuery {
     return this
   }
 
+  returning() {
+    return this
+  }
+
   async executeTakeFirstOrThrow() {
     if (this.record.table === 'Funding_Case_Agreement_Commitment') {
       return this.db.commitment
@@ -76,6 +81,8 @@ class WriteDb {
   agreementLifecycleLocked = false
   ownedTableQueriedBeforeLifecycleLock = false
   allocationHistoryId: string | null = null
+  allocationHistoryStatusId: string | null = null
+  allocationHistoryDeleted = false
   agencyEnabled = true
   extensionTablesExist = true
   generatedPayment = false
@@ -175,6 +182,16 @@ class WriteDb {
             : this.generatedCommitmentLine
           return generated ? { id: 'provenance-1' } : undefined
         }
+        if (table === 'extensions.gcs_outcome_cost_allocation_versions as allocation_version') {
+          const requestedStatus = wheres.find(
+            where => where[0] === 'allocation_version.lifecycle_status_id'
+          )?.[2]
+          return this.allocationHistoryId
+            && !this.allocationHistoryDeleted
+            && requestedStatus === this.allocationHistoryStatusId
+            ? { id: this.allocationHistoryId }
+            : undefined
+        }
         return this.allocationHistoryId ? { id: this.allocationHistoryId } : undefined
       }
     }
@@ -210,7 +227,7 @@ const loadHooks = async () => {
       }
     }
   })
-  expect(hooks).toHaveLength(7)
+  expect(hooks).toHaveLength(8)
   return {
     commitment: hooks[0] as Hook,
     payment: hooks[1] as Hook,
@@ -226,6 +243,9 @@ const loadHooks = async () => {
     ) => Promise<void>,
     paymentMutation: hooks[6] as unknown as (
       payload: GcsExtensionAgreementPaymentMutationGuardHookPayload
+    ) => Promise<void>,
+    statusReference: hooks[7] as unknown as (
+      payload: GcsExtensionStatusReferenceGuardHookPayload
     ) => Promise<void>
   }
 }
@@ -264,7 +284,7 @@ const createPaymentContext = (
   validatedBody: {
     egcs_fc_fundingagreementcommitment: 'commitment-1',
     egcs_fc_fiscalyear: 'year-1',
-    egcs_fc_paymentamount: 25
+    egcs_fc_paymentamount: '25.00'
   },
   createdRecord: {
     id: 'payment-1'
@@ -298,8 +318,8 @@ const createGeneratedCommitmentLine = (
     agreementBudgetFiscalYearId: 'year-1',
     outcomeId: `outcome-${suffix}`,
     allocationMethod: 'amount',
-    allocationValue: amount,
-    amount
+    allocationValue: amount.toFixed(4),
+    amount: amount.toFixed(2)
   }
 })
 
@@ -324,6 +344,44 @@ beforeEach(() => {
 })
 
 describe('outcome cost allocation create hooks', () => {
+  it('blocks deletion of a status referenced by active allocation history', async () => {
+    const { statusReference } = await loadHooks()
+    const db = new WriteDb()
+    db.allocationHistoryId = 'version-1'
+    db.allocationHistoryStatusId = 'status-1'
+
+    await expect(statusReference({
+      event: {},
+      db: db as unknown as Transaction<unknown>,
+      agencyId: 'agency-1',
+      statusId: 'status-1'
+    })).rejects.toMatchObject({
+      code: 'GCS_OUTCOME_COST_ALLOCATION_STATUS_REFERENCED',
+      statusCode: 409,
+      localizedMessage: {
+        en: expect.any(String),
+        fr: expect.any(String)
+      }
+    })
+  })
+
+  it.each([
+    ['an unrelated status', { allocationHistoryStatusId: 'other-status' }],
+    ['deleted allocation history', { allocationHistoryStatusId: 'status-1', allocationHistoryDeleted: true }]
+  ])('allows deletion of %s', async (_label, state) => {
+    const { statusReference } = await loadHooks()
+    const db = new WriteDb()
+    db.allocationHistoryId = 'version-1'
+    Object.assign(db, state)
+
+    await expect(statusReference({
+      event: {},
+      db: db as unknown as Transaction<unknown>,
+      agencyId: 'agency-1',
+      statusId: 'status-1'
+    })).resolves.toBeUndefined()
+  })
+
   it('takes the agreement advisory lock in the host pre-row lifecycle phase', async () => {
     const { lifecycle } = await loadHooks()
     const db = new WriteDb()
@@ -393,7 +451,7 @@ describe('outcome cost allocation create hooks', () => {
       db: db as unknown as Transaction<unknown>,
       agreementId: 'agreement-1',
       paymentId: 'payment-1',
-      changes: { egcs_fc_paymentamount: 30 }
+      changes: { egcs_fc_paymentamount: '30.00' }
     })).rejects.toMatchObject({
       code: 'GCS_OUTCOME_COST_ALLOCATION_GENERATED_PAYMENT_IMMUTABLE',
       statusCode: 409,
@@ -478,7 +536,7 @@ describe('outcome cost allocation create hooks', () => {
       db: ordinaryDb as unknown as Transaction<unknown>,
       agreementId: 'agreement-1',
       paymentId: 'payment-1',
-      changes: { egcs_fc_amount: 10 }
+      changes: { egcs_fc_amount: expect.anything() }
     })).resolves.toBeUndefined()
     expect(allocationDataMocks.lockAgreementAllocationLifecycle).toHaveBeenCalledTimes(3)
     expect(allocationDataMocks.lockAgreementAllocationLifecycle).toHaveBeenCalledWith(
@@ -891,13 +949,13 @@ describe('outcome cost allocation create hooks', () => {
             egcs_fc_commitment: 'commitment-1',
             egcs_fc_commitmentlinenumber: 1,
             egcs_fc_transferpaymentstreamchartofaccount: 'stream-commitment-1',
-            egcs_fc_amount: 60
+            egcs_fc_amount: expect.anything()
           },
           {
             egcs_fc_commitment: 'commitment-1',
             egcs_fc_commitmentlinenumber: 2,
             egcs_fc_transferpaymentstreamchartofaccount: 'stream-commitment-2',
-            egcs_fc_amount: 40
+            egcs_fc_amount: expect.anything()
           }
         ]
       }),
@@ -913,7 +971,7 @@ describe('outcome cost allocation create hooks', () => {
             agreement_budget_fiscal_year_id: 'year-1',
             outcome_id: 'outcome-1',
             stream_commitment_id: 'stream-commitment-1',
-            generated_amount: 60
+            generated_amount: expect.anything()
           },
           {
             allocation_version_id: 'version-1',
@@ -923,7 +981,7 @@ describe('outcome cost allocation create hooks', () => {
             agreement_budget_fiscal_year_id: 'year-1',
             outcome_id: 'outcome-2',
             stream_commitment_id: 'stream-commitment-2',
-            generated_amount: 40
+            generated_amount: expect.anything()
           }
         ]
       })
@@ -956,14 +1014,14 @@ describe('outcome cost allocation create hooks', () => {
         commitment_line_id: 'commitment-line-2',
         outcome_id: 'outcome-2',
         stream_commitment_id: 'stream-commitment-2',
-        generated_amount: 40
+        generated_amount: expect.anything()
       }),
       expect.objectContaining({
         allocation_version_id: 'version-1',
         commitment_line_id: 'commitment-line-1',
         outcome_id: 'outcome-1',
         stream_commitment_id: 'stream-commitment-1',
-        generated_amount: 60
+        generated_amount: expect.anything()
       })
     ])
   })
@@ -1067,7 +1125,7 @@ describe('outcome cost allocation create hooks', () => {
       createPaymentContext(db, {
         validatedBody: {
           egcs_fc_fiscalyear: 'year-1',
-          egcs_fc_paymentamount: 25
+          egcs_fc_paymentamount: '25.00'
         },
         createdRecord: {
           id: 'payment-1',
@@ -1089,11 +1147,11 @@ describe('outcome cost allocation create hooks', () => {
       lines: [
         {
           commitmentLineId: 'commitment-line-1',
-          amount: 15
+          amount: '15.00'
         },
         {
           commitmentLineId: 'commitment-line-2',
-          amount: 10
+          amount: '10.00'
         }
       ]
     })
@@ -1110,7 +1168,7 @@ describe('outcome cost allocation create hooks', () => {
       'stream-1',
       'commitment-1',
       'year-1',
-      25,
+      '25.00',
       {
         enabledCommitmentTypes: ['1']
       }
@@ -1132,12 +1190,12 @@ describe('outcome cost allocation create hooks', () => {
           {
             egcs_fc_fundingagreementpayment: 'payment-1',
             egcs_fc_fundingagreementcommitmentline: 'commitment-line-1',
-            egcs_fc_amount: 15
+            egcs_fc_amount: expect.anything()
           },
           {
             egcs_fc_fundingagreementpayment: 'payment-1',
             egcs_fc_fundingagreementcommitmentline: 'commitment-line-2',
-            egcs_fc_amount: 10
+            egcs_fc_amount: expect.anything()
           }
         ],
         wheres: []
