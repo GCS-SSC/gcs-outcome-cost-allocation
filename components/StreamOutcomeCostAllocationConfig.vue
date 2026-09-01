@@ -342,6 +342,10 @@ const text = {
     en: 'Add association',
     fr: 'Ajouter une association'
   },
+  addAssociationDescription: {
+    en: 'Select a commitment line, commitment type, and outcome, then add or cancel the association.',
+    fr: 'Selectionnez une ligne d engagement, un type d engagement et un resultat, puis ajoutez ou annulez l association.'
+  },
   removeAssociation: {
     en: 'Remove association',
     fr: 'Retirer l association'
@@ -457,7 +461,11 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
       </div>
     </div>
 
-    <ExtensionModal v-if="selectedAssociation" v-model:open="isAssociationModalOpen" :title="tLocal('addAssociation')">
+    <ExtensionModal
+      v-if="selectedAssociation"
+      v-model:open="isAssociationModalOpen"
+      :title="tLocal('addAssociation')"
+      :description="tLocal('addAssociationDescription')">
       <template #body>
         <div class="space-y-4">
           <ExtensionFormField :label="tLocal('commitmentLine')">

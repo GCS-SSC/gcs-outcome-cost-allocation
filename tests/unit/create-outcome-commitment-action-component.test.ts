@@ -1,11 +1,23 @@
 // @vitest-environment jsdom
 
+import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { defineComponent, h } from 'vue'
 import CreateOutcomeCommitmentAction from '../../components/CreateOutcomeCommitmentAction.vue'
 
 describe('outcome cost allocation commitment action', () => {
+  it('describes the extension-owned commitment dialog', () => {
+    const source = readFileSync(
+      'components/CreateOutcomeCommitmentAction.vue',
+      'utf8'
+    )
+
+    expect(source).toContain(':description="isFrench')
+    expect(source).toContain('Complete the form fields, then save or cancel your changes.')
+    expect(source).toContain('Remplissez les champs du formulaire')
+  })
+
   it('shows extension-owned server error messages from failed commitment creation', async () => {
     vi.stubGlobal('useI18n', () => ({
       locale: { value: 'en' }

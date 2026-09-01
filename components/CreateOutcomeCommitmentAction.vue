@@ -198,7 +198,12 @@ const createCommitment = async () => {
 </script>
 
 <template>
-  <ExtensionModal v-model:open="isOpen" :title="buttonLabel">
+  <ExtensionModal
+    v-model:open="isOpen"
+    :title="buttonLabel"
+    :description="isFrench
+      ? 'Remplissez les champs du formulaire, puis enregistrez ou annulez vos modifications.'
+      : 'Complete the form fields, then save or cancel your changes.'">
     <ExtensionButton
       :icon="icon"
       :label="buttonLabel"
