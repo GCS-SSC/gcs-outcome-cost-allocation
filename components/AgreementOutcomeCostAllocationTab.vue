@@ -681,7 +681,7 @@ const getAllocationValueMaximum = (association: ConfiguredAssociationRow) => {
   const allocation = getAllocation(association) ?? createAllocation(association)
   const currentAmount = getAllocationAmount(association)
   const remainingIncludingCurrent = fromCents(
-    [toCents(getFiscalYearUnallocated(association.yearId)) + toCents(currentAmount), 0n]
+    [toCents(getFiscalYearUnallocated(association.yearId)) + toCents(currentAmount), BigInt(0)]
       .reduce((maximum, value) => value > maximum ? value : maximum)
   )
   if (allocation.allocationMethod === 'percentage') {
@@ -689,7 +689,7 @@ const getAllocationValueMaximum = (association: ConfiguredAssociationRow) => {
     const maximum = compareMoney(funding, ZERO_MONEY) > 0
       ? percentageForMoney(remainingIncludingCurrent, funding)
       : parseExactNumeric19Scale4('0')!
-    return (toExactNumeric19Scale4Units(maximum) ?? 0n) > 1_000_000n
+    return (toExactNumeric19Scale4Units(maximum) ?? BigInt(0)) > BigInt(1_000_000)
       ? parseExactNumeric19Scale4('100')!
       : maximum
   }

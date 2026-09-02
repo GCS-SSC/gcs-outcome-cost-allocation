@@ -60,7 +60,7 @@ const OutcomeAllocationRequestBaseSchema = z.object({
 
 export const OutcomeAllocationRequestSchema = OutcomeAllocationRequestBaseSchema.superRefine((allocation, context) => {
   if (allocation.allocationMethod === 'percentage'
-    && (toExactNumeric19Scale4Units(allocation.allocationValue) ?? 0n) > 1_000_000n) {
+    && (toExactNumeric19Scale4Units(allocation.allocationValue) ?? BigInt(0)) > BigInt(1_000_000)) {
     context.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['allocationValue'],

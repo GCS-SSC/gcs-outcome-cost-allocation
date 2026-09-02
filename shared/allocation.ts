@@ -174,7 +174,7 @@ export const toMoney = (value: AllocationDecimalInput): AllocationMoney => {
   const money = parseAllocationMoney(value)
   if (money !== null) return money
   const units = toExactNumeric19Scale4Units(value) ?? BIGINT_ZERO
-  return fromCents((units + 50n) / 100n)
+  return fromCents((units + BigInt(50)) / BigInt(100))
 }
 
 /**
@@ -392,7 +392,7 @@ export const resolveAllocationAmounts = (
   ]))
   const resolvedCents = allocations.map(allocation =>
     allocation.allocationMethod === 'amount'
-      ? ((toExactNumeric19Scale4Units(allocation.allocationValue) ?? BIGINT_ZERO) + 50n) / 100n
+      ? ((toExactNumeric19Scale4Units(allocation.allocationValue) ?? BIGINT_ZERO) + BigInt(50)) / BigInt(100)
       : BIGINT_ZERO
   )
   const percentageIndexesByYearId = new Map<string, number[]>()

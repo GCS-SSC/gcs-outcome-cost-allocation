@@ -629,13 +629,13 @@ const paymentCreateInputsAreComplete = (inputs: ReturnType<typeof getPaymentCrea
   && Boolean(inputs.commitmentId)
   && Boolean(inputs.agreementBudgetFiscalYearId)
   && inputs.paymentAmount !== null
-  && toCents(inputs.paymentAmount) > 0n
+  && toCents(inputs.paymentAmount) > BigInt(0)
 
 const paymentCreateRequestInputsAreComplete = (inputs: ReturnType<typeof getPaymentCreateInputs>): boolean =>
   Boolean(inputs.commitmentId)
   && Boolean(inputs.agreementBudgetFiscalYearId)
   && inputs.paymentAmount !== null
-  && toCents(inputs.paymentAmount) > 0n
+  && toCents(inputs.paymentAmount) > BigInt(0)
 
 /**
  * Inserts generated payment lines for the host-created draft payment.

@@ -1151,7 +1151,7 @@ const buildGeneratedCommitmentLineCoverage = (
   streamBudgetIdsByAgreementBudgetFiscalYearId: Map<string, string>
 ): GeneratedCommitmentLineCoverage[] => commitmentTypes.flatMap(commitmentType =>
   allocations
-    .filter(allocation => allocation.commitmentType === commitmentType && toCents(allocation.amount) > 0n)
+    .filter(allocation => allocation.commitmentType === commitmentType && toCents(allocation.amount) > BigInt(0))
     .flatMap(allocation => {
       const streamBudgetId = streamBudgetIdsByAgreementBudgetFiscalYearId.get(allocation.agreementBudgetFiscalYearId) ?? ''
       const mapping = config.mappings.find(candidate =>
@@ -1397,7 +1397,7 @@ export const generatedPaymentStatusResurrectionExceedsCoverage = async (
       .select(databaseNumericText(sql`COALESCE(SUM(${sql.ref('Funding_Case_Agreement_Payment_Line.egcs_fc_amount')}), 0)`).as('paid_amount'))
       .executeTakeFirst()
 
-    const paidCents = paid ? toCents(parseDatabaseAggregateMoney(paid.paid_amount)) : 0n
+    const paidCents = paid ? toCents(parseDatabaseAggregateMoney(paid.paid_amount)) : BigInt(0)
     const targetCents = toCents(parseDatabaseMoney(targetLine.payment_amount))
     const commitmentCents = toCents(parseDatabaseMoney(targetLine.commitment_amount))
     if (paidCents + targetCents > commitmentCents) {
@@ -1561,7 +1561,7 @@ const snapshotAllocationEconomics = async (
       .execute()
   }
 
-  return fromCents(yearTotals.reduce((sum, year) => sum + toCents(year.programFunding), 0n))
+  return fromCents(yearTotals.reduce((sum, year) => sum + toCents(year.programFunding), BigInt(0)))
 }
 
 /**
@@ -1915,7 +1915,7 @@ export const getGeneratedCommitmentLines = async (
     streamBudgetIdsByAgreementBudgetFiscalYearId,
     activeStreamCommitmentBudgetIds
   )
-  const positiveAllocations = resolvedAllocations.filter(allocation => toCents(allocation.amount) > 0n)
+  const positiveAllocations = resolvedAllocations.filter(allocation => toCents(allocation.amount) > BigInt(0))
   const generatedLines = positiveAllocations
     .map(allocation => {
       const streamBudgetId = streamBudgetIdsByAgreementBudgetFiscalYearId.get(allocation.agreementBudgetFiscalYearId) ?? ''
@@ -2394,7 +2394,7 @@ export const getGeneratedPaymentLines = async (
 
     const remainingTotalCents = paymentLineInputs.reduce(
       (sum, line) => sum + toCents(line.remainingAmount),
-      0n
+      BigInt(0)
     )
     if (toCents(paymentAmount) > remainingTotalCents) {
       return {
@@ -2415,7 +2415,7 @@ export const getGeneratedPaymentLines = async (
       commitmentLineId: line.commitmentLineId,
       amount: line.paymentAmount
     }))
-    const generatedTotalCents = lines.reduce((sum, line) => sum + toCents(line.amount), 0n)
+    const generatedTotalCents = lines.reduce((sum, line) => sum + toCents(line.amount), BigInt(0))
     if (generatedTotalCents !== toCents(paymentAmount)) {
       return {
         status: 'handled' as const,
@@ -2471,7 +2471,7 @@ export const getGeneratedPaymentLines = async (
   )
   const paymentAllocations = resolvedAllocations.filter(allocation =>
     allocation.agreementBudgetFiscalYearId === agreementBudgetFiscalYearId
-    && toCents(allocation.amount) > 0n
+    && toCents(allocation.amount) > BigInt(0)
   )
 
   const desiredStreamCommitmentIds = getDesiredStreamCommitmentIds(
@@ -2518,7 +2518,7 @@ export const getGeneratedPaymentLines = async (
   )
   const remainingTotalCents = paymentLineInputs.reduce(
     (sum, line) => sum + toCents(line.remainingAmount),
-    0n
+    BigInt(0)
   )
   if (toCents(paymentAmount) > remainingTotalCents) {
     paymentLineIssues.push({
@@ -2540,7 +2540,7 @@ export const getGeneratedPaymentLines = async (
     commitmentLineId: line.commitmentLineId,
     amount: line.paymentAmount
   }))
-  const generatedTotalCents = lines.reduce((sum, line) => sum + toCents(line.amount), 0n)
+  const generatedTotalCents = lines.reduce((sum, line) => sum + toCents(line.amount), BigInt(0))
   if (generatedTotalCents !== toCents(paymentAmount)) {
     return {
       status: 'handled' as const,
