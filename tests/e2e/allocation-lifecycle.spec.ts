@@ -15,6 +15,7 @@ type QualifiedWorkflowRuntime = {
   recommendations: Array<{
     id: string
     runtimeState: string
+    egcs_cn_revision: number
     egcs_cn_outcome?: string | null
   }>
 }
@@ -266,9 +267,17 @@ const startQualifiedWorkflow = async (
   workflowSetupId
 } })
 
-const recommendationResponses = (outcome: 'recommended' | 'not_recommended') => ({
+const recommendationResponses = (outcome: 'recommended' | 'not_recommended', revision: number) => ({
+  revision,
   responses: [{ questionKey: 'result', value: outcome === 'recommended' ? 'recommended' : 'not-recommended' }]
 })
+
+const currentRecommendationRevision = async (page: Page, entityId: string): Promise<number> => {
+  const runtime = await readQualifiedWorkflow(page, entityId)
+  const recommendation = runtime.recommendations.find(item => item.runtimeState === 'active')
+  expect(recommendation).toBeTruthy()
+  return recommendation!.egcs_cn_revision
+}
 
 const recommendationRoute = (
   entityId: string,
@@ -346,7 +355,7 @@ test('saves and submits qualified standard Workflow Recommendations across termi
   await expect(page.getByText('Succeeded', { exact: true }).first()).toBeVisible()
   const duplicateAfterTerminal = await page.request.post(
     recommendationRoute(positiveVersionId, true),
-    { data: recommendationResponses('recommended') }
+    { data: recommendationResponses('recommended', 1) }
   )
   expect([403, 404, 409]).toContain(duplicateAfterTerminal.status())
 
@@ -356,7 +365,7 @@ test('saves and submits qualified standard Workflow Recommendations across termi
     'Start qualified negative Workflow'
   )
   await expectOk(await page.request.post(recommendationRoute(negativeVersionId, true), {
-    data: recommendationResponses('not_recommended')
+    data: recommendationResponses('not_recommended', await currentRecommendationRevision(page, negativeVersionId))
   }), 'Submit qualified negative Recommendation')
   expect((await readQualifiedWorkflow(page, negativeVersionId)).current?.runtimeState).toBe('unsuccessful')
   await page.goto(`/en/agreements/${agreement.agreementId}`)
@@ -398,10 +407,10 @@ test('saves and submits qualified standard Workflow Recommendations across termi
     'Remove current qualified Recommendation actor'
   )
   expect((await page.request.put(recommendationRoute(unassignedVersionId), {
-    data: recommendationResponses('recommended')
+    data: recommendationResponses('recommended', 1)
   })).status()).toBe(403)
   expect((await page.request.post(recommendationRoute(unassignedVersionId, true), {
-    data: recommendationResponses('recommended')
+    data: recommendationResponses('recommended', 1)
   })).status()).toBe(403)
   await expectOk(await page.request.post(rosterBase, {
     data: { userId: rootAssignment!.user_id }
@@ -428,10 +437,10 @@ test('saves and submits qualified standard Workflow Recommendations across termi
   )
   const duplicateResponses = await Promise.all([
     page.request.post(recommendationRoute(duplicateVersionId, true), {
-      data: recommendationResponses('recommended')
+      data: recommendationResponses('recommended', 1)
     }),
     page.request.post(recommendationRoute(duplicateVersionId, true), {
-      data: recommendationResponses('recommended')
+      data: recommendationResponses('recommended', 1)
     })
   ])
   expect(duplicateResponses.filter(response => response.ok())).toHaveLength(1)
@@ -444,7 +453,7 @@ test('saves and submits qualified standard Workflow Recommendations across termi
     'Start qualified cancellation Workflow'
   )
   await expectOk(await page.request.put(recommendationRoute(cancelledVersionId), {
-    data: recommendationResponses('recommended')
+    data: recommendationResponses('recommended', await currentRecommendationRevision(page, cancelledVersionId))
   }), 'Save qualified Recommendation before cancellation')
   const cancellationRuntime = await readQualifiedWorkflow(page, cancelledVersionId)
   await expectOk(await page.request.post('/api/workflows/cancel', { data: {
@@ -454,7 +463,7 @@ test('saves and submits qualified standard Workflow Recommendations across termi
     runtimeId: cancellationRuntime.current!.runtimeId
   } }), 'Cancel qualified Recommendation Workflow')
   const staleSubmit = await page.request.post(recommendationRoute(cancelledVersionId, true), {
-    data: recommendationResponses('recommended')
+    data: recommendationResponses('recommended', 1)
   })
   expect([403, 404, 409]).toContain(staleSubmit.status())
   expect((await page.request.post('/api/workflows/cancel', { data: {
@@ -496,7 +505,7 @@ test('saves and submits qualified standard Workflow Recommendations across termi
 
   const missing = await page.request.post(
     recommendationRoute('9223372036854775807', true),
-    { data: recommendationResponses('recommended') }
+    { data: recommendationResponses('recommended', 1) }
   )
   expect(missing.status()).toBe(404)
 })
