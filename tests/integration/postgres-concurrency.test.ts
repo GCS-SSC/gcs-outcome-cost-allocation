@@ -177,7 +177,7 @@ const managedMutation = async <T>(
 })
 
 const budgetYearStableId = (budgetYearId: number): string =>
-  `00000000-0000-4000-8000-${String(budgetYearId).padStart(12, '0')}`
+  String(1_000_000 + budgetYearId)
 
 const applyMigrationsUp = async (db: Kysely<OutcomeCostAllocationHostDatabase>) => {
   await migration0001.up(db)
@@ -619,18 +619,18 @@ describe('outcome allocation PostgreSQL concurrency', () => {
     `.execute(observerDb)
     await sql`
       CREATE TABLE "Funding_Case_Agreement_Budget_Fiscal_Year" (
-        id uuid PRIMARY KEY,
+        id bigint PRIMARY KEY,
         egcs_fc_fundingagreement bigint NOT NULL,
         egcs_fc_fiscalyear bigint NOT NULL,
         egcs_fc_budgetversion bigint,
-        egcs_fc_originalbudgetfiscalyear uuid,
+        egcs_fc_originalbudgetfiscalyear bigint,
         _deleted boolean NOT NULL DEFAULT false
       )
     `.execute(observerDb)
     await sql`
       CREATE TABLE "Funding_Case_Agreement_Budget_Line_Item" (
         id bigint PRIMARY KEY,
-        egcs_fc_fundingagreementbudgetfiscalyear uuid NOT NULL,
+        egcs_fc_fundingagreementbudgetfiscalyear bigint NOT NULL,
         egcs_fc_programfunding numeric(19, 2) NOT NULL,
         _deleted boolean NOT NULL DEFAULT false
       )
@@ -717,7 +717,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
       CREATE TABLE "Funding_Case_Agreement_Payment" (
         id bigint PRIMARY KEY,
         egcs_fc_fundingagreementcommitment bigint NOT NULL,
-        egcs_fc_fiscalyear uuid NOT NULL,
+        egcs_fc_fiscalyear bigint NOT NULL,
         egcs_fc_paymentamount numeric(19, 2) NOT NULL,
         egcs_fc_status bigint NOT NULL,
         _deleted boolean NOT NULL DEFAULT false
@@ -1879,8 +1879,8 @@ describe('outcome allocation PostgreSQL concurrency', () => {
   })
 
   it('activates an exact version funding aggregate larger than one numeric(19,2) row', async () => {
-    const firstYearId = '00000000-0000-4000-8000-000000000050'
-    const secondYearId = '00000000-0000-4000-8000-000000000051'
+    const firstYearId = '1000050'
+    const secondYearId = '1000051'
     const perYearAmount = '60000000000000000.00'
     const aggregateAmount = '120000000000000000.00'
 
@@ -1904,8 +1904,8 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         egcs_fc_fiscalyear,
         egcs_fc_budgetversion
       ) VALUES
-        (${firstYearId}::uuid, 50, 50, 150),
-        (${secondYearId}::uuid, 50, 50, 150)
+        (${firstYearId}::bigint, 50, 50, 150),
+        (${secondYearId}::bigint, 50, 50, 150)
     `.execute(observerDb)
     await sql`
       INSERT INTO "Funding_Case_Agreement_Budget_Line_Item" (
@@ -1913,8 +1913,8 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         egcs_fc_fundingagreementbudgetfiscalyear,
         egcs_fc_programfunding
       ) VALUES
-        (150, ${firstYearId}::uuid, ${perYearAmount}::numeric),
-        (151, ${secondYearId}::uuid, ${perYearAmount}::numeric)
+        (150, ${firstYearId}::bigint, ${perYearAmount}::numeric),
+        (151, ${secondYearId}::bigint, ${perYearAmount}::numeric)
     `.execute(observerDb)
 
     const versionId = await managedMutation(observerDb, '50', async trx => {
@@ -1947,9 +1947,9 @@ describe('outcome allocation PostgreSQL concurrency', () => {
           commitment_label_fr,
           fiscal_year_display
         ) VALUES
-          (${id}::bigint, 50, 5, 13, ${firstYearId}::uuid, 33, 'percentage', 100,
+          (${id}::bigint, 50, 5, 13, ${firstYearId}::bigint, 33, 'percentage', 100,
             ${perYearAmount}::numeric, ${perYearAmount}::numeric, 'Outcome', 'Resultat', 'Commitment', 'Engagement', '2026-2027'),
-          (${id}::bigint, 50, 5, 13, ${secondYearId}::uuid, 33, 'percentage', 100,
+          (${id}::bigint, 50, 5, 13, ${secondYearId}::bigint, 33, 'percentage', 100,
             ${perYearAmount}::numeric, ${perYearAmount}::numeric, 'Outcome', 'Resultat', 'Commitment', 'Engagement', '2026-2027')
       `.execute(trx)
       await sql`

@@ -35,12 +35,6 @@ export const PositivePostgresBigintIdSchema = z.preprocess(
   z.string().refine(isPositivePostgresBigintText)
 )
 
-/** Canonical UUID identity used by Agreement budget fiscal years. */
-export const UuidIdSchema = z.preprocess(
-  value => typeof value === 'string' ? value.trim() : value,
-  z.uuid().transform(value => value.toLowerCase())
-)
-
 export const AgreementRouteParamsSchema = z.object({
   agreementId: PositivePostgresBigintIdSchema
 })
@@ -52,7 +46,7 @@ export const AllocationVersionRouteParamsSchema = AgreementRouteParamsSchema.ext
 const OutcomeAllocationRequestBaseSchema = z.object({
   commitmentType: PositivePostgresBigintIdSchema,
   streamCommitmentId: PositivePostgresBigintIdSchema,
-  agreementBudgetFiscalYearId: UuidIdSchema,
+  agreementBudgetFiscalYearId: PositivePostgresBigintIdSchema,
   outcomeId: PositivePostgresBigintIdSchema,
   allocationMethod: z.enum(['amount', 'percentage']),
   allocationValue: Numeric19Scale4Schema

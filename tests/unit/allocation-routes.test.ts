@@ -4,7 +4,7 @@ import type {
   GcsExtensionRouteContext
 } from '@gcs-ssc/extensions/server'
 
-const BUDGET_YEAR_ID = '00000000-0000-4000-8000-000000000003'
+const BUDGET_YEAR_ID = '3'
 
 const validSaveBody = () => ({
   allocationVersionId: '2',
@@ -251,7 +251,7 @@ describe('outcome allocation routes', () => {
     )
   })
 
-  it('normalizes numeric bigint identifiers and an uppercase UUID', async () => {
+  it('normalizes numeric bigint identifiers', async () => {
     const route = (await import('../../server/api/allocations.put')).default
     const context = createRouteContext({
       params: { agreementId: ' 1 ' },
@@ -260,7 +260,7 @@ describe('outcome allocation routes', () => {
         allocations: [{
           commitmentType: 1,
           streamCommitmentId: 2,
-          agreementBudgetFiscalYearId: BUDGET_YEAR_ID.toUpperCase(),
+          agreementBudgetFiscalYearId: 3,
           outcomeId: 4,
           allocationMethod: 'amount',
           allocationValue: '25.0000'

@@ -201,10 +201,10 @@ describe('outcome allocation generated-record database guards', () => {
     `.execute(db)
     await sql`
       CREATE TABLE "Funding_Case_Agreement_Budget_Fiscal_Year" (
-        id uuid PRIMARY KEY,
+        id bigint PRIMARY KEY,
         egcs_fc_fundingagreement bigint NOT NULL,
         egcs_fc_budgetversion bigint NOT NULL,
-        egcs_fc_originalbudgetfiscalyear uuid,
+        egcs_fc_originalbudgetfiscalyear bigint,
         egcs_fc_fiscalyear bigint NOT NULL,
         _deleted boolean NOT NULL DEFAULT false
       )
@@ -212,7 +212,7 @@ describe('outcome allocation generated-record database guards', () => {
     await sql`
       CREATE TABLE "Funding_Case_Agreement_Budget_Line_Item" (
         id bigint PRIMARY KEY,
-        egcs_fc_fundingagreementbudgetfiscalyear uuid NOT NULL,
+        egcs_fc_fundingagreementbudgetfiscalyear bigint NOT NULL,
         egcs_fc_programfunding numeric(19, 2) NOT NULL,
         _deleted boolean NOT NULL DEFAULT false
       )
@@ -251,7 +251,7 @@ describe('outcome allocation generated-record database guards', () => {
       CREATE TABLE "Funding_Case_Agreement_Payment" (
         id bigint PRIMARY KEY,
         egcs_fc_fundingagreementcommitment bigint NOT NULL,
-        egcs_fc_fiscalyear uuid NOT NULL,
+        egcs_fc_fiscalyear bigint NOT NULL,
         egcs_fc_paymenttype text NOT NULL,
         egcs_fc_periodstart smallint NOT NULL,
         egcs_fc_periodend smallint NOT NULL,
@@ -325,14 +325,14 @@ describe('outcome allocation generated-record database guards', () => {
         egcs_fc_fundingagreement,
         egcs_fc_budgetversion,
         egcs_fc_fiscalyear
-      ) VALUES ('00000000-0000-4000-8000-000000000020', 1, 2, 400)
+      ) VALUES (20, 1, 2, 400)
     `.execute(db)
     await sql`
       INSERT INTO "Funding_Case_Agreement_Budget_Line_Item" (
         id,
         egcs_fc_fundingagreementbudgetfiscalyear,
         egcs_fc_programfunding
-      ) VALUES (20, '00000000-0000-4000-8000-000000000020', 100)
+      ) VALUES (20, 20, 100)
     `.execute(db)
     await sql`
       INSERT INTO "Transfer_Payment_Outcome" (
@@ -398,7 +398,7 @@ describe('outcome allocation generated-record database guards', () => {
           1,
           '1',
           10,
-          '00000000-0000-4000-8000-000000000020',
+          20,
           30,
           'amount',
           100,
@@ -431,7 +431,7 @@ describe('outcome allocation generated-record database guards', () => {
           generated_amount,
           _deleted
         ) VALUES
-          (90, 60, 40, 50, 1, '00000000-0000-4000-8000-000000000020', 30, 10, 100, false)
+          (90, 60, 40, 50, 1, 20, 30, 10, 100, false)
       `.execute(trx)
     })
 
@@ -445,7 +445,7 @@ describe('outcome allocation generated-record database guards', () => {
         egcs_fc_periodend,
         egcs_fc_paymentamount,
         egcs_fc_status
-      ) VALUES (71, 41, '00000000-0000-4000-8000-000000000020', 'advance', 0, 0, 25, 4)
+      ) VALUES (71, 41, 20, 'advance', 0, 0, 25, 4)
     `.execute(db)
   })
 
@@ -500,7 +500,7 @@ describe('outcome allocation generated-record database guards', () => {
           1,
           '1',
           10,
-          '00000000-0000-4000-8000-000000000020',
+          20,
           30,
           ${method},
           ${value}
@@ -605,7 +605,7 @@ describe('outcome allocation generated-record database guards', () => {
           egcs_fc_periodend,
           egcs_fc_paymentamount,
           egcs_fc_status
-        ) VALUES (70, 40, '00000000-0000-4000-8000-000000000020', 'advance', 0, 0, 25, 1)
+        ) VALUES (70, 40, 20, 'advance', 0, 0, 25, 1)
       `.execute(trx)
       await sql`
         INSERT INTO "Funding_Case_Agreement_Payment_Line" (
@@ -689,8 +689,8 @@ describe('outcome allocation generated-record database guards', () => {
           egcs_fc_paymentamount,
           egcs_fc_status
         ) VALUES
-          (72, 40, '00000000-0000-4000-8000-000000000020', 'advance', 0, 0, 1, 1),
-          (73, 40, '00000000-0000-4000-8000-000000000020', 'advance', 0, 0, 1, 1)
+          (72, 40, 20, 'advance', 0, 0, 1, 1),
+          (73, 40, 20, 'advance', 0, 0, 1, 1)
       `.execute(trx))
 
     await expectGuardConstraint(
@@ -761,7 +761,7 @@ describe('outcome allocation generated-record database guards', () => {
           outcome_id,
           allocation_method,
           allocation_value
-        ) VALUES (61, 1, '1', 10, '00000000-0000-4000-8000-000000000020', 30, 'amount', 1)
+        ) VALUES (61, 1, '1', 10, 20, 30, 'amount', 1)
       `.execute(trx))
     await expectGuardConstraint(
       managedMutation(db, '1', async trx => await sql`
@@ -838,7 +838,7 @@ describe('outcome allocation generated-record database guards', () => {
           outcome_id,
           stream_commitment_id,
           generated_amount
-        ) VALUES (60, 43, 53, 1, '00000000-0000-4000-8000-000000000020', 30, 10, 99)
+        ) VALUES (60, 43, 53, 1, 20, 30, 10, 99)
       `.execute(trx)),
       'gcs_outcome_cost_allocation_commitment_line_provenance_coordinate_guard'
     )
