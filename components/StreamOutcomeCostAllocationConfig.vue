@@ -468,21 +468,21 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
       :description="tLocal('addAssociationDescription')">
       <template #body>
         <div class="space-y-4">
-          <ExtensionFormField :label="tLocal('commitmentLine')">
+          <ExtensionFormField :label="tLocal('commitmentLine')" required>
             <ExtensionSelect
               v-model="selectedAssociation.streamCommitmentId"
               value-key="value"
               :items="commitmentLineOptions"
               class="w-full" />
           </ExtensionFormField>
-          <ExtensionFormField :label="tLocal('commitmentType')">
+          <ExtensionFormField :label="tLocal('commitmentType')" required>
             <ExtensionSelect
               v-model="selectedAssociation.commitmentType"
               value-key="value"
               :items="commitmentTypeOptions"
               class="w-full" />
           </ExtensionFormField>
-          <ExtensionFormField :label="tLocal('outcome')">
+          <ExtensionFormField :label="tLocal('outcome')" required>
             <ExtensionSelect
               v-model="selectedAssociation.outcomeId"
               value-key="value"

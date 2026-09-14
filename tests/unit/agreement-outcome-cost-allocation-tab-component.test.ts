@@ -76,6 +76,7 @@ const AllocationTable = defineComponent({
           original
         }
       }),
+      h('div', { 'data-cell': 'value' }, slots['value-cell']?.({ row: { original } })),
       slots['allocationActions-cell']?.({
         row: {
           original
@@ -328,8 +329,13 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
     const methodSelects = wrapper.findAllComponents(InteractiveSelect)
       .filter(select => select.attributes('data-control') === 'allocation-method')
     expect(methodSelects).toHaveLength(2)
+    const valueFields = wrapper.findAll('[data-cell="value"] [required]')
+    expect(valueFields).toHaveLength(2)
+    expect(valueFields[0]!.attributes('label')).toContain('Value — Outcome 1 (2026-2027)')
+    expect(wrapper.findAll('[required]').some(field => field.attributes('label') === 'Method — Outcome 1 (2026-2027)')).toBe(true)
 
     await methodSelects[0]?.get('select').setValue('percentage')
+    await valueFields[0]!.get('input').setValue('12.3456')
     methodSelects[0]?.vm.$emit('update:modelValue', ['amount'])
     await wrapper.vm.$nextTick()
 
@@ -349,7 +355,8 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
     expect(body.allocations).toEqual([
       expect.objectContaining({
         agreementBudgetFiscalYearId: '1',
-        allocationMethod: 'percentage'
+        allocationMethod: 'percentage',
+        allocationValue: '12.3456'
       }),
       expect.objectContaining({
         agreementBudgetFiscalYearId: '2',

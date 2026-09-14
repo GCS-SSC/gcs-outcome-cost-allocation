@@ -212,7 +212,7 @@ const createCommitment = async () => {
 
     <template #body>
       <div class="space-y-4">
-        <ExtensionFormField :label="isFrench ? 'Type' : 'Type'">
+        <ExtensionFormField :label="isFrench ? 'Type' : 'Type'" required>
           <ExtensionSelect
             v-model="selectedType"
             value-key="value"

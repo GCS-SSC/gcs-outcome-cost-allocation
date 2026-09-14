@@ -1256,7 +1256,10 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
           </template>
 
           <template #method-cell="{ row }">
-            <div v-if="row.original.rowType === 'association' && row.original.association">
+            <ExtensionFormField
+              v-if="row.original.rowType === 'association' && row.original.association"
+              :label="`${tLocal('method')} — ${row.original.outcomeLabel} (${row.original.yearLabel})`"
+              required>
               <ExtensionSelect
                 :model-value="getAllocation(row.original.association)?.allocationMethod ?? 'amount'"
                 value-key="value"
@@ -1264,18 +1267,21 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
                 class="w-full min-w-0"
                 :disabled="!canEditSelectedVersion || hasPendingDraftMutation"
                 @update:model-value="updateAllocationMethod(row.original.association, $event)" />
-            </div>
+            </ExtensionFormField>
           </template>
 
           <template #value-cell="{ row }">
-            <div v-if="row.original.rowType === 'association' && row.original.association">
+            <ExtensionFormField
+              v-if="row.original.rowType === 'association' && row.original.association"
+              :label="`${tLocal('value')} — ${row.original.outcomeLabel} (${row.original.yearLabel})`"
+              required>
               <ExtensionInput
                 :model-value="getAllocation(row.original.association)?.allocationValue ?? '0'"
                 inputmode="decimal"
                 class="w-full min-w-0"
                 :disabled="!canEditSelectedVersion || hasPendingDraftMutation"
                 @update:model-value="(value: string | number) => updateAllocationRowValue(row.original, value)" />
-            </div>
+            </ExtensionFormField>
           </template>
 
           <template #amount-cell="{ row }">
@@ -1337,7 +1343,7 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
     <ExtensionModal v-model:open="isGenerateModalOpen" :title="tLocal('generateRowsTitle')">
       <template #body>
         <div class="space-y-4">
-          <ExtensionFormField :label="tLocal('commitmentType')">
+          <ExtensionFormField :label="tLocal('commitmentType')" required>
             <ExtensionSelect
               v-model="generationCommitmentType"
               value-key="value"
@@ -1346,7 +1352,7 @@ const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr 
               class="w-full" />
           </ExtensionFormField>
 
-          <ExtensionFormField :label="tLocal('fiscalYears')">
+          <ExtensionFormField :label="tLocal('fiscalYears')" required>
             <ExtensionSelectMenu
               :model-value="generationYearIds"
               multiple
