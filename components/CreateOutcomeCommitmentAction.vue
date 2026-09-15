@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { CreateOutcomeCommitmentActionErrorMessages, CreateOutcomeCommitmentActionMessages } from '../i18n/CreateOutcomeCommitmentAction'
+
 import { computed, ref, watch } from 'vue'
 import type { Ref } from 'vue'
 import type {
@@ -39,7 +41,8 @@ const {
   onCreated: () => void
 }>()
 
-const { locale } = useExtensionI18n()
+const { locale, t: tLocal } = useExtensionI18n(CreateOutcomeCommitmentActionMessages)
+const { t: errorText } = useExtensionI18n(CreateOutcomeCommitmentActionErrorMessages)
 const toast = useExtensionToast()
 const hostApi = useHostApi()
 const isOpen: Ref<boolean> = ref(false)
@@ -68,62 +71,6 @@ watch(isOpen, async open => {
 })
 
 const buttonLabel = computed(() => locale.value === 'fr' ? label.fr : label.en)
-const isFrench = computed(() => locale.value === 'fr')
-
-const errorMessages: Record<string, { en: string, fr: string }> = {
-  GCS_OUTCOME_COST_ALLOCATION_YEAR_MISSING: {
-    en: 'The full agreement budget must be allocated before this commitment can be created.',
-    fr: 'Le budget complet de l entente doit etre reparti avant de creer cet engagement.'
-  },
-  GCS_OUTCOME_COST_ALLOCATION_MIXED_METHODS: {
-    en: 'The full agreement budget must be allocated before this commitment can be created.',
-    fr: 'Le budget complet de l entente doit etre reparti avant de creer cet engagement.'
-  },
-  GCS_OUTCOME_COST_ALLOCATION_PERCENTAGE_TOTAL_INVALID: {
-    en: 'The full agreement budget must be allocated before this commitment can be created.',
-    fr: 'Le budget complet de l entente doit etre reparti avant de creer cet engagement.'
-  },
-  GCS_OUTCOME_COST_ALLOCATION_AMOUNT_TOTAL_INVALID: {
-    en: 'The full agreement budget must be allocated before this commitment can be created.',
-    fr: 'Le budget complet de l entente doit etre reparti avant de creer cet engagement.'
-  },
-  GCS_OUTCOME_COST_ALLOCATION_TOTAL_INVALID: {
-    en: 'The full agreement budget must be allocated before this commitment can be created.',
-    fr: 'Le budget complet de l entente doit etre reparti avant de creer cet engagement.'
-  },
-  GCS_OUTCOME_COST_ALLOCATION_ACTIVE_REQUIRED: {
-    en: 'Complete and activate a cost allocation before creating this commitment.',
-    fr: 'Terminez et activez une repartition des couts avant de creer cet engagement.'
-  },
-  GCS_OUTCOME_COST_ALLOCATION_STALE_OUTCOME: {
-    en: 'One saved allocation references an outcome that is no longer used by agreement activities.',
-    fr: 'Une repartition enregistree reference un resultat qui n est plus utilise par les activites de l entente.'
-  },
-  GCS_OUTCOME_COST_ALLOCATION_STALE_BUDGET_YEAR: {
-    en: 'One saved allocation references a budget year that is no longer active.',
-    fr: 'Une repartition enregistree reference un exercice budgetaire qui n est plus actif.'
-  },
-  GCS_OUTCOME_COST_ALLOCATION_STREAM_BUDGET_MISSING: {
-    en: 'A budget year is missing its stream budget mapping.',
-    fr: 'Un exercice budgetaire n a pas de correspondance avec un budget de volet.'
-  },
-  GCS_OUTCOME_COST_ALLOCATION_MAPPING_MISSING: {
-    en: 'Configure an outcome-to-commitment-line mapping for this commitment type before creating the commitment.',
-    fr: 'Configurez une correspondance entre resultat et ligne d engagement pour ce type d engagement avant de creer l engagement.'
-  },
-  GCS_OUTCOME_COST_ALLOCATION_STREAM_COMMITMENT_INACTIVE: {
-    en: 'One configured stream commitment line is no longer active.',
-    fr: 'Une ligne d engagement de volet configuree n est plus active.'
-  },
-  GCS_OUTCOME_COST_ALLOCATION_STREAM_COMMITMENT_BUDGET_MISMATCH: {
-    en: 'One configured stream commitment line belongs to a different fiscal-year budget.',
-    fr: 'Une ligne d engagement de volet configuree appartient au budget d un autre exercice.'
-  },
-  GCS_OUTCOME_COST_ALLOCATION_COMMITMENT_LINES_MISSING: {
-    en: 'The active cost allocation has no positive allocations for this commitment type.',
-    fr: 'La repartition des couts active ne contient aucune repartition positive pour ce type d engagement.'
-  }
-}
 
 type ExtensionActionError = {
   data?: {
@@ -138,12 +85,11 @@ type ExtensionActionError = {
 }
 
 const getConfiguredErrorMessage = (errorCode?: string) => {
-  const configuredMessage = errorCode ? errorMessages[errorCode] : undefined
-  if (!configuredMessage) {
+  if (!errorCode || !Object.prototype.hasOwnProperty.call(CreateOutcomeCommitmentActionErrorMessages.en, errorCode)) {
     return null
   }
 
-  return locale.value === 'fr' ? configuredMessage.fr : configuredMessage.en
+  return errorText(errorCode as keyof typeof CreateOutcomeCommitmentActionErrorMessages.en)
 }
 
 const getFallbackErrorMessage = (error: ExtensionActionError, rawError: unknown) =>
@@ -184,8 +130,8 @@ const createCommitment = async () => {
     })
     isOpen.value = false
     toast.add({
-      title: locale.value === 'fr' ? 'Succes' : 'Success',
-      description: locale.value === 'fr' ? 'Engagement ajoute.' : 'Commitment added.',
+      title: tLocal("success"),
+      description: tLocal("commitment_added"),
       color: 'success'
     })
     onCreated()
@@ -201,9 +147,7 @@ const createCommitment = async () => {
   <ExtensionModal
     v-model:open="isOpen"
     :title="buttonLabel"
-    :description="isFrench
-      ? 'Remplissez les champs du formulaire, puis enregistrez ou annulez vos modifications.'
-      : 'Complete the form fields, then save or cancel your changes.'">
+    :description="tLocal('complete_the_form_fields_then_save_or_cancel')">
     <ExtensionButton
       :icon="icon"
       :label="buttonLabel"
@@ -212,7 +156,7 @@ const createCommitment = async () => {
 
     <template #body>
       <div class="space-y-4">
-        <ExtensionFormField :label="isFrench ? 'Type' : 'Type'" required>
+        <ExtensionFormField :label="tLocal('type')" required>
           <ExtensionSelect
             v-model="selectedType"
             value-key="value"
@@ -226,14 +170,14 @@ const createCommitment = async () => {
 
         <div class="flex justify-end gap-2 pt-2">
           <ExtensionButton
-            :label="isFrench ? 'Annuler' : 'Cancel'"
+            :label="tLocal('cancel')"
             color="neutral"
             variant="ghost"
             class="cursor-default"
             @click="isOpen = false" />
           <ExtensionButton
             icon="i-lucide-save"
-            :label="isFrench ? 'Ajouter' : 'Add'"
+            :label="tLocal('add')"
             color="primary"
             class="cursor-default"
             :loading="isSaving"

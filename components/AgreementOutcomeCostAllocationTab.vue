@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { AgreementOutcomeCostAllocationTabErrorMessages, AgreementOutcomeCostAllocationTabStatusMessages, AgreementOutcomeCostAllocationTabMessages } from '../i18n/AgreementOutcomeCostAllocationTab'
+
 import type { Ref } from 'vue'
 import type {
   ExtensionEntityTabContext,
@@ -101,7 +103,9 @@ const {
   rbac: GcsExtensionRbacRequirement
 }>()
 
-const { locale } = useExtensionI18n()
+const { locale, t: tLocal } = useExtensionI18n(AgreementOutcomeCostAllocationTabMessages)
+const { t: errorText } = useExtensionI18n(AgreementOutcomeCostAllocationTabErrorMessages)
+const { t: statusText } = useExtensionI18n(AgreementOutcomeCostAllocationTabStatusMessages)
 const toast = useExtensionToast()
 const allocations: Ref<VersionedOutcomeAllocationInput[]> = ref([])
 const selectedVersionId: Ref<string> = ref('')
@@ -179,8 +183,8 @@ const refreshSelectedCompletion = async () => {
 watch(selectedVersionId, refreshSelectedCompletion, { immediate: true })
 
 const methodOptions = computed(() => [
-  { label: locale.value === 'fr' ? 'Montant' : 'Amount', value: 'amount' },
-  { label: locale.value === 'fr' ? 'Pourcentage' : 'Percentage', value: 'percentage' }
+  { label: tLocal("amount"), value: 'amount' },
+  { label: tLocal("percentage"), value: 'percentage' }
 ])
 
 const commitmentTypeOptions = computed(() => streamConfig.value.enabledCommitmentTypes.map(commitmentType => ({
@@ -257,13 +261,8 @@ const formatDate = (value?: string | null) => {
 }
 
 const getStatusLabel = (statusValue: AllocationVersionStatus) => {
-  const labels: Record<AllocationVersionStatus, { en: string, fr: string }> = {
-    draft: { en: 'Draft', fr: 'Brouillon' },
-    active: { en: 'Active', fr: 'Active' },
-    inactive: { en: 'Inactive', fr: 'Inactive' }
-  }
-  const label = labels[statusValue]
-  return locale.value === 'fr' ? label.fr : label.en
+
+  return statusText(statusValue)
 }
 
 type BadgeColor = 'neutral' | 'success' | 'warning'
@@ -612,51 +611,13 @@ const validationMessage = computed(() => {
     return ''
   }
 
-  const messages: Record<string, { en: string, fr: string }> = {
-    GCS_OUTCOME_COST_ALLOCATION_YEAR_MISSING: {
-      en: 'The full agreement budget must be allocated.',
-      fr: 'Le budget complet de l entente doit etre reparti.'
-    },
-    GCS_OUTCOME_COST_ALLOCATION_MIXED_METHODS: {
-      en: 'The full agreement budget must be allocated.',
-      fr: 'Le budget complet de l entente doit etre reparti.'
-    },
-    GCS_OUTCOME_COST_ALLOCATION_PERCENTAGE_TOTAL_INVALID: {
-      en: 'The full agreement budget must be allocated.',
-      fr: 'Le budget complet de l entente doit etre reparti.'
-    },
-    GCS_OUTCOME_COST_ALLOCATION_AMOUNT_TOTAL_INVALID: {
-      en: 'The full agreement budget must be allocated.',
-      fr: 'Le budget complet de l entente doit etre reparti.'
-    },
-    GCS_OUTCOME_COST_ALLOCATION_TOTAL_INVALID: {
-      en: 'The full agreement budget must be allocated.',
-      fr: 'Le budget complet de l entente doit etre reparti.'
-    },
-    GCS_OUTCOME_COST_ALLOCATION_YEAR_TOTAL_INVALID: {
-      en: 'Each fiscal year must be fully allocated to its own budget value.',
-      fr: 'Chaque exercice doit etre entierement reparti selon sa propre valeur budgetaire.'
-    },
-    GCS_OUTCOME_COST_ALLOCATION_YEAR_TOTAL_EXCEEDED: {
-      en: 'An allocation cannot exceed its fiscal-year budget value.',
-      fr: 'Une repartition ne peut pas depasser la valeur budgetaire de son exercice.'
-    },
-    GCS_OUTCOME_COST_ALLOCATION_STALE_OUTCOME: {
-      en: 'One saved allocation references an outcome that is no longer used by agreement activities.',
-      fr: 'Une repartition enregistree reference un resultat qui n est plus utilise par les activites de l entente.'
-    },
-    GCS_OUTCOME_COST_ALLOCATION_STALE_BUDGET_YEAR: {
-      en: 'One saved allocation references a budget year that is no longer active.',
-      fr: 'Une repartition enregistree reference un exercice budgetaire qui n est plus actif.'
-    }
-  }
 
-  const message = messages[issue.code]
-  if (!message) {
+
+  if (!Object.prototype.hasOwnProperty.call(AgreementOutcomeCostAllocationTabErrorMessages.en, issue.code)) {
     return issue.message
   }
 
-  return locale.value === 'fr' ? message.fr : message.en
+  return errorText(issue.code as keyof typeof AgreementOutcomeCostAllocationTabErrorMessages.en)
 })
 
 const getGroupAmountTotal = (rows: ConfiguredAssociationRow[]) =>
@@ -902,134 +863,6 @@ const canDeleteVersion = (version: CostAllocationVersion) =>
   version.status === 'draft'
   && !hasPendingDraftMutation.value
 
-const text = {
-  title: {
-    en: 'Cost allocation',
-    fr: 'Repartition des couts'
-  },
-  empty: {
-    en: 'Add agreement activities with outcomes, budget fiscal years, and stream cost allocation configuration before allocating costs.',
-    fr: 'Ajoutez des activites avec des resultats, des exercices budgetaires et la configuration de repartition des couts du volet avant de repartir les couts.'
-  },
-  outcome: {
-    en: 'Outcome',
-    fr: 'Resultat'
-  },
-  commitmentLine: {
-    en: 'Commitment line',
-    fr: 'Ligne d engagement'
-  },
-  method: {
-    en: 'Method',
-    fr: 'Methode'
-  },
-  value: {
-    en: 'Value',
-    fr: 'Valeur'
-  },
-  amount: {
-    en: 'Amount',
-    fr: 'Montant'
-  },
-  unallocated: {
-    en: 'Unallocated',
-    fr: 'Non reparti'
-  },
-  version: {
-    en: 'Version',
-    fr: 'Version'
-  },
-  status: {
-    en: 'Status',
-    fr: 'Statut'
-  },
-  actions: {
-    en: 'Actions',
-    fr: 'Actions'
-  },
-  allocationVersions: {
-    en: 'Cost allocations',
-    fr: 'Repartitions des couts'
-  },
-  selectedAllocation: {
-    en: 'Selected allocation',
-    fr: 'Repartition selectionnee'
-  },
-  generateRows: {
-    en: 'Generate rows',
-    fr: 'Generer les lignes'
-  },
-  generateRowsTitle: {
-    en: 'Generate allocation rows',
-    fr: 'Generer des lignes de repartition'
-  },
-  commitmentType: {
-    en: 'Commitment type',
-    fr: 'Type d engagement'
-  },
-  fiscalYears: {
-    en: 'Fiscal years',
-    fr: 'Exercices'
-  },
-  removeRowsTitle: {
-    en: 'Remove stale allocation rows?',
-    fr: 'Supprimer les lignes de repartition obsoletes?'
-  },
-  removeRowsDescription: {
-    en: 'Generating will remove rows that no longer match the selected commitment type, fiscal years, and agreement outcomes.',
-    fr: 'La generation supprimera les lignes qui ne correspondent plus au type d engagement, aux exercices et aux resultats de l entente selectionnes.'
-  },
-  removeAllocation: {
-    en: 'Remove allocation',
-    fr: 'Retirer la repartition'
-  },
-  noRows: {
-    en: 'No allocation rows have been added to this draft.',
-    fr: 'Aucune ligne de repartition n a ete ajoutee a ce brouillon.'
-  },
-  newDraft: {
-    en: 'New draft',
-    fr: 'Nouveau brouillon'
-  },
-  complete: {
-    en: 'Submit for approval',
-    fr: 'Soumettre pour approbation'
-  },
-  view: {
-    en: 'View',
-    fr: 'Voir'
-  },
-  delete: {
-    en: 'Delete',
-    fr: 'Supprimer'
-  },
-  selected: {
-    en: 'Selected',
-    fr: 'Selectionnee'
-  },
-  readonly: {
-    en: 'Only draft allocations can be edited.',
-    fr: 'Seules les repartitions en brouillon peuvent etre modifiees.'
-  },
-  records: {
-    en: 'allocations',
-    fr: 'repartitions'
-  },
-  save: {
-    en: 'Save',
-    fr: 'Enregistrer'
-  },
-  workflows: {
-    en: 'Workflows',
-    fr: 'Flux de travail'
-  },
-  workflowsDescription: {
-    en: 'Start and complete a standard workflow for the selected allocation version.',
-    fr: 'Demarrez et terminez un flux de travail standard pour la version de repartition selectionnee.'
-  }
-}
-
-const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr : text[key].en
 </script>
 
 <template>

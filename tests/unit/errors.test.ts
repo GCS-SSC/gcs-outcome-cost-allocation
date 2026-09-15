@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest'
 import type { GcsExtensionRouteEvent } from '@gcs-ssc/extensions/server'
 import {
   bilingualAllocationIssues,
+  createAllocationValidationUserError,
+  throwOutcomeCostAllocationDatabaseError,
   createOutcomeCostAllocationUserError,
   getOutcomeCostAllocationErrorMessage,
   getOutcomeCostAllocationErrorMessages,
@@ -116,4 +118,16 @@ describe('outcome cost allocation errors', () => {
       }
     }])
   })
+})
+
+it('retains bilingual generic validation feedback without inventing a field issue', () => {
+  const error = createAllocationValidationUserError([])
+  expect(error.code).toBe('GCS_OUTCOME_COST_ALLOCATION_INVALID')
+  expect(error.localizedMessage).toEqual({ en: 'Outcome cost allocations are invalid.', fr: 'Les repartitions des couts par resultat sont invalides.' })
+  expect(error.details).toEqual([])
+})
+it.each([null, 'connection unavailable'])('preserves unclassified failures rather than disguising them as translated validation', error => {
+  let caught: unknown = undefined
+  try { throwOutcomeCostAllocationDatabaseError(error) } catch (failure) { caught = failure }
+  expect(caught).toBe(error)
 })

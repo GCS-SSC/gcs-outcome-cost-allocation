@@ -38,3 +38,13 @@ Completed versions snapshot each allocation's resolved amount and fiscal-year fu
 The host SDK exposes financial values as JavaScript numbers. To prevent silent precision loss while preserving that API contract, allocation, funding, commitment, and payment calculations accept values only through `900,719,925,474.0991`, the largest non-negative scale-four decimal whose scaled units fit within `Number.MAX_SAFE_INTEGER`. Percentage, cent balancing, and weighted payment math use scaled integer/BigInt arithmetic internally.
 
 Agency or stream disablement is blocked once the extension has generated commitment provenance. Those commitments need the extension's payment handler for their remaining lifecycle, so the extension must stay enabled.
+
+## Translation ownership
+
+Requires SDK 0.3.0. Interface catalogs live in this package's `i18n/` directory.
+Define matching English/French keys and named placeholders with
+`defineGcsExtensionMessages`, then use `useExtensionI18n(catalog)` in UI or
+`translateGcsExtensionMessage` in shared/server code. There is no host message
+lookup or fallback. Keep extension-authored common labels and validation text in
+this package; treat bilingual domain values and already-localized errors as data.
+The package owns translation tests and includes catalogs in its coverage inventory.

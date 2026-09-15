@@ -1,3 +1,5 @@
+import { StreamOutcomeCostAllocationConfigMessages } from '../../i18n/StreamOutcomeCostAllocationConfig'
+import { AgreementOutcomeCostAllocationTabMessages } from '../../i18n/AgreementOutcomeCostAllocationTab'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -10,6 +12,9 @@ describe('outcome cost allocation extension UI', () => {
       readFile(join(process.cwd(), 'extension.config.ts'), 'utf8')
     ])
 
+    expect(streamConfig).toContain(':description="tLocal(\'addAssociationDescription\')"')
+    expect(StreamOutcomeCostAllocationConfigMessages.en.addAssociationDescription).toContain('Select a commitment line')
+    expect(StreamOutcomeCostAllocationConfigMessages.fr.addAssociationDescription).toContain('Selectionnez une ligne')
     expect(streamConfig).toContain('<ExtensionTable')
     expect(streamConfig).toContain('mappingColumns')
     expect(streamConfig).not.toContain('getGroupedRowModel')
@@ -40,7 +45,7 @@ describe('outcome cost allocation extension UI', () => {
     expect(agreementTab).not.toContain('type="multiple"')
     expect(agreementTab).toContain("id: 'amount'")
     expect(agreementTab).toContain("id: 'unallocated'")
-    expect(agreementTab).toContain("en: 'Unallocated'")
+    expect(AgreementOutcomeCostAllocationTabMessages.en.unallocated).toBe('Unallocated')
     expect(agreementTab).toContain('getVersionUnallocated')
     expect(agreementTab).toContain('return getVersionUnallocated(selectedVersionId.value)')
     expect(agreementTab).not.toContain('getCommitmentTypeUnallocated')

@@ -10,6 +10,7 @@ export default defineConfig({
     setupFiles: ['tests/setup.ts'],
     coverage: {
       include: [
+        'i18n/**/*.ts',
         'server/**/*.ts',
         'shared/**/*.ts'
       ],

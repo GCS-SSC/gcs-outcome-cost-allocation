@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { StreamOutcomeCostAllocationConfigMessages } from '../i18n/StreamOutcomeCostAllocationConfig'
+
 import type { Ref } from 'vue'
 import type { GcsExtensionJsonConfig, GcsResolvedExtension } from '@gcs-ssc/extensions'
 import {
@@ -68,7 +70,7 @@ const {
 }>()
 
 const config = defineModel<GcsExtensionJsonConfig>({ required: true })
-const { locale } = useExtensionI18n()
+const { locale, t: tLocal } = useExtensionI18n(StreamOutcomeCostAllocationConfigMessages)
 const hostApi = useHostApi()
 
 const localConfig: Ref<OutcomeCostAllocationConfig> = ref(parseOutcomeCostAllocationConfig(config.value))
@@ -309,70 +311,6 @@ watch(config, value => {
   localConfig.value = nextConfig
 }, { deep: true })
 
-const text = {
-  title: {
-    en: 'Outcome cost allocation associations',
-    fr: 'Associations de repartition des couts par resultat'
-  },
-  noContext: {
-    en: 'Transfer payment context is unavailable.',
-    fr: 'Le contexte du paiement de transfert est indisponible.'
-  },
-  noRows: {
-    en: 'Add program outcomes, stream budgets, and stream commitments before configuring associations.',
-    fr: 'Ajoutez des resultats de programme, des budgets de volet et des engagements de volet avant de configurer les associations.'
-  },
-  fiscalYear: {
-    en: 'Fiscal year',
-    fr: 'Exercice'
-  },
-  commitmentLine: {
-    en: 'Commitment line',
-    fr: 'Ligne d engagement'
-  },
-  associations: {
-    en: 'Associations',
-    fr: 'Associations'
-  },
-  actions: {
-    en: 'Actions',
-    fr: 'Actions'
-  },
-  addAssociation: {
-    en: 'Add association',
-    fr: 'Ajouter une association'
-  },
-  addAssociationDescription: {
-    en: 'Select a commitment line, commitment type, and outcome, then add or cancel the association.',
-    fr: 'Selectionnez une ligne d engagement, un type d engagement et un resultat, puis ajoutez ou annulez l association.'
-  },
-  removeAssociation: {
-    en: 'Remove association',
-    fr: 'Retirer l association'
-  },
-  commitmentType: {
-    en: 'Commitment type',
-    fr: 'Type d engagement'
-  },
-  outcome: {
-    en: 'Outcome',
-    fr: 'Resultat'
-  },
-  cancel: {
-    en: 'Cancel',
-    fr: 'Annuler'
-  },
-  add: {
-    en: 'Add',
-    fr: 'Ajouter'
-  },
-  records: {
-    en: 'associations',
-    fr: 'associations'
-  }
-}
-
-const tLocal = (key: keyof typeof text) => locale.value === 'fr' ? text[key].fr : text[key].en
 </script>
 
 <template>

@@ -12,7 +12,7 @@
     "test:e2e": "cd ../.. && bun run scripts/nuxt-artifact-lock.ts -- bun run --cwd extensions/gcs-outcome-cost-allocation scripts/test-e2e-managed.ts tests/e2e/allocation-lifecycle.spec.ts"
   },
   "dependencies": {
-    "@gcs-ssc/extensions": "^0.2.0"
+    "@gcs-ssc/extensions": "^0.3.0"
   },
   "peerDependencies": {
     "vue": "^3.5.28"

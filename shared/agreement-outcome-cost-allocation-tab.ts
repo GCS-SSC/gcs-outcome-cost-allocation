@@ -1,3 +1,5 @@
+import { translateGcsExtensionMessage } from '@gcs-ssc/extensions'
+import { notifications } from '../i18n/notifications'
 import {
   type CommitmentType,
   type CostAllocationVersion,
@@ -252,24 +254,8 @@ export const getOutcomeAllocationToastText = (
   locale: string,
   key: 'saved' | 'submitted' | 'deleted' | 'error'
 ) => {
-  const labels = {
-    saved: {
-      title: locale === 'fr' ? 'Succes' : 'Success',
-      description: locale === 'fr' ? 'Repartition enregistree.' : 'Allocation saved.'
-    },
-    submitted: {
-      title: locale === 'fr' ? 'Succes' : 'Success',
-      description: locale === 'fr' ? 'Repartition soumise au processus d approbation.' : 'Cost allocation submitted for approval.'
-    },
-    deleted: {
-      title: locale === 'fr' ? 'Succes' : 'Success',
-      description: locale === 'fr' ? 'Brouillon supprime.' : 'Draft allocation deleted.'
-    },
-    error: {
-      title: locale === 'fr' ? 'Erreur' : 'Error',
-      description: ''
-    }
+  return {
+    title: translateGcsExtensionMessage(notifications, locale, key === 'error' ? 'error' : 'success'),
+    description: key === 'error' ? '' : translateGcsExtensionMessage(notifications, locale, key)
   }
-
-  return labels[key]
 }

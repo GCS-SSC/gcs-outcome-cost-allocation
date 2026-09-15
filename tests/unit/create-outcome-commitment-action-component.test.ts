@@ -1,3 +1,4 @@
+import { CreateOutcomeCommitmentActionMessages } from '../../i18n/CreateOutcomeCommitmentAction'
 // @vitest-environment jsdom
 
 import { readFileSync } from 'node:fs'
@@ -13,9 +14,9 @@ describe('outcome cost allocation commitment action', () => {
       'utf8'
     )
 
-    expect(source).toContain(':description="isFrench')
-    expect(source).toContain('Complete the form fields, then save or cancel your changes.')
-    expect(source).toContain('Remplissez les champs du formulaire')
+    expect(source).toContain(':description="tLocal(')
+    expect(Object.values(CreateOutcomeCommitmentActionMessages.en)).toContain('Complete the form fields, then save or cancel your changes.')
+    expect(Object.values(CreateOutcomeCommitmentActionMessages.fr).some(message => message.startsWith('Remplissez les champs du formulaire'))).toBe(true)
   })
 
   it('shows extension-owned server error messages from failed commitment creation', async () => {

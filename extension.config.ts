@@ -2,7 +2,7 @@ import { defineGcsExtension } from '@gcs-ssc/extensions'
 
 export default defineGcsExtension({
   key: 'gcs-outcome-cost-allocation',
-  sdkVersion: '^0.2.0',
+  sdkVersion: '^0.3.0',
   requiredHostCapabilities: [
     'stream-config-modal',
     'entity-tabs',

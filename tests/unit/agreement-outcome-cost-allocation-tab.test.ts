@@ -236,3 +236,18 @@ describe('agreement outcome cost allocation tab helpers', () => {
     })
   })
 })
+
+it.each([
+  [{ message: 'Erreur déjà traduite' }, 'Erreur déjà traduite'],
+  [{ statusMessage: 'Message du serveur' }, 'Message du serveur'],
+  [{ data: { details: [] } }, 'Request failed'],
+  [{}, 'Request failed'],
+  [null, 'Request failed']
+])('displays localized API text without catalog lookup or leaking response objects', async (body, expected) => {
+  await expect(getOutcomeAllocationResponseErrorMessage(new Response(JSON.stringify(body), { status: 400, statusText: 'Request failed' }))).resolves.toBe(expected)
+})
+
+it('preserves the localized API error when deleting a draft fails', async () => {
+  const fetcher = vi.fn(async () => new Response(JSON.stringify({ data: { message: 'Suppression refusée' } }), { status: 403 }))
+  await expect(deleteOutcomeAllocationDraftVersionRequest('/allocation-versions/1', fetcher)).rejects.toThrow('Suppression refusée')
+})
