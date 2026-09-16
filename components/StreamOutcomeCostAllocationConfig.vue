@@ -27,6 +27,7 @@ import {
 
 interface ListResponse<T> {
   items: T[]
+  total?: number
 }
 
 interface OutcomeItem {
@@ -86,10 +87,18 @@ const outcomesResponse: Ref<ListResponse<OutcomeItem> | null> = ref(null)
 const budgetsResponse: Ref<ListResponse<StreamBudgetItem> | null> = ref(null)
 const commitmentsResponse: Ref<ListResponse<StreamCommitmentItem> | null> = ref(null)
 const commitmentTypesResponse: Ref<ListResponse<CommitmentTypeItem> | null> = ref(null)
-type FetchList = <T>(url: string) => Promise<ListResponse<T>>
-const fetchList: FetchList = async url => {
+const fetchList = async <T = unknown>(url: string): Promise<ListResponse<T>> => {
   try {
-    return await hostApi.get<ListResponse<never>>(url)
+    const items: T[] = []
+    let page = 1
+    const limit = 100
+    while (true) {
+      const response = await hostApi.get<ListResponse<T>>(`${url}?page=${page}&limit=${limit}`)
+      items.push(...response.items)
+      if (response.items.length < limit || (response.total !== undefined && items.length >= response.total)) break
+      page += 1
+    }
+    return { items }
   } catch {
     return { items: [] }
   }
@@ -100,10 +109,10 @@ const refreshLookups = async () => {
   }
 
   const [outcomeItems, budgetItems, commitmentItems, commitmentTypeItems] = await Promise.all([
-    fetchList<OutcomeItem>(`/api/transfer-payments/${transferPaymentId}/outcomes?page=1&limit=100`),
-    fetchList<StreamBudgetItem>(`/api/transfer-payments/${transferPaymentId}/streams/${streamId}/budgets?page=1&limit=100`),
-    fetchList<StreamCommitmentItem>(`/api/transfer-payments/${transferPaymentId}/streams/${streamId}/chart-of-accounts?page=1&limit=100`),
-    fetchList<CommitmentTypeItem>(`/api/transfer-payments/${transferPaymentId}/streams/${streamId}/commitment-types?page=1&limit=100`)
+    fetchList<OutcomeItem>(`/api/transfer-payments/${transferPaymentId}/outcomes`),
+    fetchList<StreamBudgetItem>(`/api/transfer-payments/${transferPaymentId}/streams/${streamId}/budgets`),
+    fetchList<StreamCommitmentItem>(`/api/transfer-payments/${transferPaymentId}/streams/${streamId}/chart-of-accounts`),
+    fetchList<CommitmentTypeItem>(`/api/transfer-payments/${transferPaymentId}/streams/${streamId}/commitment-types`)
   ])
   outcomesResponse.value = outcomeItems
   budgetsResponse.value = budgetItems
