@@ -1,9 +1,37 @@
-import { defineGcsExtension } from '@gcs-ssc/extensions'
+import { defineGcsExtension, defineGcsAuditOwnership } from '@gcs-ssc/extensions'
 
 export default defineGcsExtension({
+  // Host-managed configuration, KV and secrets keep their host ownership rules.
+  auditOwnership: defineGcsAuditOwnership([
+    {
+      table: 'extensions.gcs_outcome_cost_allocation_versions',
+      owner: {
+        kind: 'owner',
+        owner: 'agreement',
+        column: 'agreement_id'
+      }
+    },
+    {
+      table: 'extensions.gcs_outcome_cost_allocation_allocations',
+      owner: {
+        kind: 'owner',
+        owner: 'agreement',
+        column: 'agreement_id'
+      }
+    },
+    {
+      table: 'extensions.gcs_outcome_cost_allocation_commitment_lines',
+      owner: {
+        kind: 'owner',
+        owner: 'agreement',
+        column: 'agreement_id'
+      }
+    }
+  ]),
   key: 'gcs-outcome-cost-allocation',
-  sdkVersion: '^0.3.0',
+  sdkVersion: '^0.3.2',
   requiredHostCapabilities: [
+    'audit-ownership',
     'stream-config-modal',
     'entity-tabs',
     'create-actions',
