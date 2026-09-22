@@ -29,7 +29,9 @@ it.each(['en', 'fr'])('loads and selects labels past the first page (%s)', async
   }) }) }))
   await flushPromises()
   const component = wrapper.findComponent(StreamConfig)
-  const state = component.vm.$.setupState as { openCreateAssociation: (id?: string) => void }
+  const instance = component.vm.$
+  if (!instance) throw new Error('Stream configuration component did not mount')
+  const state = (instance as unknown as { setupState: { openCreateAssociation: (id?: string) => void } }).setupState
   state.openCreateAssociation('101')
   await nextTick()
   const selects = wrapper.findAllComponents(runtime.components.USelect)
