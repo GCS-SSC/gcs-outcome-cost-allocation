@@ -341,8 +341,10 @@ test('saves and submits qualified standard Workflow Recommendations across termi
   await page.getByRole('radio', { name: 'Recommended', exact: true }).check()
   const saveResponse = page.waitForResponse(response =>
     response.url().includes('/api/workflows/recommendation?') && response.request().method() === 'PUT')
-  await page.getByRole('button', { name: 'Save', exact: true }).click()
-  expect((await saveResponse).status()).toBe(200)
+  await page.getByRole('button', { name: 'Submit recommendation' }).locator('..')
+    .getByRole('button', { name: 'Save', exact: true }).click()
+  const savedRecommendation = await saveResponse
+  expect(savedRecommendation.status(), await savedRecommendation.text()).toBe(200)
 
   await page.reload()
   await page.getByRole('tab', { name: 'Cost Allocation' }).click()

@@ -418,6 +418,11 @@ export const lockAgreementAllocationAdvisory = async (
       hashtextextended('gcs_outcome_cost_allocation.agreement', ${agreementId}::bigint)
     )
   `.execute(db)
+  // PGlite has no pg_locks view for the database guard to inspect. Its guard
+  // checks this transaction-local marker after the same host lock hook runs.
+  await sql`
+    SELECT set_config('gcs_outcome_cost_allocation.managed_agreement_id', ${agreementId}, true)
+  `.execute(db)
 }
 
 /**

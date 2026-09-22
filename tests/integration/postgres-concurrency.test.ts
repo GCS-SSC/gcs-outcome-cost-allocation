@@ -857,11 +857,11 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         egcs_fc_fiscalyear,
         egcs_fc_budgetversion
       ) VALUES
-        ('00000000-0000-4000-8000-000000000020', 2, 50, 120),
-        ('00000000-0000-4000-8000-000000000022', 3, 50, 122),
-        ('00000000-0000-4000-8000-000000000024', 4, 50, 124),
-        ('00000000-0000-4000-8000-000000000026', 5, 50, 126),
-        ('00000000-0000-4000-8000-000000000028', 6, 50, 128)
+        ('1000020', 2, 50, 120),
+        ('1000022', 3, 50, 122),
+        ('1000024', 4, 50, 124),
+        ('1000026', 5, 50, 126),
+        ('1000028', 6, 50, 128)
     `.execute(observerDb)
     await sql`
       INSERT INTO "Funding_Case_Agreement_Budget_Line_Item" (
@@ -869,11 +869,11 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         egcs_fc_fundingagreementbudgetfiscalyear,
         egcs_fc_programfunding
       ) VALUES
-        (21, '00000000-0000-4000-8000-000000000020', 100),
-        (23, '00000000-0000-4000-8000-000000000022', 100),
-        (25, '00000000-0000-4000-8000-000000000024', 100),
-        (27, '00000000-0000-4000-8000-000000000026', 100),
-        (29, '00000000-0000-4000-8000-000000000028', 100)
+        (21, '1000020', 100),
+        (23, '1000022', 100),
+        (25, '1000024', 100),
+        (27, '1000026', 100),
+        (29, '1000028', 100)
     `.execute(observerDb)
     await sql`
       INSERT INTO "Transfer_Payment_Stream" (
@@ -1372,7 +1372,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
           id,
           egcs_fc_fundingagreementbudgetfiscalyear,
           egcs_fc_programfunding
-        ) VALUES (250, '00000000-0000-4000-8000-000000000024', 50)
+        ) VALUES (250, '1000024', 50)
       `.execute(inserterDb)
 
       await vi.waitFor(async () => {
@@ -2601,12 +2601,12 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         egcs_fc_fundingagreement,
         egcs_fc_fiscalyear,
         egcs_fc_budgetversion
-      ) VALUES ('00000000-0000-4000-8000-000000000035', 12, 50, 12035);
+      ) VALUES ('1000035', 12, 50, 12035);
       INSERT INTO "Funding_Case_Agreement_Budget_Line_Item" (
         id,
         egcs_fc_fundingagreementbudgetfiscalyear,
         egcs_fc_programfunding
-      ) VALUES (120350, '00000000-0000-4000-8000-000000000035', 100);
+      ) VALUES (120350, '1000035', 100);
       INSERT INTO "Transfer_Payment_Fiscal_Year_Budget" (
         id,
         egcs_tp_transferpaymentprofile,
@@ -3532,12 +3532,12 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         egcs_fc_fundingagreement,
         egcs_fc_fiscalyear,
         egcs_fc_budgetversion
-      ) VALUES ('00000000-0000-4000-8000-000000000032', 910000, 50, 10032);
+      ) VALUES ('1000032', 910000, 50, 10032);
       INSERT INTO "Funding_Case_Agreement_Budget_Line_Item" (
         id,
         egcs_fc_fundingagreementbudgetfiscalyear,
         egcs_fc_programfunding
-      ) VALUES (33, '00000000-0000-4000-8000-000000000032', 100);
+      ) VALUES (33, '1000032', 100);
       INSERT INTO "Transfer_Payment_Fiscal_Year_Budget" (
         id,
         egcs_tp_transferpaymentprofile,
@@ -3727,12 +3727,12 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         egcs_fc_fundingagreement,
         egcs_fc_fiscalyear,
         egcs_fc_budgetversion
-      ) VALUES ('00000000-0000-4000-8000-000000000034', 920000, 50, 11034);
+      ) VALUES ('1000034', 920000, 50, 11034);
       INSERT INTO "Funding_Case_Agreement_Budget_Line_Item" (
         id,
         egcs_fc_fundingagreementbudgetfiscalyear,
         egcs_fc_programfunding
-      ) VALUES (110340, '00000000-0000-4000-8000-000000000034', 100);
+      ) VALUES (110340, '1000034', 100);
       INSERT INTO "Transfer_Payment_Fiscal_Year_Budget" (
         id,
         egcs_tp_transferpaymentprofile,
@@ -4157,12 +4157,12 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         egcs_fc_fundingagreement,
         egcs_fc_fiscalyear,
         egcs_fc_budgetversion
-      ) VALUES ('00000000-0000-4000-8000-000000000299', 99, 50, 990299);
+      ) VALUES ('1000299', 99, 50, 990299);
       INSERT INTO "Funding_Case_Agreement_Budget_Line_Item" (
         id,
         egcs_fc_fundingagreementbudgetfiscalyear,
         egcs_fc_programfunding
-      ) VALUES (299, '00000000-0000-4000-8000-000000000299', 100);
+      ) VALUES (299, '1000299', 100);
       INSERT INTO "Transfer_Payment_Stream_Chart_of_Account" (
         id,
         egcs_tp_streambudget,
