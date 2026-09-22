@@ -22,6 +22,7 @@ type QualifiedWorkflowRuntime = {
 
 type WorkflowTopology = {
   base: string
+  agencyBase: string
   approvalTemplateId: string
   recommendationSetIds: string[]
   recommendationSchemaIds: string[]
@@ -105,7 +106,7 @@ const createRecommendationSet = async (
   name: string,
   approvalTemplateId?: string
 ): Promise<{ recommendationSetId: string, recommendationSchemaId: string }> => {
-  const setResponse = await page.request.post(`${base}/recommendation-setups`, { data: {
+  const setResponse = await page.request.post(`${base}/recommendation-sets`, { data: {
     egcs_cn_name_en: name,
     egcs_cn_name_fr: `${name} FR`,
     egcs_cn_description_en: 'Managed qualified Workflow recommendation.',
@@ -115,7 +116,7 @@ const createRecommendationSet = async (
   await expectOk(setResponse, `Create ${name}`)
   const recommendationSetId = String((await responseJson<{ id: string }>(setResponse)).id)
   const schemaResponse = await page.request.post(
-    `${base}/recommendation-setups/${recommendationSetId}/items/create-schema`,
+    `${base}/recommendation-sets/${recommendationSetId}/items/create-schema`,
     { data: {
       egcs_cn_order: 1,
       ...(approvalTemplateId ? { egcs_cn_approvaltemplate: approvalTemplateId } : {}),
@@ -145,7 +146,7 @@ const createRecommendationSet = async (
     `Publish ${name} schema`
   )
   await expectOk(
-    await page.request.post(`${base}/recommendation-setups/${recommendationSetId}/publish`),
+    await page.request.post(`${base}/recommendation-sets/${recommendationSetId}/publish`),
     `Publish ${name}`
   )
   return { recommendationSetId, recommendationSchemaId }
@@ -156,15 +157,14 @@ const provisionQualifiedWorkflowTopology = async (
   agreement: ShowcaseAgreement
 ): Promise<WorkflowTopology> => {
   const base = `/api/transfer-payments/${agreement.programId}/streams/${agreement.streamId}`
+  const agencyBase = `/api/agency/${agreement.agencyId}`
   const usersResponse = await page.request.get('/api/users/lookups?status=active&limit=100')
   await expectOk(usersResponse, 'Read qualified Workflow users')
   const users = await responseJson<{ items: Array<{ id: string, egcs_cn_email: string }> }>(usersResponse)
   const rootUserId = String(users.items.find(user => user.egcs_cn_email === 'root@example.com')?.id ?? '')
   expect(rootUserId).not.toBe('')
 
-  const templateResponse = await page.request.post('/api/approval-templates', { data: {
-    scopeType: 'transferpaymentstream',
-    scopeId: agreement.streamId,
+  const templateResponse = await page.request.post(`${agencyBase}/approval-templates`, { data: {
     egcs_cn_name_en: 'Qualified allocation recommendation approval',
     egcs_cn_name_fr: 'Approbation de la recommandation de repartition qualifiee',
     egcs_cn_description_en: 'Managed nested Recommendation approval.',
@@ -183,14 +183,14 @@ const provisionQualifiedWorkflowTopology = async (
   await expectOk(templateResponse, 'Create qualified Recommendation approval template')
   const approvalTemplateId = String((await responseJson<{ id: string }>(templateResponse)).id)
   await expectOk(
-    await page.request.post(`/api/approval-templates/${approvalTemplateId}/publish`),
+    await page.request.post(`${agencyBase}/approval-templates/${approvalTemplateId}/publish`),
     'Publish qualified Recommendation approval template'
   )
 
-  const direct = await createRecommendationSet(page, base, 'Qualified allocation recommendation')
+  const direct = await createRecommendationSet(page, agencyBase, 'Qualified allocation recommendation')
   const nested = await createRecommendationSet(
     page,
-    base,
+    agencyBase,
     'Qualified allocation recommendation with approval',
     approvalTemplateId
   )
@@ -205,9 +205,7 @@ const provisionQualifiedWorkflowTopology = async (
     nameFr: string,
     recommendationSetId: string
   ): Promise<string> => {
-    const response = await page.request.post(`${base}/workflow-setups`, { data: {
-      egcs_cn_scopetype: 'transferpaymentstream',
-      egcs_cn_scopeid: agreement.streamId,
+    const response = await page.request.post(`${agencyBase}/workflows`, { data: {
       egcs_cn_entitytype: ALLOCATION_VERSION_ENTITY_TYPE,
       egcs_cn_name_en: nameEn,
       egcs_cn_name_fr: nameFr,
@@ -221,7 +219,7 @@ const provisionQualifiedWorkflowTopology = async (
     } })
     await expectOk(response, `Create ${nameEn}`)
     const workflowId = String((await responseJson<{ id: string }>(response)).id)
-    await expectOk(await page.request.post(`${base}/workflow-setups/${workflowId}/members`, { data: {
+    await expectOk(await page.request.post(`${agencyBase}/workflows/${workflowId}/members`, { data: {
       egcs_cn_sequence: 1,
       egcs_cn_kind: 'recommendation_set',
       egcs_cn_recommendationset: recommendationSetId,
@@ -230,14 +228,18 @@ const provisionQualifiedWorkflowTopology = async (
       owners: []
     } }), `Create ${nameEn} member`)
     await expectOk(
-      await page.request.post(`${base}/workflow-setups/${workflowId}/publish`),
+      await page.request.post(`${agencyBase}/workflows/${workflowId}/publish`),
       `Publish ${nameEn}`
     )
+    await expectOk(await page.request.post(`${base}/workflows`, { data: {
+      egcs_tp_workflow: workflowId
+    } }), `Link ${nameEn} to Stream`)
     return workflowId
   }
 
   return {
     base,
+    agencyBase,
     approvalTemplateId,
     recommendationSetIds: [direct.recommendationSetId, nested.recommendationSetId],
     recommendationSchemaIds: [direct.recommendationSchemaId, nested.recommendationSchemaId],
