@@ -536,13 +536,19 @@ export default defineGcsExtensionMigration({
             ON stream_commitment.id = NEW.stream_commitment_id
             AND stream_commitment.egcs_tp_transferpaymentstream = stream.id
             AND stream_commitment._deleted = false
+          INNER JOIN "Agency_Chart_of_Account" chart
+            ON chart.id = stream_commitment.egcs_tp_agencychartofaccount
+            AND chart.egcs_ay_fiscalyear = agreement_year.egcs_fc_fiscalyear
+            AND chart._deleted = false
           INNER JOIN "Transfer_Payment_Stream_Commitment_Type" commitment_type
             ON commitment_type.id = NEW.commitment_type
             AND commitment_type.egcs_tp_transferpaymentstream = stream.id
             AND commitment_type._deleted = false
+          INNER JOIN "Agency_Commitment_Type" agency_commitment_type
+            ON agency_commitment_type.id = commitment_type.egcs_tp_agencycommitmenttype
+            AND agency_commitment_type._deleted = false
           INNER JOIN "Transfer_Payment_Stream_Budget" stream_budget
-            ON stream_budget.id = stream_commitment.egcs_tp_streambudget
-            AND stream_budget.egcs_tp_transferpaymentstream = stream.id
+            ON stream_budget.egcs_tp_transferpaymentstream = stream.id
             AND stream_budget._deleted = false
           INNER JOIN "Transfer_Payment_Fiscal_Year_Budget" program_budget
             ON program_budget.id = stream_budget.egcs_tp_transferpaymentbudget
@@ -956,7 +962,7 @@ export default defineGcsExtensionMigration({
       BEGIN
         IF TG_OP = 'UPDATE' THEN
           IF NEW._deleted IS NOT DISTINCT FROM OLD._deleted
-            AND NEW.egcs_tp_streambudget IS NOT DISTINCT FROM OLD.egcs_tp_streambudget
+            AND NEW.egcs_tp_agencychartofaccount IS NOT DISTINCT FROM OLD.egcs_tp_agencychartofaccount
             AND NEW.egcs_tp_transferpaymentstream IS NOT DISTINCT FROM OLD.egcs_tp_transferpaymentstream
           THEN
             RETURN NEW;
@@ -998,6 +1004,45 @@ export default defineGcsExtensionMigration({
       ON "Transfer_Payment_Stream_Chart_of_Account"
       FOR EACH ROW
       EXECUTE FUNCTION extensions.gcs_outcome_cost_allocation_guard_stream_commitment_delete();
+    `.execute(db)
+
+    await sql`
+      CREATE OR REPLACE FUNCTION extensions.gcs_outcome_cost_allocation_guard_agency_chart_change()
+      RETURNS trigger AS $$
+      BEGIN
+        IF TG_OP = 'UPDATE'
+          AND NEW._deleted IS NOT DISTINCT FROM OLD._deleted
+          AND NEW.egcs_ay_fiscalyear IS NOT DISTINCT FROM OLD.egcs_ay_fiscalyear
+        THEN
+          RETURN NEW;
+        END IF;
+
+        IF EXISTS (
+          SELECT 1
+          FROM "Transfer_Payment_Stream_Chart_of_Account" link
+          INNER JOIN extensions.gcs_outcome_cost_allocation_allocations allocation
+            ON allocation.stream_commitment_id = link.id
+          INNER JOIN extensions.gcs_outcome_cost_allocation_versions version
+            ON version.id = allocation.allocation_version_id
+          WHERE link.egcs_tp_agencychartofaccount = OLD.id
+            AND allocation._deleted = false
+            AND version.status = 'active'
+            AND version._deleted = false
+        ) THEN
+          RAISE EXCEPTION 'Agency chart fiscal year referenced by active outcome allocations cannot be changed or retired.'
+            USING ERRCODE = '23514',
+              CONSTRAINT = 'gcs_outcome_cost_allocation_active_agency_chart_guard';
+        END IF;
+
+        RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+      END;
+      $$ LANGUAGE plpgsql;
+    `.execute(db)
+    await sql`DROP TRIGGER IF EXISTS gcs_outcome_cost_allocation_guard_agency_chart_change ON "Agency_Chart_of_Account"`.execute(db)
+    await sql`
+      CREATE TRIGGER gcs_outcome_cost_allocation_guard_agency_chart_change
+      BEFORE UPDATE OR DELETE ON "Agency_Chart_of_Account"
+      FOR EACH ROW EXECUTE FUNCTION extensions.gcs_outcome_cost_allocation_guard_agency_chart_change();
     `.execute(db)
 
     await sql`
@@ -1135,6 +1180,7 @@ export default defineGcsExtensionMigration({
       await sql.raw(`DROP TRIGGER IF EXISTS gcs_outcome_cost_allocation_guard_active_budget_mapping ON "${tableName}"`).execute(db)
     }
     await sql`DROP TRIGGER IF EXISTS gcs_outcome_cost_allocation_guard_stream_commitment_delete ON "Transfer_Payment_Stream_Chart_of_Account"`.execute(db)
+    await sql`DROP TRIGGER IF EXISTS gcs_outcome_cost_allocation_guard_agency_chart_change ON "Agency_Chart_of_Account"`.execute(db)
     await sql`DROP TRIGGER IF EXISTS gcs_outcome_cost_allocation_guard_payment_line ON "Funding_Case_Agreement_Payment_Line"`.execute(db)
     await sql`DROP TRIGGER IF EXISTS gcs_outcome_cost_allocation_guard_payment_change ON "Funding_Case_Agreement_Payment"`.execute(db)
     await sql`DROP TRIGGER IF EXISTS gcs_outcome_cost_allocation_guard_payment_insert ON "Funding_Case_Agreement_Payment"`.execute(db)
@@ -1157,6 +1203,7 @@ export default defineGcsExtensionMigration({
 
     await sql`DROP FUNCTION IF EXISTS extensions.gcs_outcome_cost_allocation_guard_active_budget_mapping()`.execute(db)
     await sql`DROP FUNCTION IF EXISTS extensions.gcs_outcome_cost_allocation_guard_stream_commitment_delete()`.execute(db)
+    await sql`DROP FUNCTION IF EXISTS extensions.gcs_outcome_cost_allocation_guard_agency_chart_change()`.execute(db)
     await sql`DROP FUNCTION IF EXISTS extensions.gcs_outcome_cost_allocation_guard_commitment_line_provenance()`.execute(db)
     await sql`DROP FUNCTION IF EXISTS extensions.gcs_outcome_cost_allocation_validate_commitment_line_provenance()`.execute(db)
     await sql`DROP FUNCTION IF EXISTS extensions.gcs_outcome_cost_allocation_guard_payment_line()`.execute(db)

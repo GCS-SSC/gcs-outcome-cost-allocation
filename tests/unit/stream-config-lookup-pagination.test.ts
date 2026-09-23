@@ -20,7 +20,13 @@ it.each(['en', 'fr'])('loads and selects labels past the first page (%s)', async
     const page = Number(url.searchParams.get('page'))
     const items = Array.from({ length: page === 1 ? 100 : 1 }, (_, index) => {
       const id = String((page - 1) * 100 + index + 1)
-      return { id, egcs_tp_name_en: `English ${id}`, egcs_tp_name_fr: `Français ${id}`, fiscal_year_display: `Year ${id}`, egcs_tp_streambudget: id, egcs_tp_accountingdimensions: [{ label_en: 'Account', label_fr: 'Compte', value: id }] }
+      return {
+        id,
+        egcs_tp_name_en: `English ${id}`, egcs_tp_name_fr: `Français ${id}`,
+        egcs_ay_name_en: `English ${id}`, egcs_ay_name_fr: `Français ${id}`,
+        fiscal_year_display: `Year ${id}`, egcs_tp_fiscalyear: id, egcs_ay_fiscalyear: id,
+        egcs_ay_accountingdimensions: [{ label_en: 'Account', label_fr: 'Compte', value: id }]
+      }
     })
     return new Response(JSON.stringify({ items, total: 101 }), { headers: { 'content-type': 'application/json' } })
   }))

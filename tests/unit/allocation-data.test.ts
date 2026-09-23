@@ -107,6 +107,11 @@ class ScriptedQuery {
     return this
   }
 
+  whereRef(...args: unknown[]) {
+    this.record.wheres.push(['ref', ...args])
+    return this
+  }
+
   select(...args: unknown[]) {
     this.record.selections.push(args)
     return this
@@ -873,28 +878,39 @@ describe('outcome allocation data reads', () => {
       record.table === 'Transfer_Payment_Stream_Chart_of_Account'
       && record.selections.some(selection => Array.isArray(selection[0]))
     )
-    expect(streamLinesQuery?.wheres).toEqual([
+    expect(streamLinesQuery?.wheres).toEqual(expect.arrayContaining([
       ['Transfer_Payment_Stream_Chart_of_Account.egcs_tp_transferpaymentstream', '=', 'stream-1'],
       ['Transfer_Payment_Stream_Chart_of_Account._deleted', '=', false],
+      ['Agency_Chart_of_Account._deleted', '=', false],
       ['Transfer_Payment_Stream_Budget._deleted', '=', false],
       ['Transfer_Payment_Fiscal_Year_Budget._deleted', '=', false],
       ['Agency_Fiscal_Year._deleted', '=', false]
-    ])
+    ]))
     expect(streamLinesQuery?.joins.map(join => join.predicates)).toEqual([
       [[
         'onRef',
-        'Transfer_Payment_Stream_Budget.id',
-        'Transfer_Payment_Stream_Chart_of_Account.egcs_tp_streambudget'
+        'Transfer_Payment_Stream.id',
+        'Transfer_Payment_Stream_Chart_of_Account.egcs_tp_transferpaymentstream'
       ]],
       [[
         'onRef',
-        'Transfer_Payment_Fiscal_Year_Budget.id',
-        'Transfer_Payment_Stream_Budget.egcs_tp_transferpaymentbudget'
+        'Agency_Chart_of_Account.id',
+        'Transfer_Payment_Stream_Chart_of_Account.egcs_tp_agencychartofaccount'
       ]],
       [[
         'onRef',
         'Agency_Fiscal_Year.id',
-        'Transfer_Payment_Fiscal_Year_Budget.egcs_tp_fiscalyear'
+        'Agency_Chart_of_Account.egcs_ay_fiscalyear'
+      ]],
+      [[
+        'onRef',
+        'Transfer_Payment_Fiscal_Year_Budget.egcs_tp_fiscalyear',
+        'Agency_Fiscal_Year.id'
+      ]],
+      [[
+        'onRef',
+        'Transfer_Payment_Stream_Budget.egcs_tp_transferpaymentbudget',
+        'Transfer_Payment_Fiscal_Year_Budget.id'
       ]]
     ])
   })

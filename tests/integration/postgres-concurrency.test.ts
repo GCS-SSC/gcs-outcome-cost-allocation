@@ -659,39 +659,52 @@ describe('outcome allocation PostgreSQL concurrency', () => {
       )
     `.execute(observerDb)
     await sql`
+      CREATE TABLE "Agency_Chart_of_Account" (
+        id bigint PRIMARY KEY,
+        egcs_ay_fiscalyear bigint NOT NULL,
+        egcs_ay_accountingdimensions jsonb NOT NULL DEFAULT '[]'::jsonb,
+        _deleted boolean NOT NULL DEFAULT false
+      )
+    `.execute(observerDb)
+    await sql`
       CREATE TABLE "Transfer_Payment_Stream_Chart_of_Account" (
         id bigint PRIMARY KEY,
-        egcs_tp_streambudget bigint NOT NULL,
+        egcs_tp_agencychartofaccount bigint NOT NULL,
         egcs_tp_transferpaymentstream bigint NOT NULL,
-        egcs_tp_gl integer NOT NULL,
-        egcs_tp_gldescription text NOT NULL,
-        egcs_tp_accountingdimensions jsonb NOT NULL DEFAULT '[]'::jsonb,
+        _deleted boolean NOT NULL DEFAULT false
+      )
+    `.execute(observerDb)
+    await sql`
+      CREATE TABLE "Agency_Commitment_Type" (
+        id bigint PRIMARY KEY,
+        egcs_ay_name_en text NOT NULL,
+        egcs_ay_name_fr text NOT NULL,
         _deleted boolean NOT NULL DEFAULT false
       )
     `.execute(observerDb)
     await sql`
       CREATE TABLE "Transfer_Payment_Stream_Commitment_Type" (
         id bigint PRIMARY KEY,
-        egcs_tp_name_en text NOT NULL,
-        egcs_tp_name_fr text NOT NULL,
+        egcs_tp_agencycommitmenttype bigint NOT NULL,
         egcs_tp_transferpaymentstream bigint NOT NULL,
         _deleted boolean NOT NULL DEFAULT false
       )
     `.execute(observerDb)
     await sql`
+      INSERT INTO "Agency_Commitment_Type" (id, egcs_ay_name_en, egcs_ay_name_fr) VALUES
+        (1, 'Grant', 'Subvention'), (2, 'Contribution', 'Contribution'),
+        (3, 'Grant', 'Subvention'), (4, 'Grant', 'Subvention'),
+        (5, 'Grant', 'Subvention'), (6, 'Contribution', 'Contribution'),
+        (7, 'Grant', 'Subvention'), (10, 'Grant', 'Subvention'),
+        (11, 'Grant', 'Subvention'), (12, 'Grant', 'Subvention')
+    `.execute(observerDb)
+    await sql`
       INSERT INTO "Transfer_Payment_Stream_Commitment_Type" (
-        id, egcs_tp_name_en, egcs_tp_name_fr, egcs_tp_transferpaymentstream
+        id, egcs_tp_agencycommitmenttype, egcs_tp_transferpaymentstream
       ) VALUES
-        (1, 'Grant', 'Subvention', 2),
-        (2, 'Contribution', 'Contribution', 2),
-        (3, 'Grant', 'Subvention', 3),
-        (4, 'Grant', 'Subvention', 4),
-        (5, 'Grant', 'Subvention', 5),
-        (6, 'Contribution', 'Contribution', 5),
-        (7, 'Grant', 'Subvention', 6),
-        (10, 'Grant', 'Subvention', 10),
-        (11, 'Grant', 'Subvention', 11),
-        (12, 'Grant', 'Subvention', 12)
+        (1, 1, 2), (2, 2, 2), (3, 3, 3), (4, 4, 4),
+        (5, 5, 5), (6, 6, 5), (7, 7, 6),
+        (10, 10, 10), (11, 11, 11), (12, 12, 12)
     `.execute(observerDb)
     await sql`
       CREATE TABLE "Funding_Case_Agreement_Commitment" (
@@ -912,18 +925,21 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         (74, 64, 6)
     `.execute(observerDb)
     await sql`
+      INSERT INTO "Agency_Chart_of_Account" (id, egcs_ay_fiscalyear, egcs_ay_accountingdimensions) VALUES
+        (10, 50, '[{"label_en":"G/L","label_fr":"G/L","value":"5000"}]'::jsonb),
+        (11, 50, '[{"label_en":"G/L","label_fr":"G/L","value":"5001"}]'::jsonb),
+        (12, 50, '[{"label_en":"G/L","label_fr":"G/L","value":"5002"}]'::jsonb),
+        (13, 50, '[{"label_en":"G/L","label_fr":"G/L","value":"5003"}]'::jsonb),
+        (14, 50, '[{"label_en":"G/L","label_fr":"G/L","value":"5004"}]'::jsonb)
+    `.execute(observerDb)
+    await sql`
       INSERT INTO "Transfer_Payment_Stream_Chart_of_Account" (
         id,
-        egcs_tp_streambudget,
-        egcs_tp_transferpaymentstream,
-        egcs_tp_gl,
-        egcs_tp_gldescription
+        egcs_tp_agencychartofaccount,
+        egcs_tp_transferpaymentstream
       ) VALUES
-        (10, 70, 2, 5000, 'Program'),
-        (11, 71, 3, 5001, 'Program 2'),
-        (12, 72, 4, 5002, 'Program 3'),
-        (13, 73, 5, 5003, 'Program 4'),
-        (14, 74, 6, 5004, 'Program 5')
+        (10, 10, 2), (11, 11, 3), (12, 12, 4),
+        (13, 13, 5), (14, 14, 6)
     `.execute(observerDb)
     await sql`
       INSERT INTO extensions.agency_enablement (
@@ -1013,9 +1029,9 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         FOREIGN KEY (egcs_tp_transferpaymentstream)
         REFERENCES "Transfer_Payment_Stream" (id) ON DELETE RESTRICT;
       ALTER TABLE "Transfer_Payment_Stream_Chart_of_Account"
-        ADD CONSTRAINT test_tp_stream_commitment_budget_fk
-        FOREIGN KEY (egcs_tp_streambudget)
-        REFERENCES "Transfer_Payment_Stream_Budget" (id) ON DELETE RESTRICT,
+        ADD CONSTRAINT test_tp_stream_commitment_agency_chart_fk
+        FOREIGN KEY (egcs_tp_agencychartofaccount)
+        REFERENCES "Agency_Chart_of_Account" (id) ON DELETE RESTRICT,
         ADD CONSTRAINT test_tp_stream_commitment_stream_fk
         FOREIGN KEY (egcs_tp_transferpaymentstream)
         REFERENCES "Transfer_Payment_Stream" (id) ON DELETE RESTRICT;
@@ -2617,13 +2633,10 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         egcs_tp_transferpaymentbudget,
         egcs_tp_transferpaymentstream
       ) VALUES (78, 68, 12);
-      INSERT INTO "Transfer_Payment_Stream_Chart_of_Account" (
-        id,
-        egcs_tp_streambudget,
-        egcs_tp_transferpaymentstream,
-        egcs_tp_gl,
-        egcs_tp_gldescription
-      ) VALUES (20, 78, 12, 5009, 'Program 9');
+      INSERT INTO "Agency_Chart_of_Account" (id, egcs_ay_fiscalyear, egcs_ay_accountingdimensions)
+      VALUES (20, 50, '[{"label_en":"G/L","label_fr":"G/L","value":"5009"}]'::jsonb);
+      INSERT INTO "Transfer_Payment_Stream_Chart_of_Account" (id, egcs_tp_agencychartofaccount, egcs_tp_transferpaymentstream)
+      VALUES (20, 20, 12);
       INSERT INTO "Funding_Case_Agreement_Commitment" (
         id,
         egcs_fc_fundingagreement,
@@ -3058,8 +3071,8 @@ describe('outcome allocation PostgreSQL concurrency', () => {
     const description = 'Long allocation commitment description '.repeat(20)
     try {
       await observerDb
-        .updateTable('Transfer_Payment_Stream_Chart_of_Account')
-        .set({ egcs_tp_accountingdimensions: JSON.stringify([{ label_en: 'G/L', label_fr: 'G/L', value: '5000' }, { label_en: 'Description', label_fr: 'Description', value: description }]) as never })
+        .updateTable('Agency_Chart_of_Account')
+        .set({ egcs_ay_accountingdimensions: JSON.stringify([{ label_en: 'G/L', label_fr: 'G/L', value: '5000' }, { label_en: 'Description', label_fr: 'Description', value: description }]) as never })
         .where('id', '=', '10')
         .execute()
       await expect(completeAllocationVersion(
@@ -3083,8 +3096,8 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         .where('status', '=', 'active')
         .execute())
       await observerDb
-        .updateTable('Transfer_Payment_Stream_Chart_of_Account')
-        .set({ egcs_tp_accountingdimensions: JSON.stringify([{ label_en: 'G/L', label_fr: 'G/L', value: '5000' }]) as never })
+        .updateTable('Agency_Chart_of_Account')
+        .set({ egcs_ay_accountingdimensions: JSON.stringify([{ label_en: 'G/L', label_fr: 'G/L', value: '5000' }]) as never })
         .where('id', '=', '10')
         .execute()
     }
@@ -3362,9 +3375,21 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         streamCommitmentId: '10'
       }]
     }
+    await sql`
+      INSERT INTO "Agency_Fiscal_Year" (id, egcs_ay_fiscalyeardisplay, egcs_ay_fiscalyear)
+      VALUES (51, '2027-2028', 2027)
+    `.execute(observerDb)
+    await sql`
+      INSERT INTO "Transfer_Payment_Fiscal_Year_Budget" (id, egcs_tp_transferpaymentprofile, egcs_tp_fiscalyear)
+      VALUES (65, 200, 51)
+    `.execute(observerDb)
+    await sql`
+      INSERT INTO "Transfer_Payment_Stream_Budget" (id, egcs_tp_transferpaymentbudget, egcs_tp_transferpaymentstream)
+      VALUES (75, 65, 2)
+    `.execute(observerDb)
     await observerDb
-      .updateTable('Transfer_Payment_Stream_Chart_of_Account')
-      .set({ egcs_tp_streambudget: '71' })
+      .updateTable('Agency_Chart_of_Account')
+      .set({ egcs_ay_fiscalyear: '51' })
       .where('id', '=', '10')
       .execute()
     await expect(completeAllocationVersion(
@@ -3379,8 +3404,8 @@ describe('outcome allocation PostgreSQL concurrency', () => {
       }]
     })
     await observerDb
-      .updateTable('Transfer_Payment_Stream_Chart_of_Account')
-      .set({ egcs_tp_streambudget: '70' })
+      .updateTable('Agency_Chart_of_Account')
+      .set({ egcs_ay_fiscalyear: '50' })
       .where('id', '=', '10')
       .execute()
 
@@ -3453,16 +3478,16 @@ describe('outcome allocation PostgreSQL concurrency', () => {
       })
 
       await expect(observerDb
-        .updateTable('Transfer_Payment_Stream_Chart_of_Account')
-        .set({ egcs_tp_streambudget: '71' })
+        .updateTable('Agency_Chart_of_Account')
+        .set({ egcs_ay_fiscalyear: '51' })
         .where('id', '=', '10')
         .execute()).rejects.toMatchObject({
         code: '23514',
-        constraint: 'gcs_outcome_cost_allocation_active_stream_commitment_guard'
+        constraint: 'gcs_outcome_cost_allocation_active_agency_chart_guard'
       })
       await expect(observerDb
-        .updateTable('Transfer_Payment_Stream_Chart_of_Account')
-        .set({ egcs_tp_accountingdimensions: JSON.stringify([{ label_en: 'G/L', label_fr: 'G/L', value: '5000' }, { label_en: 'Description', label_fr: 'Description', value: 'Updated program description' }]) as never })
+        .updateTable('Agency_Chart_of_Account')
+        .set({ egcs_ay_accountingdimensions: JSON.stringify([{ label_en: 'G/L', label_fr: 'G/L', value: '5000' }, { label_en: 'Description', label_fr: 'Description', value: 'Updated program description' }]) as never })
         .where('id', '=', '10')
         .execute()).resolves.toBeDefined()
       await observerDb
@@ -3548,13 +3573,10 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         egcs_tp_transferpaymentbudget,
         egcs_tp_transferpaymentstream
       ) VALUES (76, 66, 10);
-      INSERT INTO "Transfer_Payment_Stream_Chart_of_Account" (
-        id,
-        egcs_tp_streambudget,
-        egcs_tp_transferpaymentstream,
-        egcs_tp_gl,
-        egcs_tp_gldescription
-      ) VALUES (17, 76, 10, 5006, 'Program 6')
+      INSERT INTO "Agency_Chart_of_Account" (id, egcs_ay_fiscalyear, egcs_ay_accountingdimensions)
+      VALUES (17, 50, '[{"label_en":"G/L","label_fr":"G/L","value":"5006"}]'::jsonb);
+      INSERT INTO "Transfer_Payment_Stream_Chart_of_Account" (id, egcs_tp_agencychartofaccount, egcs_tp_transferpaymentstream)
+      VALUES (17, 17, 10)
     `.execute(observerDb)
 
     const version = await managedMutation(observerDb, '910000', async trx => {
@@ -3743,15 +3765,11 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         egcs_tp_transferpaymentbudget,
         egcs_tp_transferpaymentstream
       ) VALUES (77, 67, 11);
-      INSERT INTO "Transfer_Payment_Stream_Chart_of_Account" (
-        id,
-        egcs_tp_streambudget,
-        egcs_tp_transferpaymentstream,
-        egcs_tp_gl,
-        egcs_tp_gldescription
-      ) VALUES
-        (18, 77, 11, 5007, 'Program 7'),
-        (19, 77, 11, 5008, 'Program 8');
+      INSERT INTO "Agency_Chart_of_Account" (id, egcs_ay_fiscalyear, egcs_ay_accountingdimensions) VALUES
+        (18, 50, '[{"label_en":"G/L","label_fr":"G/L","value":"5007"}]'::jsonb),
+        (19, 50, '[{"label_en":"G/L","label_fr":"G/L","value":"5008"}]'::jsonb);
+      INSERT INTO "Transfer_Payment_Stream_Chart_of_Account" (id, egcs_tp_agencychartofaccount, egcs_tp_transferpaymentstream) VALUES
+        (18, 18, 11), (19, 19, 11);
       INSERT INTO "Funding_Case_Agreement_Commitment" (
         id,
         egcs_fc_fundingagreement,
@@ -4163,13 +4181,10 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         egcs_fc_fundingagreementbudgetfiscalyear,
         egcs_fc_programfunding
       ) VALUES (299, '1000299', 100);
-      INSERT INTO "Transfer_Payment_Stream_Chart_of_Account" (
-        id,
-        egcs_tp_streambudget,
-        egcs_tp_transferpaymentstream,
-        egcs_tp_gl,
-        egcs_tp_gldescription
-      ) VALUES (299, 70, 2, 5299, 'Lock order')
+      INSERT INTO "Agency_Chart_of_Account" (id, egcs_ay_fiscalyear, egcs_ay_accountingdimensions)
+      VALUES (299, 50, '[{"label_en":"G/L","label_fr":"G/L","value":"5299"}]'::jsonb);
+      INSERT INTO "Transfer_Payment_Stream_Chart_of_Account" (id, egcs_tp_agencychartofaccount, egcs_tp_transferpaymentstream)
+      VALUES (299, 299, 2)
     `.execute(observerDb)
     const version = await createDraftAllocationVersion(observerDb, '99')
     const config = {

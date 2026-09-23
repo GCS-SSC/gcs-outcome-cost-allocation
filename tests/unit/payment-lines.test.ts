@@ -129,6 +129,10 @@ class FakeQuery {
     return this
   }
 
+  whereRef() {
+    return this
+  }
+
   async executeTakeFirst() {
     return (await this.execute())[0]
   }

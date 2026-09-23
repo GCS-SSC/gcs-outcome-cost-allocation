@@ -83,16 +83,26 @@ export interface OutcomeCostAllocationHostDatabase {
   }
   'Transfer_Payment_Stream_Chart_of_Account': {
     id: string
-    egcs_tp_streambudget: string
+    egcs_tp_agencychartofaccount: string
     egcs_tp_transferpaymentstream: string
-    egcs_tp_accountingdimensions: JSONColumnType<Array<{ label_en: string, label_fr: string, value: string }>>
+    _deleted: boolean
+  }
+  'Agency_Chart_of_Account': {
+    id: string
+    egcs_ay_fiscalyear: string
+    egcs_ay_accountingdimensions: JSONColumnType<Array<{ label_en: string, label_fr: string, value: string }>>
     _deleted: boolean
   }
   'Transfer_Payment_Stream_Commitment_Type': {
     id: string
-    egcs_tp_name_en: string
-    egcs_tp_name_fr: string
+    egcs_tp_agencycommitmenttype: string
     egcs_tp_transferpaymentstream: string
+    _deleted: boolean
+  }
+  'Agency_Commitment_Type': {
+    id: string
+    egcs_ay_name_en: string
+    egcs_ay_name_fr: string
     _deleted: boolean
   }
   'Agency_Fiscal_Year': {

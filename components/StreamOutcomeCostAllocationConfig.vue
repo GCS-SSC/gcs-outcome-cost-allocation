@@ -38,20 +38,21 @@ interface OutcomeItem {
 
 interface StreamBudgetItem {
   id: string
+  egcs_tp_fiscalyear: string
   fiscal_year_display: string
 }
 
 interface StreamCommitmentItem {
   id: string
-  egcs_tp_streambudget: string
-  egcs_tp_accountingdimensions: Array<{ label_en: string, label_fr: string, value: string }>
+  egcs_ay_fiscalyear: string
+  egcs_ay_accountingdimensions: Array<{ label_en: string, label_fr: string, value: string }>
   fiscal_year_display: string
 }
 
 interface CommitmentTypeItem {
   id: string
-  egcs_tp_name_en: string
-  egcs_tp_name_fr: string
+  egcs_ay_name_en: string
+  egcs_ay_name_fr: string
 }
 
 interface AssociationDraft {
@@ -128,7 +129,7 @@ const commitmentTypes = computed<CommitmentTypeItem[]>(() => commitmentTypesResp
 const isFrench = computed(() => locale.value === 'fr')
 
 const commitmentTypeOptions = computed(() => commitmentTypes.value.map(type => ({
-  label: isFrench.value ? type.egcs_tp_name_fr : type.egcs_tp_name_en,
+  label: isFrench.value ? type.egcs_ay_name_fr : type.egcs_ay_name_en,
   value: String(type.id)
 })))
 
@@ -159,13 +160,13 @@ const mappingColumns = computed(() => [
   }
 ])
 
-const getCommitmentLineLabel = (commitment: StreamCommitmentItem) => commitment.egcs_tp_accountingdimensions
+const getCommitmentLineLabel = (commitment: StreamCommitmentItem) => commitment.egcs_ay_accountingdimensions
   .map(dimension => `${isFrench.value ? dimension.label_fr : dimension.label_en}: ${dimension.value}`)
   .join(' · ')
 
 const getCommitmentTypeLabel = (typeId: string) => {
   const type = commitmentTypes.value.find(item => String(item.id) === typeId)
-  return type ? (isFrench.value ? type.egcs_tp_name_fr : type.egcs_tp_name_en) : typeId
+  return type ? (isFrench.value ? type.egcs_ay_name_fr : type.egcs_ay_name_en) : typeId
 }
 
 const outcomeLabel = (outcome: OutcomeItem) => isFrench.value
@@ -179,6 +180,9 @@ const getOutcomeName = (outcomeId: string) => {
 
 const getBudgetDisplay = (streamBudgetId: string) =>
   budgets.value.find((budget: StreamBudgetItem) => String(budget.id) === streamBudgetId)?.fiscal_year_display ?? streamBudgetId
+
+const getStreamBudgetIdForChart = (commitment: StreamCommitmentItem) => budgets.value
+  .find(budget => String(budget.egcs_tp_fiscalyear) === String(commitment.egcs_ay_fiscalyear))?.id
 
 const associationRows = computed<StreamOutcomeAssociationTableRow[]>(() => localConfig.value.mappings.map(mapping => {
   const commitment = findCommitment(mapping.streamCommitmentId)
@@ -249,14 +253,15 @@ const saveAssociation = () => {
 
   const draft = selectedAssociation.value
   const commitment = findCommitment(draft.streamCommitmentId)
-  if (!commitment || !draft.outcomeId) {
+  const streamBudgetId = commitment ? getStreamBudgetIdForChart(commitment) : undefined
+  if (!commitment || !streamBudgetId || !draft.outcomeId) {
     return
   }
 
   const nextMapping: StreamCommitmentMapping = {
     commitmentType: draft.commitmentType,
     outcomeId: draft.outcomeId,
-    streamBudgetId: String(commitment.egcs_tp_streambudget),
+    streamBudgetId: String(streamBudgetId),
     streamCommitmentId: String(commitment.id)
   }
   const mappings = [

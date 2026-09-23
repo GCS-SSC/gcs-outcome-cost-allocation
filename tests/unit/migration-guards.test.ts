@@ -177,18 +177,31 @@ describe('outcome allocation generated-record database guards', () => {
       )
     `.execute(db)
     await sql`
-      CREATE TABLE "Transfer_Payment_Stream_Chart_of_Account" (
+      CREATE TABLE "Agency_Chart_of_Account" (
         id bigint PRIMARY KEY,
-        egcs_tp_streambudget bigint NOT NULL,
-        egcs_tp_transferpaymentstream bigint NOT NULL,
-        egcs_tp_accountingdimensions jsonb NOT NULL DEFAULT '[]'::jsonb,
+        egcs_ay_fiscalyear bigint NOT NULL,
+        egcs_ay_accountingdimensions jsonb NOT NULL DEFAULT '[]'::jsonb,
         _deleted boolean NOT NULL DEFAULT false
       )
     `.execute(db)
+    await sql`
+      CREATE TABLE "Transfer_Payment_Stream_Chart_of_Account" (
+        id bigint PRIMARY KEY,
+        egcs_tp_agencychartofaccount bigint NOT NULL,
+        egcs_tp_transferpaymentstream bigint NOT NULL,
+        _deleted boolean NOT NULL DEFAULT false
+      )
+    `.execute(db)
+    await sql`CREATE TABLE "Agency_Commitment_Type" (
+        id bigint PRIMARY KEY,
+        egcs_ay_name_en text NOT NULL DEFAULT '',
+        egcs_ay_name_fr text NOT NULL DEFAULT '',
+        _deleted boolean NOT NULL DEFAULT false
+      )`.execute(db)
     await sql`CREATE TABLE "Transfer_Payment_Stream_Commitment_Type" (
         id bigint PRIMARY KEY,
         egcs_tp_transferpaymentstream bigint NOT NULL,
-        egcs_tp_name_en text NOT NULL DEFAULT '',
+        egcs_tp_agencycommitmenttype bigint NOT NULL,
         _deleted boolean NOT NULL DEFAULT false
       )`.execute(db)
     await sql`
@@ -289,7 +302,8 @@ describe('outcome allocation generated-record database guards', () => {
     await sql`INSERT INTO "Funding_Case_Agreement_Profile" (id, egcs_fc_transferpaymentstream) VALUES (1, 200)`.execute(db)
     await sql`INSERT INTO "Funding_Case_Agreement_Budget_Version" (id, egcs_fc_fundingagreement, egcs_fc_iscurrent) VALUES (2, 1, true)`.execute(db)
     await sql`INSERT INTO "Transfer_Payment_Stream" (id, egcs_tp_transferpaymentprofile) VALUES (200, 300)`.execute(db)
-    await sql`INSERT INTO "Transfer_Payment_Stream_Commitment_Type" (id, egcs_tp_transferpaymentstream) VALUES (1, 200)`.execute(db)
+    await sql`INSERT INTO "Agency_Commitment_Type" (id, egcs_ay_name_en, egcs_ay_name_fr) VALUES (1, 'Grant', 'Subvention')`.execute(db)
+    await sql`INSERT INTO "Transfer_Payment_Stream_Commitment_Type" (id, egcs_tp_transferpaymentstream, egcs_tp_agencycommitmenttype) VALUES (1, 200, 1)`.execute(db)
     await sql`
       INSERT INTO "Agency_Fiscal_Year" (
         id,
@@ -311,14 +325,10 @@ describe('outcome allocation generated-record database guards', () => {
         egcs_tp_transferpaymentbudget
       ) VALUES (100, 200, 500)
     `.execute(db)
-    await sql`
-      INSERT INTO "Transfer_Payment_Stream_Chart_of_Account" (
-        id,
-        egcs_tp_streambudget,
-        egcs_tp_transferpaymentstream,
-        egcs_tp_accountingdimensions
-      ) VALUES (10, 100, 200, '[{"label_en":"G/L","label_fr":"G/L","value":"5000"}]'::jsonb)
-    `.execute(db)
+    await sql`INSERT INTO "Agency_Chart_of_Account" (id, egcs_ay_fiscalyear, egcs_ay_accountingdimensions)
+      VALUES (10, 400, '[{"label_en":"G/L","label_fr":"G/L","value":"5000"}]'::jsonb)`.execute(db)
+    await sql`INSERT INTO "Transfer_Payment_Stream_Chart_of_Account" (id, egcs_tp_agencychartofaccount, egcs_tp_transferpaymentstream)
+      VALUES (10, 10, 200)`.execute(db)
     await sql`
       INSERT INTO "Funding_Case_Agreement_Budget_Fiscal_Year" (
         id,
@@ -854,7 +864,7 @@ describe('outcome allocation generated-record database guards', () => {
       'gcs_outcome_cost_allocation_active_stream_commitment_guard'
     )
     await expectGuardConstraint(
-      sql`UPDATE "Transfer_Payment_Stream_Chart_of_Account" SET egcs_tp_streambudget = 101 WHERE id = 10`.execute(db),
+      sql`UPDATE "Transfer_Payment_Stream_Chart_of_Account" SET egcs_tp_agencychartofaccount = 11 WHERE id = 10`.execute(db),
       'gcs_outcome_cost_allocation_active_stream_commitment_guard'
     )
     await expectGuardConstraint(
@@ -863,10 +873,14 @@ describe('outcome allocation generated-record database guards', () => {
     )
 
     await expect(sql`
-      UPDATE "Transfer_Payment_Stream_Chart_of_Account"
-      SET egcs_tp_accountingdimensions = '[{"label_en":"G/L","label_fr":"G/L","value":"5001"}]'::jsonb
+      UPDATE "Agency_Chart_of_Account"
+      SET egcs_ay_accountingdimensions = '[{"label_en":"G/L","label_fr":"G/L","value":"5001"}]'::jsonb
       WHERE id = 10
     `.execute(db)).resolves.toBeDefined()
+    await expectGuardConstraint(
+      sql`UPDATE "Agency_Chart_of_Account" SET egcs_ay_fiscalyear = 401 WHERE id = 10`.execute(db),
+      'gcs_outcome_cost_allocation_active_agency_chart_guard'
+    )
   })
 
   it('blocks deletion and reassignment of budget mapping rows used by active allocations', async () => {

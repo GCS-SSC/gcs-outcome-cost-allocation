@@ -75,20 +75,26 @@ export interface StreamCommitmentType {
   label_fr: string
 }
 
-/** Lists stream-owned commitment types used as stable allocation dimensions. */
+/** Lists stream-linked Agency commitment types used as stable allocation dimensions. */
 export const getStreamCommitmentTypes = async (
   db: OutcomeCostAllocationDb,
   streamId: string
 ): Promise<StreamCommitmentType[]> => (await db
   .selectFrom('Transfer_Payment_Stream_Commitment_Type')
-  .where('egcs_tp_transferpaymentstream', '=', streamId)
-  .where('_deleted', '=', false)
-  .select(['id', 'egcs_tp_name_en', 'egcs_tp_name_fr'])
-  .orderBy('id', 'asc')
+  .innerJoin('Agency_Commitment_Type', 'Agency_Commitment_Type.id', 'Transfer_Payment_Stream_Commitment_Type.egcs_tp_agencycommitmenttype')
+  .where('Transfer_Payment_Stream_Commitment_Type.egcs_tp_transferpaymentstream', '=', streamId)
+  .where('Transfer_Payment_Stream_Commitment_Type._deleted', '=', false)
+  .where('Agency_Commitment_Type._deleted', '=', false)
+  .select([
+    'Transfer_Payment_Stream_Commitment_Type.id as id',
+    'Agency_Commitment_Type.egcs_ay_name_en',
+    'Agency_Commitment_Type.egcs_ay_name_fr'
+  ])
+  .orderBy('Transfer_Payment_Stream_Commitment_Type.id', 'asc')
   .execute()).map(row => ({
   id: String(row.id),
-  label_en: row.egcs_tp_name_en,
-  label_fr: row.egcs_tp_name_fr
+  label_en: row.egcs_ay_name_en,
+  label_fr: row.egcs_ay_name_fr
 }))
 
 type GeneratedAllocationLine = {
@@ -989,38 +995,43 @@ export const getStreamCommitmentLines = async (
   streamId: string
 ): Promise<StreamCommitmentLine[]> => await db
   .selectFrom('Transfer_Payment_Stream_Chart_of_Account')
-  .innerJoin(
-    'Transfer_Payment_Stream_Budget',
-    'Transfer_Payment_Stream_Budget.id',
-    'Transfer_Payment_Stream_Chart_of_Account.egcs_tp_streambudget'
-  )
-  .innerJoin(
-    'Transfer_Payment_Fiscal_Year_Budget',
-    'Transfer_Payment_Fiscal_Year_Budget.id',
-    'Transfer_Payment_Stream_Budget.egcs_tp_transferpaymentbudget'
-  )
+  .innerJoin('Transfer_Payment_Stream', 'Transfer_Payment_Stream.id', 'Transfer_Payment_Stream_Chart_of_Account.egcs_tp_transferpaymentstream')
+  .innerJoin('Agency_Chart_of_Account', 'Agency_Chart_of_Account.id', 'Transfer_Payment_Stream_Chart_of_Account.egcs_tp_agencychartofaccount')
   .innerJoin(
     'Agency_Fiscal_Year',
     'Agency_Fiscal_Year.id',
-    'Transfer_Payment_Fiscal_Year_Budget.egcs_tp_fiscalyear'
+    'Agency_Chart_of_Account.egcs_ay_fiscalyear'
+  )
+  .innerJoin(
+    'Transfer_Payment_Fiscal_Year_Budget',
+    'Transfer_Payment_Fiscal_Year_Budget.egcs_tp_fiscalyear',
+    'Agency_Fiscal_Year.id'
+  )
+  .innerJoin(
+    'Transfer_Payment_Stream_Budget',
+    'Transfer_Payment_Stream_Budget.egcs_tp_transferpaymentbudget',
+    'Transfer_Payment_Fiscal_Year_Budget.id'
   )
   .where('Transfer_Payment_Stream_Chart_of_Account.egcs_tp_transferpaymentstream', '=', streamId)
   .where('Transfer_Payment_Stream_Chart_of_Account._deleted', '=', false)
+  .whereRef('Transfer_Payment_Fiscal_Year_Budget.egcs_tp_transferpaymentprofile', '=', 'Transfer_Payment_Stream.egcs_tp_transferpaymentprofile')
+  .where('Agency_Chart_of_Account._deleted', '=', false)
+  .whereRef('Transfer_Payment_Stream_Budget.egcs_tp_transferpaymentstream', '=', 'Transfer_Payment_Stream_Chart_of_Account.egcs_tp_transferpaymentstream')
   .where('Transfer_Payment_Stream_Budget._deleted', '=', false)
   .where('Transfer_Payment_Fiscal_Year_Budget._deleted', '=', false)
   .where('Agency_Fiscal_Year._deleted', '=', false)
   .select([
     'Transfer_Payment_Stream_Chart_of_Account.id as id',
-    'Transfer_Payment_Stream_Chart_of_Account.egcs_tp_streambudget as stream_budget_id',
+    'Transfer_Payment_Stream_Budget.id as stream_budget_id',
     'Agency_Fiscal_Year.egcs_ay_fiscalyeardisplay as fiscal_year_display',
     sql<string>`COALESCE((
       SELECT string_agg(concat(dimension->>'label_en', ': ', dimension->>'value'), ' · ' ORDER BY ordinal)
-      FROM jsonb_array_elements("Transfer_Payment_Stream_Chart_of_Account".egcs_tp_accountingdimensions)
+      FROM jsonb_array_elements("Agency_Chart_of_Account".egcs_ay_accountingdimensions)
         WITH ORDINALITY AS dimensions(dimension, ordinal)
     ), '')`.as('label_en'),
     sql<string>`COALESCE((
       SELECT string_agg(concat(dimension->>'label_fr', ' : ', dimension->>'value'), ' · ' ORDER BY ordinal)
-      FROM jsonb_array_elements("Transfer_Payment_Stream_Chart_of_Account".egcs_tp_accountingdimensions)
+      FROM jsonb_array_elements("Agency_Chart_of_Account".egcs_ay_accountingdimensions)
         WITH ORDINALITY AS dimensions(dimension, ordinal)
     ), '')`.as('label_fr')
   ])
@@ -1511,6 +1522,7 @@ const snapshotAllocationEconomics = async (
       'Transfer_Payment_Stream_Chart_of_Account.id',
       'extensions.gcs_outcome_cost_allocation_allocations.stream_commitment_id'
     )
+    .innerJoin('Agency_Chart_of_Account', 'Agency_Chart_of_Account.id', 'Transfer_Payment_Stream_Chart_of_Account.egcs_tp_agencychartofaccount')
     .where('extensions.gcs_outcome_cost_allocation_allocations.agreement_id', '=', agreementId)
     .where('extensions.gcs_outcome_cost_allocation_allocations.allocation_version_id', '=', allocationVersionId)
     .where('extensions.gcs_outcome_cost_allocation_allocations._deleted', '=', false)
@@ -1529,12 +1541,12 @@ const snapshotAllocationEconomics = async (
       'Agency_Fiscal_Year.egcs_ay_fiscalyeardisplay as fiscal_year_display',
       sql<string>`COALESCE((
         SELECT string_agg(concat(dimension->>'label_en', ': ', dimension->>'value'), ' · ' ORDER BY ordinal)
-        FROM jsonb_array_elements("Transfer_Payment_Stream_Chart_of_Account".egcs_tp_accountingdimensions)
+        FROM jsonb_array_elements("Agency_Chart_of_Account".egcs_ay_accountingdimensions)
           WITH ORDINALITY AS dimensions(dimension, ordinal)
       ), '')`.as('commitment_label_en'),
       sql<string>`COALESCE((
         SELECT string_agg(concat(dimension->>'label_fr', ' : ', dimension->>'value'), ' · ' ORDER BY ordinal)
-        FROM jsonb_array_elements("Transfer_Payment_Stream_Chart_of_Account".egcs_tp_accountingdimensions)
+        FROM jsonb_array_elements("Agency_Chart_of_Account".egcs_ay_accountingdimensions)
           WITH ORDINALITY AS dimensions(dimension, ordinal)
       ), '')`.as('commitment_label_fr')
     ])
@@ -1836,11 +1848,20 @@ export const getActiveStreamCommitmentBudgetIds = async (
 ): Promise<Map<string, string>> => {
   let query = db
     .selectFrom('Transfer_Payment_Stream_Chart_of_Account')
-    .where('egcs_tp_transferpaymentstream', '=', streamId)
-    .where('_deleted', '=', false)
+    .innerJoin('Transfer_Payment_Stream', 'Transfer_Payment_Stream.id', 'Transfer_Payment_Stream_Chart_of_Account.egcs_tp_transferpaymentstream')
+    .innerJoin('Agency_Chart_of_Account', 'Agency_Chart_of_Account.id', 'Transfer_Payment_Stream_Chart_of_Account.egcs_tp_agencychartofaccount')
+    .innerJoin('Transfer_Payment_Fiscal_Year_Budget', 'Transfer_Payment_Fiscal_Year_Budget.egcs_tp_fiscalyear', 'Agency_Chart_of_Account.egcs_ay_fiscalyear')
+    .innerJoin('Transfer_Payment_Stream_Budget', 'Transfer_Payment_Stream_Budget.egcs_tp_transferpaymentbudget', 'Transfer_Payment_Fiscal_Year_Budget.id')
+    .where('Transfer_Payment_Stream_Chart_of_Account.egcs_tp_transferpaymentstream', '=', streamId)
+    .where('Transfer_Payment_Stream_Chart_of_Account._deleted', '=', false)
+    .whereRef('Transfer_Payment_Fiscal_Year_Budget.egcs_tp_transferpaymentprofile', '=', 'Transfer_Payment_Stream.egcs_tp_transferpaymentprofile')
+    .where('Agency_Chart_of_Account._deleted', '=', false)
+    .where('Transfer_Payment_Fiscal_Year_Budget._deleted', '=', false)
+    .where('Transfer_Payment_Stream_Budget._deleted', '=', false)
+    .whereRef('Transfer_Payment_Stream_Budget.egcs_tp_transferpaymentstream', '=', 'Transfer_Payment_Stream_Chart_of_Account.egcs_tp_transferpaymentstream')
     .select([
-      'id',
-      'egcs_tp_streambudget as stream_budget_id'
+      'Transfer_Payment_Stream_Chart_of_Account.id as id',
+      'Transfer_Payment_Stream_Budget.id as stream_budget_id'
     ])
 
   if (lockForShare) {
