@@ -1,4 +1,6 @@
 import { expect, test, type APIResponse, type Page } from '@playwright/test'
+import { fromCents, sumMoney, toCents } from '../../shared/allocation'
+import { completeAndApprove, configureSingleApprovalSubmission, deleteUnsubmittedCommitmentDrafts, postNegativeCorrection } from './correction-fixture'
 
 const EXTENSION_KEY = 'gcs-outcome-cost-allocation'
 const ALLOCATION_VERSION_ENTITY_TYPE = `${EXTENSION_KEY}:allocation-version`
@@ -586,5 +588,104 @@ test('executes allocation draft, access, localization, and disable gates', async
     expect([400, 404]).toContain((await page.request.get(
       `/api/extensions/${EXTENSION_KEY}/agreements/${id}/allocations`
     )).status())
+  }
+})
+
+test('uses posted Corrections as shared Payment coverage while preserving immutable allocation weights and provenance', async ({ page, browser }, testInfo) => {
+  test.setTimeout(180_000)
+  await login(page, 'root@example.com')
+  const owner = await readShowcaseAgreement(page)
+  const approver = await browser.newPage()
+  await login(approver, 'user11@example.com')
+  try {
+    const statuses = await responseJson<Array<{ id: string; agencyId: string; nameEn: string; isDraft: boolean; terminal: boolean }>>(await page.request.get('/api/statuses'))
+    const agencyStatuses = statuses.filter(status => status.agencyId === owner.agencyId)
+    const draft = agencyStatuses.find(status => status.isDraft)!.id
+    const approved = agencyStatuses.find(status => status.nameEn === 'Approved')!.id
+    const paid = agencyStatuses.find(status => status.nameEn === 'Paid' && status.terminal)!.id
+    const denied = agencyStatuses.find(status => status.nameEn === 'Denied')!.id
+    const payments = await responseJson<{ payments: Array<{ id: string; egcs_fc_status: string }> }>(await page.request.get(`/api/agreements/${owner.agreementId}/payments-overview`))
+    for (const payment of payments.payments.filter(item => item.egcs_fc_status === draft)) {
+      await expectOk(await page.request.delete(`/api/agreements/${owner.agreementId}/payments/${payment.id}`), 'Remove an eligible seeded Payment draft')
+    }
+    await deleteUnsubmittedCommitmentDrafts(page, owner)
+    await expectOk(await page.request.patch(`/api/extensions/agency/${owner.agencyId}`, { data: { extensionKey: EXTENSION_KEY, enabled: true } }), 'Enable allocation interoperability')
+    await expectOk(await page.request.patch(`/api/extensions/streams/${owner.streamId}`, { data: { extensionKey: EXTENSION_KEY, enabled: true } }), 'Enable allocation stream interoperability')
+    // Reimbursement remains manual; Outcome Allocation owns its generated financial lines.
+    await expectOk(await page.request.patch(`/api/extensions/streams/${owner.streamId}`, { data: {
+      extensionKey: 'gcs-automated-payments', enabled: true, config: { enabledPaymentTypes: ['advance'] }
+    } }), 'Select manual reimbursement amounts')
+    type Inputs = { outcomes: Array<{ id: string }>; commitmentTypes: Array<{ id: string }>;
+      budgetYears: Array<{ id: string; stream_budget_id: string; program_funding: string }>;
+      streamCommitments: Array<{ id: string; stream_budget_id: string }>;
+      allocations: unknown[]; versions: Array<{ id: string; status: string }> }
+    const allocationsUrl = `/api/extensions/${EXTENSION_KEY}/agreements/${owner.agreementId}/allocations`
+    const inputs = await responseJson<Inputs>(await page.request.get(allocationsUrl))
+    const commitmentType = inputs.commitmentTypes[0]!.id
+    const outcomeId = inputs.outcomes[0]!.id
+    const mappings = inputs.budgetYears.flatMap(year => inputs.streamCommitments.filter(line => line.stream_budget_id === year.stream_budget_id)
+      .map(line => ({ commitmentType, outcomeId, streamBudgetId: year.stream_budget_id, streamCommitmentId: line.id })))
+    await expectOk(await page.request.patch(`/api/extensions/streams/${owner.streamId}`, { data: {
+      extensionKey: EXTENSION_KEY, enabled: true, config: { enabledCommitmentTypes: [commitmentType], mappings }
+    } }), 'Configure package-owned allocation mappings')
+    const versionId = await createAllocationVersion(page, owner.agreementId)
+    const allocations = inputs.budgetYears.flatMap(year => {
+      const lines = mappings.filter(mapping => mapping.streamBudgetId === year.stream_budget_id)
+      const total = toCents(year.program_funding)
+      const first = lines.length > 1 ? total * BigInt(4) / BigInt(5) : total
+      return lines.map((line, index) => ({ commitmentType, streamCommitmentId: line.streamCommitmentId,
+        agreementBudgetFiscalYearId: year.id, outcomeId, allocationMethod: 'amount',
+        allocationValue: fromCents(index === 0 ? first : index === 1 ? total - first : BigInt(0)) }))
+    })
+    await expectOk(await page.request.put(allocationsUrl, { data: { allocationVersionId: versionId, allocations } }), 'Save immutable allocation basis')
+    await configureSingleApprovalSubmission(page, owner, ALLOCATION_VERSION_ENTITY_TYPE, draft, approved, denied)
+    await completeAndApprove(page, approver, ALLOCATION_VERSION_ENTITY_TYPE, versionId)
+    const commitmentResponse = await page.request.post(`/api/agreements/${owner.agreementId}/commitments`, { data: { egcs_fc_type: commitmentType } })
+    await expectOk(commitmentResponse, 'Generate a Commitment from approved allocation weights')
+    const commitmentId = String((await responseJson<{ id: string }>(commitmentResponse)).id)
+    await configureSingleApprovalSubmission(page, owner, 'fundingcaseagreementcommitment', draft, approved, denied)
+    await completeAndApprove(page, approver, 'fundingcaseagreementcommitment', commitmentId)
+    const commitmentUrl = `/api/agreements/${owner.agreementId}/commitments/${commitmentId}`
+    const commitmentBefore = await responseJson<{ egcs_fc_active: boolean; lines: Array<{ id: string; egcs_fc_amount: string }> }>(await page.request.get(commitmentUrl))
+    expect(commitmentBefore.egcs_fc_active).toBe(true)
+    const year = inputs.budgetYears.find(item => toCents(item.program_funding) > BigInt(0))!
+    const createPayment = (amount: string) => page.request.post(`/api/agreements/${owner.agreementId}/payments`, { data: {
+      egcs_fc_commitmenttype: commitmentType, egcs_fc_fiscalyear: year.id, egcs_fc_paymenttype: 'reimbursement',
+      egcs_fc_periodstart: 0, egcs_fc_periodend: 2, egcs_fc_paymentamount: amount, egcs_fc_currency: 'cad'
+    } })
+    const paymentResponse = await createPayment(year.program_funding)
+    await expectOk(paymentResponse, 'Use generated weights to consume the full fiscal-year capacity')
+    const paymentId = String((await responseJson<{ id: string }>(paymentResponse)).id)
+    const paymentUrl = `/api/agreements/${owner.agreementId}/payments/${paymentId}`
+    type Payment = { lines: Array<{ egcs_fc_fundingagreementcommitmentline: string; egcs_fc_amount: string }> }
+    const generated = await responseJson<Payment>(await page.request.get(paymentUrl))
+    expect(generated.lines.filter(line => toCents(line.egcs_fc_amount) > BigInt(0)).length).toBeGreaterThan(1)
+    expect(sumMoney(generated.lines.map(line => line.egcs_fc_amount))).toBe(year.program_funding)
+    await configureSingleApprovalSubmission(page, owner, 'fundingcasepayment', draft, paid, denied)
+    await completeAndApprove(page, approver, 'fundingcasepayment', paymentId)
+    const frozenAllocations = await responseJson<Inputs>(await page.request.get(allocationsUrl))
+    expect(frozenAllocations.versions.find(version => version.id === versionId)?.status).toBe('active')
+    const correction = await postNegativeCorrection(page, approver, owner, commitmentId, paymentId)
+    expect(await responseJson(await page.request.get(allocationsUrl))).toEqual(frozenAllocations)
+    expect(await responseJson(await page.request.get(commitmentUrl))).toEqual(commitmentBefore)
+    const overdraw = await createPayment('1.01')
+    expect(overdraw.status(), await overdraw.text()).toBe(400)
+    expect(await overdraw.text()).toContain('GCS_OUTCOME_COST_ALLOCATION_PAYMENT_EXCEEDS_REMAINING')
+    const restored = await createPayment('1.00')
+    await expectOk(restored, 'Generate another Payment using corrected shared capacity')
+    const restoredId = String((await responseJson<{ id: string }>(restored)).id)
+    const restoredDetail = await responseJson<Payment>(await page.request.get(`/api/agreements/${owner.agreementId}/payments/${restoredId}`))
+    expect(sumMoney(restoredDetail.lines.map(line => line.egcs_fc_amount))).toBe('1.00')
+    const correctedLine = correction.egcs_fc_lines.find(line => line.egcs_fc_originalpaid !== '0.00')!.egcs_fc_commitmentline
+    expect(restoredDetail.lines.filter(line => toCents(line.egcs_fc_amount) > BigInt(0)).map(line => line.egcs_fc_fundingagreementcommitmentline)).toEqual([correctedLine])
+    expect(await responseJson(await page.request.get(allocationsUrl))).toEqual(frozenAllocations)
+    await page.goto(`/en/agreements/${owner.agreementId}/corrections/${correction.id}`)
+    await expect(page.getByRole('tab', { name: 'Correction Completion', exact: true })).toBeVisible()
+    await page.screenshot({ path: testInfo.outputPath('posted-correction-shared-allocation-capacity.png'), fullPage: true })
+    await page.goto(`/en/agreements/${owner.agreementId}/payments/${restoredId}`)
+    await expect(page.getByRole('tab', { name: 'Payment completion', exact: true })).toBeVisible()
+    await page.screenshot({ path: testInfo.outputPath('correction-aware-generated-payment.png'), fullPage: true })
+  } finally {
+    await approver.close()
   }
 })
