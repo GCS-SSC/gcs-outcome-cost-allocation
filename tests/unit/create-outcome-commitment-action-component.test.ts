@@ -26,7 +26,7 @@ describe('outcome cost allocation commitment action', () => {
     vi.stubGlobal('useToast', () => ({
       add: vi.fn()
     }))
-    vi.stubGlobal('fetch', vi.fn(async () => ({
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => init?.method === 'POST' ? ({
       ok: false,
       status: 400,
       statusText: 'Bad Request',
@@ -36,7 +36,7 @@ describe('outcome cost allocation commitment action', () => {
           message: 'Complete and activate a cost allocation before creating this commitment.'
         }
       })
-    })))
+    }) : ({ ok: true, json: async () => ({ commitmentTypes: [{ id: '1', label_en: 'Allocation', label_fr: 'Repartition' }], currency: 'cad', budgetYears: [{ currency: 'cad' }] }) })))
 
     const wrapper = mount(CreateOutcomeCommitmentAction, {
       props: {
@@ -72,6 +72,9 @@ describe('outcome cost allocation commitment action', () => {
       global: {
         stubs: {
           UModal: defineComponent({
+            name: 'UModal',
+            props: ['open'],
+            emits: ['update:open'],
             setup(_, { slots }) {
               return () => h('div', [
                 slots.default?.(),
@@ -105,6 +108,8 @@ describe('outcome cost allocation commitment action', () => {
       }
     })
 
+    wrapper.findComponent({ name: 'UModal' }).vm.$emit('update:open', true)
+    await flushPromises()
     await wrapper.findAll('button').at(-1)?.trigger('click')
     await flushPromises()
 

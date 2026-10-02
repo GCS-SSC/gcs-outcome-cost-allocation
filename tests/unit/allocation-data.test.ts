@@ -155,7 +155,7 @@ class ScriptedQuery {
 
   async execute() {
     await this.db.waitForQuery(this.record)
-    const rows = this.db.takeResponse(this.record.operation, this.record.table)
+    const rows = this.db.takeResponse(this.record.operation, this.record.table, this.record)
     this.db.stageWrite(this.record)
     return rows
   }
@@ -272,7 +272,10 @@ class ScriptedDb {
     this.state.stagedWrites.set(this.transactionId, [...staged, record])
   }
 
-  takeResponse(operation: QueryOperation, table: string): unknown[] {
+  currency = 'cad'
+
+  takeResponse(operation: QueryOperation, table: string, record: QueryRecord): unknown[] {
+    if (table === 'Funding_Case_Agreement_Profile' && record.selections.flat().includes('egcs_fc_currency')) return [{ egcs_fc_currency: this.currency }]
     const key = `${operation}:${table}`
     const queued = this.state.responses.get(key) ?? []
     if (
@@ -281,7 +284,7 @@ class ScriptedDb {
       && queued.length === 0
     ) {
       return this.state.records.at(-1)?.joins.length === 0
-        ? [{ egcs_fc_transferpaymentstream: 'stream-1' }]
+        ? [{ egcs_fc_transferpaymentstream: 'stream-1', egcs_fc_currency: this.currency }]
         : [{ agency_id: 'agency-1', stream_id: 'stream-1' }]
     }
     if (operation === 'select' && table === 'Transfer_Payment_Stream' && queued.length === 0) {
@@ -478,20 +481,34 @@ const saveAndCompleteAllocationVersion = (
 )
 
 describe('generated payment status resurrection coverage', () => {
-  it.each([true, false])('uses the host batch decision %s with the restored Payment excluded', async valid => {
+  it.each([
+    { valid: true, currency: 'cad' }, { valid: false, currency: 'cad' },
+    { valid: true, currency: 'usd' }, { valid: false, currency: 'usd' }
+  ])('uses the $currency host batch decision $valid with the restored Payment excluded', async ({ valid, currency }) => {
     const db = new ScriptedDb()
+    db.enqueue('select', 'Funding_Case_Agreement_Payment', [{ egcs_fc_currency: currency }])
     db.enqueue('select', 'Funding_Case_Agreement_Payment_Line', [{ commitment_line_id: 'line-1', payment_amount: '60.00' }])
     const financials = { validatePaymentAllocations: vi.fn(async () => valid) }
     await expect(generatedPaymentStatusResurrectionExceedsCoverage(asAllocationDb(db), 'payment-1', financials)).resolves.toBe(!valid)
-    expect(financials.validatePaymentAllocations).toHaveBeenCalledWith({ excludePaymentId: 'payment-1', allocations: [{ commitmentLineId: 'line-1', amount: '60.00' }] })
+    expect(financials.validatePaymentAllocations).toHaveBeenCalledWith({ currency, excludePaymentId: 'payment-1', allocations: [{ commitmentLineId: 'line-1', amount: '60.00' }] })
     expect(db.records.filter(record => record.table === 'Funding_Case_Agreement_Payment_Line')).toHaveLength(1)
   })
+  it('rejects a missing restored Payment denomination rather than asking the SDK for CAD', async () => {
+    const db = new ScriptedDb()
+    db.enqueue('select', 'Funding_Case_Agreement_Payment', [{}])
+    const financials = { validatePaymentAllocations: vi.fn() }
+    await expect(generatedPaymentStatusResurrectionExceedsCoverage(asAllocationDb(db), 'payment-1', financials))
+      .rejects.toMatchObject({ code: 'GCS_OUTCOME_COST_ALLOCATION_CURRENCY_MISMATCH' })
+    expect(financials.validatePaymentAllocations).not.toHaveBeenCalled()
+  })
+
   it('validates an empty batch without interpreting host financial policy', async () => {
     const db = new ScriptedDb()
+    db.enqueue('select', 'Funding_Case_Agreement_Payment', [{ egcs_fc_currency: 'cad' }])
     db.enqueue('select', 'Funding_Case_Agreement_Payment_Line', [])
     const financials = { validatePaymentAllocations: vi.fn(async () => true) }
     await expect(generatedPaymentStatusResurrectionExceedsCoverage(asAllocationDb(db), 'payment-1', financials)).resolves.toBe(false)
-    expect(financials.validatePaymentAllocations).toHaveBeenCalledWith({ excludePaymentId: 'payment-1', allocations: [] })
+    expect(financials.validatePaymentAllocations).toHaveBeenCalledWith({ currency: 'cad', excludePaymentId: 'payment-1', allocations: [] })
   })
 })
 
@@ -703,7 +720,7 @@ describe('outcome allocation data reads', () => {
     ])
 
     await expect(getAgreementOutcomes(asAllocationDb(db), 'agreement-1')).resolves.toEqual([outcomeRow])
-    await expect(getAgreementBudgetYears(asAllocationDb(db), 'agreement-1', 'stream-1')).resolves.toEqual([budgetYearRow])
+    await expect(getAgreementBudgetYears(asAllocationDb(db), 'agreement-1', 'stream-1')).resolves.toEqual([{ ...budgetYearRow, currency: 'cad' }])
     await expect(getStreamCommitmentLines(asAllocationDb(db), 'stream-1')).resolves.toEqual([{
       id: 'stream-commitment-1',
       stream_budget_id: 'stream-budget-1',
@@ -841,6 +858,7 @@ describe('outcome allocation data reads', () => {
             '=',
             'Transfer_Payment_Stream.egcs_tp_transferpaymentprofile'
           ],
+          ['onRef', 'Transfer_Payment_Fiscal_Year_Budget.egcs_tp_currency', '=', 'Funding_Case_Agreement_Budget_Line_Item.egcs_fc_currency'],
           ['on', 'Transfer_Payment_Fiscal_Year_Budget._deleted', '=', false]
         ]
       },
@@ -998,6 +1016,7 @@ describe('outcome allocation data reads', () => {
     await expect(getSavedAllocations(asAllocationDb(db), 'agreement-1', 'version-1')).resolves.toEqual([
       {
         allocationVersionId: 'version-1',
+        currency: 'cad',
         commitmentType: '1',
         streamCommitmentId: 'stream-commitment-1',
         agreementBudgetFiscalYearId: 'year-1',
@@ -1012,6 +1031,7 @@ describe('outcome allocation data reads', () => {
       },
       {
         allocationVersionId: '2',
+        currency: 'cad',
         commitmentType: 'unsupported',
         streamCommitmentId: '5',
         agreementBudgetFiscalYearId: '3',
@@ -1030,7 +1050,7 @@ describe('outcome allocation data reads', () => {
       '=',
       'version-1'
     ])
-    expect(allocationQueries[0]?.joins[0]?.predicates).toContainEqual([
+    expect(allocationQueries[0]?.joins.find(join => join.args[0] === 'extensions.gcs_outcome_cost_allocation_versions')?.predicates).toContainEqual([
       'on',
       'extensions.gcs_outcome_cost_allocation_versions._deleted',
       '=',
@@ -1926,7 +1946,7 @@ describe('outcome allocation version lifecycle', () => {
     expect(db.records.filter(record => record.table === 'Transfer_Payment_Stream')).toHaveLength(2)
     expect(db.records.filter(record =>
       record.table === 'Funding_Case_Agreement_Profile'
-    )).toHaveLength(6)
+    )).toHaveLength(7)
     expect(db.committedWrites).toEqual(expect.arrayContaining([
       expect.objectContaining({
         operation: 'insert',
@@ -2087,6 +2107,27 @@ describe('outcome allocation saves and validation', () => {
 })
 
 describe('generated outcome allocation commitment lines', () => {
+  it('generates native USD lines while preserving the completed allocation amount', async () => {
+    const db = new ScriptedDb()
+    db.currency = 'usd'
+    db.enqueue('select', 'extensions.gcs_outcome_cost_allocation_versions', [{ ...versionRow, status: 'active' }])
+    db.enqueue('select', 'extensions.gcs_outcome_cost_allocation_allocations', [{ ...allocationRow, currency: 'usd' }])
+    db.enqueue('select', 'Funding_Case_Agreement_Budget_Fiscal_Year', [{ ...budgetYearRow, currency: 'usd' }])
+    db.enqueue('select', 'Funding_Case_Agreement_Budget_Fiscal_Year', [{ ...budgetYearRow, currency: 'usd' }])
+    db.enqueue('select', 'Funding_Case_Agreement_Activity', [outcomeRow])
+    db.enqueue('select', 'Transfer_Payment_Stream_Chart_of_Account', [{ id: 'stream-commitment-1', stream_budget_id: 'stream-budget-1' }])
+    db.enqueue('select', 'Funding_Case_Agreement_Payment_Line', [])
+    const result = await getGeneratedCommitmentLines(asAllocationDb(db), 'agreement-1', 'stream-1', '1', allocationConfig, 'usd')
+    expect(result).toMatchObject({ status: 'handled', issues: [], lines: [{ allocation: { currency: 'usd', amount: '100.00' }, streamCommitmentId: 'stream-commitment-1' }] })
+  })
+
+  it('rejects USD generation from CAD funding instead of relabeling the immutable amount', async () => {
+    const db = new ScriptedDb()
+    await expect(getGeneratedCommitmentLines(asAllocationDb(db), 'agreement-1', 'stream-1', '1', allocationConfig, 'usd'))
+      .rejects.toMatchObject({ code: 'GCS_OUTCOME_COST_ALLOCATION_CURRENCY_MISMATCH' })
+    expect(db.records.some(record => record.operation !== 'select')).toBe(false)
+  })
+
   it('defers commitment types that are not managed by the extension', async () => {
     const db = new ScriptedDb()
 
@@ -2150,6 +2191,7 @@ describe('generated outcome allocation commitment lines', () => {
       lines: [{
         allocation: {
           ...allocation,
+          currency: 'cad',
           allocationVersionId: 'version-1',
           amount: '100.00'
         },
@@ -2248,6 +2290,29 @@ describe('generated outcome allocation commitment lines', () => {
 })
 
 describe('generated outcome allocation payment edge cases', () => {
+  it('uses USD paid coverage with the recorded immutable weight without rereading a new funding basis', async () => {
+    const db = new ScriptedDb()
+    db.currency = 'usd'
+    db.enqueue('select', 'Funding_Case_Agreement_Commitment', [{ id: 'commitment-1', egcs_fc_type: '1', currency: 'usd', allocation_version_id: 'version-original' }])
+    db.enqueue('select', 'extensions.gcs_outcome_cost_allocation_commitment_lines', [{ commitment_line_id: 'line-usd', commitment_line_amount: '125.55', generated_amount: '84.46' }])
+    const coverage = vi.fn(async () => ({ paidAmount: '20.02' }))
+    const result = await getGeneratedPaymentLines(asAllocationDb(db), 'agreement-1', 'stream-1', 'commitment-1', 'year-1', '30.01',
+      allocationConfig, { getCommitmentLinePaymentCoverage: coverage }, 'usd')
+    expect(result).toEqual({ status: 'handled', issues: [], lines: [{ commitmentLineId: 'line-usd', amount: '30.01' }] })
+    expect(coverage).toHaveBeenCalledExactlyOnceWith({ commitmentLineId: 'line-usd', currency: 'usd' })
+    expect(db.records.some(record => record.table === 'Funding_Case_Agreement_Budget_Fiscal_Year')).toBe(false)
+  })
+
+  it('rejects a USD payment against a CAD Commitment before paid coverage is read', async () => {
+    const db = new ScriptedDb()
+    db.enqueue('select', 'Funding_Case_Agreement_Commitment', [{ id: 'commitment-1', egcs_fc_type: '1', currency: 'cad' }])
+    const coverage = vi.fn()
+    await expect(getGeneratedPaymentLines(asAllocationDb(db), 'agreement-1', 'stream-1', 'commitment-1', 'year-1', '30.01',
+      allocationConfig, { getCommitmentLinePaymentCoverage: coverage }, 'usd')).rejects.toMatchObject({ code: 'GCS_OUTCOME_COST_ALLOCATION_CURRENCY_MISMATCH' })
+    expect(coverage).not.toHaveBeenCalled()
+    expect(db.records).toHaveLength(2)
+  })
+
   it('defers missing and unsupported commitments', async () => {
     const missingDb = new ScriptedDb()
     missingDb.enqueue('select', 'Funding_Case_Agreement_Commitment', [])
@@ -2283,7 +2348,7 @@ describe('generated outcome allocation payment edge cases', () => {
     const db = new ScriptedDb()
     db.enqueue('select', 'Funding_Case_Agreement_Commitment', [{
       id: 'commitment-1',
-      egcs_fc_type: '1'
+      egcs_fc_type: '1', currency: 'cad'
     }])
     db.enqueue('select', 'extensions.gcs_outcome_cost_allocation_versions', [])
 
@@ -2309,7 +2374,7 @@ describe('generated outcome allocation payment edge cases', () => {
     const db = new ScriptedDb()
     db.enqueue('select', 'Funding_Case_Agreement_Commitment', [{
       id: 'commitment-1',
-      egcs_fc_type: '1'
+      egcs_fc_type: '1', currency: 'cad'
     }])
     db.enqueue('select', 'extensions.gcs_outcome_cost_allocation_versions', [{
       ...versionRow,

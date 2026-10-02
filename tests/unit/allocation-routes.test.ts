@@ -22,6 +22,7 @@ const routeMocks = vi.hoisted(() => ({
   asOutcomeCostAllocationDb: vi.fn((db: unknown) => ({ wrapped: db })),
   createDraftAllocationVersion: vi.fn(),
   deleteDraftAllocationVersion: vi.fn(),
+  getAgreementCurrency: vi.fn(),
   getAgreementBudgetYears: vi.fn(),
   getAgreementOutcomes: vi.fn(),
   getAllocationVersions: vi.fn(),
@@ -53,6 +54,7 @@ vi.mock('../../server/db', () => ({
 vi.mock('../../server/allocation-data', () => ({
   createDraftAllocationVersion: routeMocks.createDraftAllocationVersion,
   deleteDraftAllocationVersion: routeMocks.deleteDraftAllocationVersion,
+  getAgreementCurrency: routeMocks.getAgreementCurrency,
   getAgreementBudgetYears: routeMocks.getAgreementBudgetYears,
   getAgreementOutcomes: routeMocks.getAgreementOutcomes,
   getAllocationVersions: routeMocks.getAllocationVersions,
@@ -104,6 +106,7 @@ describe('outcome allocation routes', () => {
       status: 'draft'
     })
     routeMocks.deleteDraftAllocationVersion.mockResolvedValue(undefined)
+    routeMocks.getAgreementCurrency.mockResolvedValue('cad')
     routeMocks.getAgreementBudgetYears.mockResolvedValue([])
     routeMocks.getAgreementOutcomes.mockResolvedValue([])
     routeMocks.getAllocationVersions.mockResolvedValue([])
@@ -189,6 +192,7 @@ describe('outcome allocation routes', () => {
     routeMocks.getStreamCommitmentLines.mockResolvedValue([{ id: 'line-1' }])
 
     await expect(invokeRoute(route, createRouteContext())).resolves.toEqual({
+      currency: 'cad',
       outcomes: [{ id: 'outcome-1' }],
       budgetYears: [{ id: 'year-1' }],
       commitmentTypes: [],

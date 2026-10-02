@@ -346,6 +346,27 @@ beforeEach(() => {
 })
 
 describe('outcome cost allocation create hooks', () => {
+  it('forwards the selected native currency into Commitment generation', async () => {
+    const db = new WriteDb()
+    const { commitment } = await loadHooks()
+    await commitment(createPayload('agreement.commitments.create', createContext(db, { validatedBody: { egcs_fc_type: '1', egcs_fc_currency: 'usd' } })))
+    expect(allocationDataMocks.getGeneratedCommitmentLines).toHaveBeenCalledWith(db, 'agreement-1', 'stream-1', '1', { enabledCommitmentTypes: ['1'] }, 'usd')
+  })
+
+  it('uses the same native currency for Payment generation and atomic host batch validation', async () => {
+    const db = new WriteDb()
+    const { payment } = await loadHooks()
+    const financials = { getRecordedPaidToDate: vi.fn(), getPaidAccountingProjection: vi.fn(), getCommitmentPaymentCapacity: vi.fn(), getCommitmentLinePaymentCoverage: vi.fn(),
+      validatePaymentAllocations: vi.fn(async () => true) }
+    allocationDataMocks.getGeneratedPaymentLines.mockResolvedValue({ status: 'handled', issues: [], lines: [{ commitmentLineId: 'line-usd', amount: '25.01' }] })
+    await payment(createPayload('agreement.payments.create', createPaymentContext(db, { agreementFinancials: financials,
+      validatedBody: { egcs_fc_fundingagreementcommitment: 'commitment-1', egcs_fc_fiscalyear: 'year-1', egcs_fc_paymentamount: '25.01', egcs_fc_currency: 'usd' },
+      createdRecord: { id: 'payment-usd', egcs_fc_currency: 'usd' } })))
+    expect(allocationDataMocks.getGeneratedPaymentLines).toHaveBeenCalledWith(db, 'agreement-1', 'stream-1', 'commitment-1', 'year-1', '25.01', { enabledCommitmentTypes: ['1'] }, financials, 'usd')
+    expect(financials.validatePaymentAllocations).toHaveBeenCalledExactlyOnceWith({ allocations: [{ commitmentLineId: 'line-usd', amount: '25.01' }], currency: 'usd' })
+    expect(db.records).toMatchObject([{ table: 'Funding_Case_Agreement_Payment_Line', values: [{ egcs_fc_fundingagreementpayment: 'payment-usd', egcs_fc_fundingagreementcommitmentline: 'line-usd' }] }])
+  })
+
   it('blocks deletion of a status referenced by active allocation history', async () => {
     const { statusReference } = await loadHooks()
     const db = new WriteDb()
@@ -776,7 +797,8 @@ describe('outcome cost allocation create hooks', () => {
       '1',
       {
         enabledCommitmentTypes: ['1']
-      }
+      },
+      'cad'
     )
     expect(allocationDataMocks.lockAgreementAllocationLifecycle).toHaveBeenCalledWith(
       db,
@@ -1154,7 +1176,7 @@ describe('outcome cost allocation create hooks', () => {
       lines: [{ commitmentLineId: 'commitment-line-1', amount: '25.00' }] })
     const payload = createPayload('agreement.payments.create', createPaymentContext(db, { agreementFinancials: financials }))
     await expect(payment(payload)).rejects.toMatchObject({ code: 'GCS_OUTCOME_COST_ALLOCATION_PAYMENT_EXCEEDS_REMAINING' })
-    expect(financials.validatePaymentAllocations).toHaveBeenCalledWith({ allocations: [{ commitmentLineId: 'commitment-line-1', amount: '25.00' }] })
+    expect(financials.validatePaymentAllocations).toHaveBeenCalledWith({ currency: 'cad', allocations: [{ commitmentLineId: 'commitment-line-1', amount: '25.00' }] })
     expect(db.records.some(record => record.operation === 'insert' && record.table === 'Funding_Case_Agreement_Payment_Line')).toBe(false)
   })
 
@@ -1192,7 +1214,8 @@ describe('outcome cost allocation create hooks', () => {
       {
         enabledCommitmentTypes: ['1']
       },
-      expect.objectContaining({ validatePaymentAllocations: expect.any(Function) })
+      expect.objectContaining({ validatePaymentAllocations: expect.any(Function) }),
+      'cad'
     )
     expect(allocationDataMocks.lockAgreementAllocationLifecycle).toHaveBeenCalledWith(
       db,

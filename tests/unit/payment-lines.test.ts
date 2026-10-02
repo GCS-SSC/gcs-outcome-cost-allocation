@@ -138,6 +138,7 @@ class FakeQuery {
   }
 
   async execute() {
+    if (this.table === 'Funding_Case_Agreement_Profile') return [{ egcs_fc_currency: 'cad' }]
     if (this.table === 'extensions.gcs_outcome_cost_allocation_versions') {
       this.state.currentReferenceReads += 1
       const versionId = this.wheres.find(where => where.column === 'id')?.value
@@ -198,6 +199,7 @@ class FakeQuery {
         .map(commitment => ({
           id: commitment.id,
           egcs_fc_type: commitment.type,
+          currency: 'cad',
           allocation_version_id: commitment.allocationVersionId ?? null
         }))
     }
@@ -288,7 +290,8 @@ const createFakeDb = (state: FakeDbState) => {
   fakeStates.set(db, state)
   return db
 }
-const getGeneratedPaymentLines = (...args: Parameters<typeof getGeneratedPaymentLinesFromHost> extends [...infer Inputs, unknown] ? Inputs : never) =>
+type GenerationInputs = Parameters<typeof getGeneratedPaymentLinesFromHost>
+const getGeneratedPaymentLines = (...args: [GenerationInputs[0], string, string, string, string, GenerationInputs[5], GenerationInputs[6]]) =>
   getGeneratedPaymentLinesFromHost(...args, {
     getCommitmentLinePaymentCoverage: async ({ commitmentLineId }) => ({
       paidAmount: (fakeStates.get(args[0])!.paidLines.filter(row => row.commitmentLineId === commitmentLineId

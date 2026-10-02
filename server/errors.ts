@@ -9,6 +9,14 @@ import {
 import type { AllocationValidationIssue } from '../shared/allocation.ts'
 
 const errorMessages: Record<string, GcsExtensionLocalizedMessage> = {
+  GCS_OUTCOME_COST_ALLOCATION_MIXED_CURRENCY_UNSUPPORTED: {
+    en: 'The Agreement budget must use its single fixed currency. Use separate Agreements for different currencies.',
+    fr: 'Le budget de l entente doit utiliser sa seule devise fixe. Utilisez des ententes distinctes pour des devises differentes.'
+  },
+  GCS_OUTCOME_COST_ALLOCATION_CURRENCY_MISMATCH: {
+    en: 'The allocation, commitment, accounting lines and payment must use the same currency.',
+    fr: 'La repartition, l engagement, les lignes comptables et le paiement doivent utiliser la meme devise.'
+  },
   GCS_OUTCOME_COST_ALLOCATION_INVALID: {
     en: 'Outcome cost allocations are invalid.',
     fr: 'Les repartitions des couts par resultat sont invalides.'

@@ -577,7 +577,8 @@ const handleCommitmentCreate = async (context: CreateOperationContext): Promise<
     context.agreementId,
     context.streamId,
     commitmentType,
-    config
+    config,
+    getRecordStringValue(context.validatedBody, 'egcs_fc_currency') || 'cad'
   )
 
   if (generated.status === 'continue') {
@@ -647,7 +648,9 @@ const createGeneratedPaymentLines = async (
   generated: Extract<Awaited<ReturnType<typeof getGeneratedPaymentLines>>, { status: 'handled' }>
 ) => {
   const db = asOutcomeCostAllocationDb(context.trx)
-  if (!await requireGcsExtensionAgreementFinancials(context).validatePaymentAllocations({ allocations: generated.lines })) {
+  const currency = getRecordStringValue(context.createdRecord, 'egcs_fc_currency')
+    || getRecordStringValue(context.validatedBody, 'egcs_fc_currency') || 'cad'
+  if (!await requireGcsExtensionAgreementFinancials(context).validatePaymentAllocations({ allocations: generated.lines, currency })) {
     throwOutcomeCostAllocationIssues([{ code: 'GCS_OUTCOME_COST_ALLOCATION_PAYMENT_EXCEEDS_REMAINING',
       path: 'paymentAmount', message: 'apiErrors.extensions.outcome_cost_allocation.payment_exceeds_remaining' }])
   }
@@ -715,7 +718,9 @@ const handlePaymentCreate = async (context: CreateOperationContext): Promise<Cre
     agreementBudgetFiscalYearId,
     paymentAmount,
     config,
-    requireGcsExtensionAgreementFinancials(context)
+    requireGcsExtensionAgreementFinancials(context),
+    getRecordStringValue(context.validatedBody, 'egcs_fc_currency')
+      || getRecordStringValue(context.createdRecord, 'egcs_fc_currency') || 'cad'
   )
 
   if (generated.status === 'continue') {

@@ -5,6 +5,7 @@ export const CreateOutcomeCommitmentActionMessages = defineGcsExtensionMessages(
     "commitment_added": "Commitment added.",
     "complete_the_form_fields_then_save_or_cancel": "Complete the form fields, then save or cancel your changes.",
     "type": "Type",
+    "currency": "Currency",
     "cancel": "Cancel",
     "add": "Add"
   },
@@ -13,6 +14,7 @@ export const CreateOutcomeCommitmentActionMessages = defineGcsExtensionMessages(
     "commitment_added": "Engagement ajoute.",
     "complete_the_form_fields_then_save_or_cancel": "Remplissez les champs du formulaire, puis enregistrez ou annulez vos modifications.",
     "type": "Type",
+    "currency": "Devise",
     "cancel": "Annuler",
     "add": "Ajouter"
   }
@@ -20,6 +22,8 @@ export const CreateOutcomeCommitmentActionMessages = defineGcsExtensionMessages(
 
 export const CreateOutcomeCommitmentActionErrorMessages = defineGcsExtensionMessages({
   "en": {
+    "GCS_OUTCOME_COST_ALLOCATION_MIXED_CURRENCY_UNSUPPORTED": "The Agreement budget must use its single fixed currency. Use separate Agreements for different currencies.",
+    "GCS_OUTCOME_COST_ALLOCATION_CURRENCY_MISMATCH": "The allocation, commitment, accounting lines and payment must use the same currency.",
     "GCS_OUTCOME_COST_ALLOCATION_YEAR_MISSING": "The full agreement budget must be allocated before this commitment can be created.",
     "GCS_OUTCOME_COST_ALLOCATION_MIXED_METHODS": "The full agreement budget must be allocated before this commitment can be created.",
     "GCS_OUTCOME_COST_ALLOCATION_PERCENTAGE_TOTAL_INVALID": "The full agreement budget must be allocated before this commitment can be created.",
@@ -35,6 +39,8 @@ export const CreateOutcomeCommitmentActionErrorMessages = defineGcsExtensionMess
     "GCS_OUTCOME_COST_ALLOCATION_COMMITMENT_LINES_MISSING": "The active cost allocation has no positive allocations for this commitment type."
   },
   "fr": {
+    "GCS_OUTCOME_COST_ALLOCATION_MIXED_CURRENCY_UNSUPPORTED": "Le budget de l entente doit utiliser sa seule devise fixe. Utilisez des ententes distinctes pour des devises differentes.",
+    "GCS_OUTCOME_COST_ALLOCATION_CURRENCY_MISMATCH": "La repartition, l engagement, les lignes comptables et le paiement doivent utiliser la meme devise.",
     "GCS_OUTCOME_COST_ALLOCATION_YEAR_MISSING": "Le budget complet de l entente doit etre reparti avant de creer cet engagement.",
     "GCS_OUTCOME_COST_ALLOCATION_MIXED_METHODS": "Le budget complet de l entente doit etre reparti avant de creer cet engagement.",
     "GCS_OUTCOME_COST_ALLOCATION_PERCENTAGE_TOTAL_INVALID": "Le budget complet de l entente doit etre reparti avant de creer cet engagement.",

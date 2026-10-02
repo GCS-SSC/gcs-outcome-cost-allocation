@@ -640,7 +640,7 @@ test('uses posted Corrections as shared Payment coverage while preserving immuta
     await expectOk(await page.request.put(allocationsUrl, { data: { allocationVersionId: versionId, allocations } }), 'Save immutable allocation basis')
     await configureSingleApprovalSubmission(page, owner, ALLOCATION_VERSION_ENTITY_TYPE, draft, approved, denied)
     await completeAndApprove(page, approver, ALLOCATION_VERSION_ENTITY_TYPE, versionId)
-    const commitmentResponse = await page.request.post(`/api/agreements/${owner.agreementId}/commitments`, { data: { egcs_fc_type: commitmentType } })
+    const commitmentResponse = await page.request.post(`/api/agreements/${owner.agreementId}/commitments`, { data: { egcs_fc_type: commitmentType, egcs_fc_currency: 'cad' } })
     await expectOk(commitmentResponse, 'Generate a Commitment from approved allocation weights')
     const commitmentId = String((await responseJson<{ id: string }>(commitmentResponse)).id)
     await configureSingleApprovalSubmission(page, owner, 'fundingcaseagreementcommitment', draft, approved, denied)

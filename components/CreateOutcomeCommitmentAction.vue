@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { CreateOutcomeCommitmentActionErrorMessages, CreateOutcomeCommitmentActionMessages } from '../i18n/CreateOutcomeCommitmentAction'
 
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, useId, watch } from 'vue'
 import type { Ref } from 'vue'
 import type {
   ExtensionEntityTabContext,
@@ -50,7 +50,11 @@ const isSaving: Ref<boolean> = ref(false)
 const parsedConfig = parseOutcomeCostAllocationConfig(config)
 const configuredTypes = computed(() => parsedConfig.enabledCommitmentTypes)
 const selectedType: Ref<CommitmentType> = ref(parsedConfig.enabledCommitmentTypes[0] ?? '')
+const selectedCurrency: Ref<string> = ref('')
+const availableCurrencies: Ref<string[]> = ref([])
+const currencyOptions = computed(() => availableCurrencies.value.map(currency => ({ label: currency.toUpperCase(), value: currency })))
 const errorMessage: Ref<string> = ref('')
+const errorMessageId = useId()
 const commitmentTypes: Ref<Array<{ id: string, label_en: string, label_fr: string }>> = ref([])
 
 const typeOptions = computed(() => configuredTypes.value.map(type => ({
@@ -58,17 +62,29 @@ const typeOptions = computed(() => configuredTypes.value.map(type => ({
   value: type
 })))
 
-watch(isOpen, async open => {
-  if (!open || commitmentTypes.value.length > 0) return
+let lookupSequence = 0
+watch([isOpen, () => agreementId], async ([open]) => {
+  const sequence = ++lookupSequence
+  if (!open) return
+  availableCurrencies.value = []
+  selectedCurrency.value = ''
+  errorMessage.value = ''
   try {
-    const response = await hostApi.get<{ commitmentTypes: Array<{ id: string, label_en: string, label_fr: string }> }>(
+    const response = await hostApi.get<{ commitmentTypes: Array<{ id: string, label_en: string, label_fr: string }>, currency: string }>(
       `/api/extensions/gcs-outcome-cost-allocation/agreements/${agreementId}/allocations`
     )
+    if (sequence !== lookupSequence) return
     commitmentTypes.value = response.commitmentTypes
-  } catch {
+    if (!/^[a-z]{3}$/.test(response.currency)) throw new Error(errorText('GCS_OUTCOME_COST_ALLOCATION_CURRENCY_MISMATCH'))
+    availableCurrencies.value = [response.currency]
+    selectedCurrency.value = response.currency
+  } catch (error: unknown) {
+    if (sequence !== lookupSequence) return
     commitmentTypes.value = []
+    errorMessage.value = resolveErrorMessage(error)
   }
 })
+onBeforeUnmount(() => { lookupSequence += 1 })
 
 const buttonLabel = computed(() => locale.value === 'fr' ? label.fr : label.en)
 
@@ -118,7 +134,7 @@ const resolveErrorMessage = (error: unknown): string => {
  * Creates the selected commitment type, closing and notifying the host only after a successful request.
  */
 const createCommitment = async () => {
-  if (isSaving.value || !selectedType.value) {
+  if (isSaving.value || !selectedType.value || !availableCurrencies.value.includes(selectedCurrency.value)) {
     return
   }
 
@@ -126,7 +142,8 @@ const createCommitment = async () => {
     isSaving.value = true
     errorMessage.value = ''
     await hostApi.post(`/api/agreements/${agreementId}/commitments`, {
-      egcs_fc_type: selectedType.value
+      egcs_fc_type: selectedType.value,
+      egcs_fc_currency: selectedCurrency.value
     })
     isOpen.value = false
     toast.add({
@@ -156,15 +173,36 @@ const createCommitment = async () => {
 
     <template #body>
       <div class="space-y-4">
-        <ExtensionFormField :label="tLocal('type')" required>
+        <ExtensionFormField :label="tLocal('type')" name="egcs_fc_type" required>
           <ExtensionSelect
             v-model="selectedType"
             value-key="value"
             :items="typeOptions"
+            name="egcs_fc_type"
+            :aria-label="tLocal('type')"
+            required
+            aria-required="true"
+            :aria-describedby="errorMessage ? errorMessageId : undefined"
+            :aria-invalid="Boolean(errorMessage)"
             class="w-full" />
         </ExtensionFormField>
 
-        <p v-if="errorMessage" class="text-sm text-error">
+        <ExtensionFormField :label="tLocal('currency')" name="egcs_fc_currency" required>
+          <ExtensionSelect
+            :model-value="selectedCurrency"
+            disabled
+            :items="currencyOptions"
+            value-key="value"
+            name="egcs_fc_currency"
+            :aria-label="tLocal('currency')"
+            required
+            aria-required="true"
+            :aria-describedby="errorMessage ? errorMessageId : undefined"
+            :aria-invalid="Boolean(errorMessage)"
+            class="w-full" />
+        </ExtensionFormField>
+
+        <p v-if="errorMessage" :id="errorMessageId" class="text-sm text-error">
           {{ errorMessage }}
         </p>
 
@@ -181,7 +219,7 @@ const createCommitment = async () => {
             color="primary"
             class="cursor-default"
             :loading="isSaving"
-            :disabled="isSaving || !selectedType"
+            :disabled="isSaving || !selectedType || !availableCurrencies.includes(selectedCurrency)"
             @click="createCommitment" />
         </div>
       </div>

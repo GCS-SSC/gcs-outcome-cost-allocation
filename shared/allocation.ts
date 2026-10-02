@@ -65,6 +65,8 @@ export const parseAllocationMoney = (value: unknown): AllocationMoney | null => 
 }
 
 export interface OutcomeAllocationInput {
+  /** Native denomination derived from the immutable owning accounting line. */
+  currency?: string
   commitmentType?: CommitmentType
   streamCommitmentId: string
   agreementBudgetFiscalYearId: string

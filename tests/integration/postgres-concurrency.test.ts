@@ -417,6 +417,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         "Common_Workflow_Run",
         "Common_Runtime",
         "Common_Status",
+        "Common_Extension_Entity_Owner",
         "Common_Entity",
         "Common_Entity_Type",
         "Funding_Case_Agreement_Payment_Line",
@@ -432,6 +433,8 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         "Funding_Case_Agreement_Budget_Fiscal_Year",
         "Funding_Case_Agreement_Budget_Version",
         "Agency_Fiscal_Year",
+        "Agency_Chart_of_Account",
+        "Agency_Commitment_Type",
         "Funding_Case_Agreement_Outcome_Activity",
         "Funding_Case_Agreement_Activity",
         "Transfer_Payment_Outcome",
@@ -564,6 +567,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
       CREATE TABLE "Funding_Case_Agreement_Profile" (
         id bigint PRIMARY KEY,
         egcs_fc_transferpaymentstream bigint NOT NULL,
+        egcs_fc_currency text NOT NULL DEFAULT 'cad',
         _deleted boolean NOT NULL DEFAULT false
       )
     `.execute(observerDb)
@@ -632,6 +636,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         id bigint PRIMARY KEY,
         egcs_fc_fundingagreementbudgetfiscalyear bigint NOT NULL,
         egcs_fc_programfunding numeric(19, 2) NOT NULL,
+        egcs_fc_currency text NOT NULL DEFAULT 'cad',
         _deleted boolean NOT NULL DEFAULT false
       )
     `.execute(observerDb)
@@ -647,6 +652,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         id bigint PRIMARY KEY,
         egcs_tp_transferpaymentprofile bigint NOT NULL,
         egcs_tp_fiscalyear bigint NOT NULL,
+        egcs_tp_currency text NOT NULL DEFAULT 'cad',
         _deleted boolean NOT NULL DEFAULT false
       )
     `.execute(observerDb)
@@ -662,6 +668,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
       CREATE TABLE "Agency_Chart_of_Account" (
         id bigint PRIMARY KEY,
         egcs_ay_fiscalyear bigint NOT NULL,
+        egcs_ay_currency text NOT NULL DEFAULT 'cad',
         egcs_ay_accountingdimensions jsonb NOT NULL DEFAULT '[]'::jsonb,
         _deleted boolean NOT NULL DEFAULT false
       )
@@ -711,6 +718,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         id bigint PRIMARY KEY,
         egcs_fc_fundingagreement bigint NOT NULL,
         egcs_fc_type bigint NOT NULL,
+        egcs_fc_currency text NOT NULL DEFAULT 'cad',
         egcs_fc_status bigint NOT NULL,
         egcs_fc_financialsystemnumber bigint,
         _deleted boolean NOT NULL DEFAULT false
@@ -732,6 +740,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         egcs_fc_fundingagreementcommitment bigint NOT NULL,
         egcs_fc_fiscalyear bigint NOT NULL,
         egcs_fc_paymentamount numeric(19, 2) NOT NULL,
+        egcs_fc_currency text NOT NULL DEFAULT 'cad',
         egcs_fc_status bigint NOT NULL,
         _deleted boolean NOT NULL DEFAULT false
       )
@@ -1199,6 +1208,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
       fiscal_year_id: '50',
       fiscal_year_display: '2026-2027',
       program_funding: '100.00',
+      currency: 'cad',
       stream_budget_id: '72'
     }])
 
@@ -1326,6 +1336,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
       fiscal_year_id: '50',
       fiscal_year_display: '2026-2027',
       program_funding: '175.00',
+      currency: 'cad',
       stream_budget_id: '72'
     }])
   })
@@ -2053,6 +2064,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
           .values({
             id: '25',
             egcs_fc_transferpaymentstream: '6',
+            egcs_fc_currency: 'cad',
             _deleted: false
           })
           .execute()
@@ -2794,7 +2806,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
           agreementFinancials: {
             getRecordedPaidToDate: vi.fn(), getPaidAccountingProjection: vi.fn(), getCommitmentPaymentCapacity: vi.fn(), getCommitmentLinePaymentCoverage: vi.fn(),
             validatePaymentAllocations: async input => {
-              expect(input).toEqual({ excludePaymentId: '190', allocations: [{ commitmentLineId: '190', amount: '60.00' }] })
+              expect(input).toEqual({ currency: 'cad', excludePaymentId: '190', allocations: [{ commitmentLineId: '190', amount: '60.00' }] })
               const committedPayment = await trx.selectFrom('Funding_Case_Agreement_Payment').select('egcs_fc_paymentamount').where('id', '=', '191').executeTakeFirstOrThrow()
               expect(String(committedPayment.egcs_fc_paymentamount)).toBe('50.00')
               return false

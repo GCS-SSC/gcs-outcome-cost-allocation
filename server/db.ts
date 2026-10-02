@@ -19,6 +19,7 @@ export interface OutcomeCostAllocationHostDatabase {
   'Funding_Case_Agreement_Profile': {
     id: string
     egcs_fc_transferpaymentstream: string
+    egcs_fc_currency: string
     _deleted: boolean
   }
   'Funding_Case_Agreement_Activity': {
@@ -57,6 +58,7 @@ export interface OutcomeCostAllocationHostDatabase {
     id: string
     egcs_fc_fundingagreementbudgetfiscalyear: string
     egcs_fc_programfunding: number
+    egcs_fc_currency: string
     _deleted: boolean
   }
   'Transfer_Payment_Stream_Budget': {
@@ -79,6 +81,7 @@ export interface OutcomeCostAllocationHostDatabase {
     id: string
     egcs_tp_transferpaymentprofile: string
     egcs_tp_fiscalyear: string
+    egcs_tp_currency: string
     _deleted: boolean
   }
   'Transfer_Payment_Stream_Chart_of_Account': {
@@ -90,6 +93,7 @@ export interface OutcomeCostAllocationHostDatabase {
   'Agency_Chart_of_Account': {
     id: string
     egcs_ay_fiscalyear: string
+    egcs_ay_currency: string
     egcs_ay_accountingdimensions: JSONColumnType<Array<{ label_en: string, label_fr: string, value: string }>>
     _deleted: boolean
   }
@@ -115,6 +119,7 @@ export interface OutcomeCostAllocationHostDatabase {
     id: Generated<string>
     egcs_fc_fundingagreement: string
     egcs_fc_type: string
+    egcs_fc_currency: Generated<string>
     egcs_fc_status: string
     egcs_fc_financialsystemnumber: string | null
     egcs_fc_active?: boolean
@@ -133,6 +138,7 @@ export interface OutcomeCostAllocationHostDatabase {
     egcs_fc_fundingagreementcommitment: string
     egcs_fc_fiscalyear: string
     egcs_fc_paymentamount: string
+    egcs_fc_currency: Generated<string>
     egcs_fc_status: string
     _deleted?: boolean
   }

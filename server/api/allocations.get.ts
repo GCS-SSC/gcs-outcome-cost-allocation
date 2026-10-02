@@ -3,6 +3,7 @@ import { asOutcomeCostAllocationDb } from '../db.ts'
 import { parseAgreementRouteParams } from '../allocation-request-validation.ts'
 import {
   getAgreementBudgetYears,
+  getAgreementCurrency,
   getAgreementOutcomes,
   getAllocationVersions,
   getSavedAllocations,
@@ -15,6 +16,7 @@ export default defineGcsExtensionRouteHandler(async ({ params, entity, db: rawDb
   const streamId = String(entity?.streamId ?? '')
   const db = asOutcomeCostAllocationDb(rawDb)
 
+  const currency = await getAgreementCurrency(db, agreementId)
   const [outcomes, budgetYears, versions, allocations, streamCommitments, commitmentTypes] = await Promise.all([
     getAgreementOutcomes(db, agreementId),
     getAgreementBudgetYears(db, agreementId, streamId),
@@ -25,6 +27,7 @@ export default defineGcsExtensionRouteHandler(async ({ params, entity, db: rawDb
   ])
 
   return {
+    currency,
     outcomes,
     budgetYears,
     versions,
