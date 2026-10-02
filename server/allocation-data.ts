@@ -1,6 +1,7 @@
 import { sql, type Transaction } from 'kysely'
 import {
   lockGcsExtensionLifecycleScope,
+  type GcsExtensionAgreementFinancials,
   type GcsExtensionWriteAuthorization
 } from '@gcs-ssc/extensions/server'
 import {
@@ -1374,54 +1375,25 @@ export const validateAllocationPaymentCoverage = async (
  */
 export const generatedPaymentStatusResurrectionExceedsCoverage = async (
   db: OutcomeCostAllocationDb,
-  paymentId: string
+  paymentId: string,
+  financials: Pick<GcsExtensionAgreementFinancials, 'validatePaymentAllocations'>
 ): Promise<boolean> => {
   const targetLines = await db
     .selectFrom('Funding_Case_Agreement_Payment_Line')
-    .innerJoin(
-      'Funding_Case_Agreement_Commitment_Line',
-      'Funding_Case_Agreement_Commitment_Line.id',
-      'Funding_Case_Agreement_Payment_Line.egcs_fc_fundingagreementcommitmentline'
-    )
-    .where('Funding_Case_Agreement_Payment_Line.egcs_fc_fundingagreementpayment', '=', paymentId)
-    .where('Funding_Case_Agreement_Payment_Line._deleted', '=', false)
-    .where('Funding_Case_Agreement_Commitment_Line._deleted', '=', false)
+    .where('egcs_fc_fundingagreementpayment', '=', paymentId)
+    .where('_deleted', '=', false)
     .select([
-      'Funding_Case_Agreement_Payment_Line.egcs_fc_fundingagreementcommitmentline as commitment_line_id',
-      databaseNumericText(sql.ref('Funding_Case_Agreement_Payment_Line.egcs_fc_amount')).as('payment_amount'),
-      databaseNumericText(sql.ref('Funding_Case_Agreement_Commitment_Line.egcs_fc_amount')).as('commitment_amount')
+      'egcs_fc_fundingagreementcommitmentline as commitment_line_id',
+      databaseNumericText(sql.ref('egcs_fc_amount')).as('payment_amount')
     ])
     .execute()
-
-  for (const targetLine of targetLines) {
-    const paid = await db
-      .selectFrom('Funding_Case_Agreement_Payment_Line')
-      .innerJoin(
-        'Funding_Case_Agreement_Payment',
-        'Funding_Case_Agreement_Payment.id',
-        'Funding_Case_Agreement_Payment_Line.egcs_fc_fundingagreementpayment'
-      )
-      .where(
-        'Funding_Case_Agreement_Payment_Line.egcs_fc_fundingagreementcommitmentline',
-        '=',
-        String(targetLine.commitment_line_id)
-      )
-      .where('Funding_Case_Agreement_Payment_Line.egcs_fc_fundingagreementpayment', '!=', paymentId)
-      .where('Funding_Case_Agreement_Payment_Line._deleted', '=', false)
-      .where('Funding_Case_Agreement_Payment._deleted', '=', false)
-      .where(paymentHasNoNegativeWorkflowOutcome)
-      .select(databaseNumericText(sql`COALESCE(SUM(${sql.ref('Funding_Case_Agreement_Payment_Line.egcs_fc_amount')}), 0)`).as('paid_amount'))
-      .executeTakeFirst()
-
-    const paidCents = paid ? toCents(parseDatabaseAggregateMoney(paid.paid_amount)) : BigInt(0)
-    const targetCents = toCents(parseDatabaseMoney(targetLine.payment_amount))
-    const commitmentCents = toCents(parseDatabaseMoney(targetLine.commitment_amount))
-    if (paidCents + targetCents > commitmentCents) {
-      return true
-    }
-  }
-
-  return false
+  return !await financials.validatePaymentAllocations({
+    excludePaymentId: paymentId,
+    allocations: targetLines.map(line => ({
+      commitmentLineId: String(line.commitment_line_id),
+      amount: parseDatabaseMoney(line.payment_amount)
+    }))
+  })
 }
 
 /**
@@ -2087,7 +2059,8 @@ const commitmentLineAllocationKey = (
 const getCommitmentLineCoverage = async (
   db: OutcomeCostAllocationDb,
   commitmentId: string,
-  desiredStreamCommitmentIds: Set<string>
+  desiredStreamCommitmentIds: Set<string>,
+  financials: Pick<GcsExtensionAgreementFinancials, 'getCommitmentLinePaymentCoverage'>
 ): Promise<{
   commitmentLineByAllocationKey: Map<string, CommitmentLinePaymentCoverage>
   manualCommitmentLinesByStreamCommitmentId: Map<string, CommitmentLinePaymentCoverage[]>
@@ -2152,25 +2125,10 @@ const getCommitmentLineCoverage = async (
       manualCommitmentLinesByStreamCommitmentId.set(streamCommitmentId, [coverage])
     }
   }
-  const paidRows = commitmentLines.length === 0
-    ? []
-    : await db
-        .selectFrom('Funding_Case_Agreement_Payment_Line')
-        .innerJoin(
-          'Funding_Case_Agreement_Payment',
-          'Funding_Case_Agreement_Payment.id',
-          'Funding_Case_Agreement_Payment_Line.egcs_fc_fundingagreementpayment'
-        )
-        .where('Funding_Case_Agreement_Payment_Line.egcs_fc_fundingagreementcommitmentline', 'in', commitmentLines.map(line => String(line.id)))
-        .where('Funding_Case_Agreement_Payment_Line._deleted', '=', false)
-        .where('Funding_Case_Agreement_Payment._deleted', '=', false)
-        .where(paymentHasNoNegativeWorkflowOutcome)
-        .select([
-          'Funding_Case_Agreement_Payment_Line.egcs_fc_fundingagreementcommitmentline as commitment_line_id',
-          databaseNumericText(sql`COALESCE(SUM(${sql.ref('Funding_Case_Agreement_Payment_Line.egcs_fc_amount')}), 0)`).as('paid_amount')
-        ])
-        .groupBy('Funding_Case_Agreement_Payment_Line.egcs_fc_fundingagreementcommitmentline')
-        .execute()
+  const paidRows = await Promise.all(commitmentLines.map(async line => ({
+    commitment_line_id: String(line.id),
+    paid_amount: (await financials.getCommitmentLinePaymentCoverage({ commitmentLineId: String(line.id) })).paidAmount
+  })))
 
   return {
     commitmentLineByAllocationKey,
@@ -2188,7 +2146,8 @@ const getCommitmentLineCoverage = async (
 const getRecordedCommitmentPaymentLineInputs = async (
   db: OutcomeCostAllocationDb,
   commitmentId: string,
-  agreementBudgetFiscalYearId: string
+  agreementBudgetFiscalYearId: string,
+  financials: Pick<GcsExtensionAgreementFinancials, 'getCommitmentLinePaymentCoverage'>
 ): Promise<PaymentLineInput[]> => {
   const commitmentLines = await db
     .selectFrom('extensions.gcs_outcome_cost_allocation_commitment_lines')
@@ -2216,27 +2175,10 @@ const getRecordedCommitmentPaymentLineInputs = async (
     return []
   }
 
-  const paidRows = await db
-    .selectFrom('Funding_Case_Agreement_Payment_Line')
-    .innerJoin(
-      'Funding_Case_Agreement_Payment',
-      'Funding_Case_Agreement_Payment.id',
-      'Funding_Case_Agreement_Payment_Line.egcs_fc_fundingagreementpayment'
-    )
-    .where(
-      'Funding_Case_Agreement_Payment_Line.egcs_fc_fundingagreementcommitmentline',
-      'in',
-      commitmentLines.map(line => String(line.commitment_line_id))
-    )
-    .where('Funding_Case_Agreement_Payment_Line._deleted', '=', false)
-    .where('Funding_Case_Agreement_Payment._deleted', '=', false)
-    .where(paymentHasNoNegativeWorkflowOutcome)
-    .select([
-      'Funding_Case_Agreement_Payment_Line.egcs_fc_fundingagreementcommitmentline as commitment_line_id',
-      databaseNumericText(sql`COALESCE(SUM(${sql.ref('Funding_Case_Agreement_Payment_Line.egcs_fc_amount')}), 0)`).as('paid_amount')
-    ])
-    .groupBy('Funding_Case_Agreement_Payment_Line.egcs_fc_fundingagreementcommitmentline')
-    .execute()
+  const paidRows = await Promise.all(commitmentLines.map(async line => ({
+    commitment_line_id: String(line.commitment_line_id),
+    paid_amount: (await financials.getCommitmentLinePaymentCoverage({ commitmentLineId: String(line.commitment_line_id) })).paidAmount
+  })))
   const paidAmountByCommitmentLineId = new Map(paidRows.map(row => [
     String(row.commitment_line_id),
     parseDatabaseAggregateMoney(row.paid_amount) as AllocationMoney
@@ -2361,7 +2303,8 @@ export const getGeneratedPaymentLines = async (
   commitmentId: string,
   agreementBudgetFiscalYearId: string,
   paymentAmount: AllocationDecimalInput,
-  config: unknown
+  config: unknown,
+  financials: Pick<GcsExtensionAgreementFinancials, 'getCommitmentLinePaymentCoverage'>
 ): Promise<{
   status: 'continue'
 } | {
@@ -2404,7 +2347,8 @@ export const getGeneratedPaymentLines = async (
     const paymentLineInputs = await getRecordedCommitmentPaymentLineInputs(
       db,
       commitmentId,
-      agreementBudgetFiscalYearId
+      agreementBudgetFiscalYearId,
+      financials
     )
     if (paymentLineInputs.length === 0) {
       return {
@@ -2527,7 +2471,7 @@ export const getGeneratedPaymentLines = async (
     commitmentLineByAllocationKey,
     manualCommitmentLinesByStreamCommitmentId,
     paidAmountByCommitmentLineId
-  } = await getCommitmentLineCoverage(db, commitmentId, desiredStreamCommitmentIds)
+  } = await getCommitmentLineCoverage(db, commitmentId, desiredStreamCommitmentIds, financials)
   const {
     paymentLineInputs,
     paymentLineIssues

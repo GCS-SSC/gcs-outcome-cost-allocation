@@ -64,3 +64,5 @@ These reduced-schema ownership fixtures complement the extension’s normal test
 Set `AUDIT_EXTENSION_POSTGRES_URL` to a disposable PostgreSQL database URL ending
 in `_test` to run the same suite on PostgreSQL; the adapter creates and removes an
 isolated database. Without that variable, the suite uses in-memory PGlite.
+
+SDK 0.3.5 `agreement-payment-capacity` supplies post-JV paid floors for Payment line generation. Generated allocation weights and provenance remain extension-owned; current paid coverage comes from `agreementFinancials.getCommitmentLinePaymentCoverage`. Before inserting the batch in the host write transaction, the extension invokes `validatePaymentAllocations` so duplicate coding rows cannot overdraw a shared Agency chart balance. Denied-Payment restoration uses the same host batch validator with the restored Payment excluded. JVs do not rewrite saved allocation versions, mappings or generated-line weights.

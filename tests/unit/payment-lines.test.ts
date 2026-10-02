@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { getGeneratedPaymentLines, validateAllocationPaymentCoverage } from '../../server/allocation-data'
+import { getGeneratedPaymentLines as getGeneratedPaymentLinesFromHost, validateAllocationPaymentCoverage } from '../../server/allocation-data'
 import { asOutcomeCostAllocationDb } from '../../server/db'
 import type {
   AllocationMethod,
@@ -282,9 +282,19 @@ class FakeQuery {
   }
 }
 
-const createFakeDb = (state: FakeDbState) => asOutcomeCostAllocationDb({
-  selectFrom: (table: string) => new FakeQuery(state, table)
-})
+const fakeStates = new WeakMap<object, FakeDbState>()
+const createFakeDb = (state: FakeDbState) => {
+  const db = asOutcomeCostAllocationDb({ selectFrom: (table: string) => new FakeQuery(state, table) })
+  fakeStates.set(db, state)
+  return db
+}
+const getGeneratedPaymentLines = (...args: Parameters<typeof getGeneratedPaymentLinesFromHost> extends [...infer Inputs, unknown] ? Inputs : never) =>
+  getGeneratedPaymentLinesFromHost(...args, {
+    getCommitmentLinePaymentCoverage: async ({ commitmentLineId }) => ({
+      paidAmount: (fakeStates.get(args[0])!.paidLines.filter(row => row.commitmentLineId === commitmentLineId
+        && row.paymentStatus !== 'denied').reduce((sum, row) => sum + row.amount, 0)).toFixed(2)
+    })
+  })
 
 const toAllocationInputs = (
   rows: FakeDbState['allocations']
@@ -357,6 +367,22 @@ const createState = (): FakeDbState => ({
 })
 
 describe('outcome cost allocation payment generation', () => {
+  it('uses the host post-JV floor to allocate newly available Payment capacity', async () => {
+    const state = createState()
+    const db = createFakeDb(state)
+    const calls: string[] = []
+    const result = await getGeneratedPaymentLinesFromHost(db, 'agreement-1', 'stream-1', 'commitment-1', 'budget-year-1', 60, config, {
+      getCommitmentLinePaymentCoverage: async ({ commitmentLineId }) => {
+        calls.push(commitmentLineId)
+        return { paidAmount: commitmentLineId === 'line-1' ? '40.00' : '0.00' }
+      }
+    })
+    expect(calls).toEqual(['line-1', 'line-2'])
+    expect(result).toEqual({ status: 'handled', issues: [], lines: [
+      { commitmentLineId: 'line-1', amount: '20.00' }, { commitmentLineId: 'line-2', amount: '40.00' }
+    ] })
+  })
+
   it('generates payment lines from the active cost allocation and selected commitment lines', async () => {
     const state = createState()
     const result = await getGeneratedPaymentLines(

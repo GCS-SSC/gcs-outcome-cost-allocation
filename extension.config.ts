@@ -29,8 +29,9 @@ export default defineGcsExtension({
     }
   ]),
   key: 'gcs-outcome-cost-allocation',
-  sdkVersion: '^0.3.2',
+  sdkVersion: '^0.3.5',
   requiredHostCapabilities: [
+    'agreement-payment-capacity',
     'audit-ownership',
     'stream-config-modal',
     'entity-tabs',

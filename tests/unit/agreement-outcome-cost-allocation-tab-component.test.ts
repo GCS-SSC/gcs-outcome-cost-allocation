@@ -254,10 +254,6 @@ const mountTab = async (
           scope: {
             type: 'agency',
             agencyId: 'agency-1'
-          },
-          rbac: {
-            subject: 'agreement',
-            action: 'update'
           }
         },
         config: componentConfig,

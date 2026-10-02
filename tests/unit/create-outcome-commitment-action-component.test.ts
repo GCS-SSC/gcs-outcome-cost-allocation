@@ -52,10 +52,6 @@ describe('outcome cost allocation commitment action', () => {
           scope: {
             type: 'agency',
             agencyId: 'agency-1'
-          },
-          rbac: {
-            subject: 'agreement',
-            action: 'update'
           }
         },
         agencyId: 'agency-1',

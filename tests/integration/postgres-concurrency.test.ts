@@ -2752,7 +2752,8 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         '190',
         budgetYearStableId(35),
         50,
-        {}
+        {},
+        { getCommitmentLinePaymentCoverage: async () => ({ paidAmount: '0.00' }) }
       )
       if (generated.status !== 'handled' || generated.issues.length > 0 || generated.lines.length !== 1) {
         throw new Error('Expected one valid generated payment line before resurrection.')
@@ -2790,6 +2791,15 @@ describe('outcome allocation PostgreSQL concurrency', () => {
       await waitForLatchOrTask(paymentCreated.promise, creatingPayment, 'Generated payment creation')
       resurrecting = waiterDb.transaction().execute(async trx => {
         await guard({
+          agreementFinancials: {
+            getCommitmentPaymentCapacity: vi.fn(), getCommitmentLinePaymentCoverage: vi.fn(),
+            validatePaymentAllocations: async input => {
+              expect(input).toEqual({ excludePaymentId: '190', allocations: [{ commitmentLineId: '190', amount: '60.00' }] })
+              const committedPayment = await trx.selectFrom('Funding_Case_Agreement_Payment').select('egcs_fc_paymentamount').where('id', '=', '191').executeTakeFirstOrThrow()
+              expect(String(committedPayment.egcs_fc_paymentamount)).toBe('50.00')
+              return false
+            }
+          },
           operation: 'payment.status-change',
           event: {},
           db: trx as unknown as GcsExtensionAgreementPaymentMutationGuardHookPayload['db'],
@@ -3879,7 +3889,8 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         '180',
         budgetYearStableId(34),
         0.01,
-        {}
+        {},
+        { getCommitmentLinePaymentCoverage: async () => ({ paidAmount: '0.00' }) }
       )
     )
     expect(generated).toEqual({

@@ -1,5 +1,6 @@
 import {
   createGcsExtensionUserError,
+  requireGcsExtensionAgreementFinancials,
   defineGcsExtensionNitroPlugin,
   type GcsExtensionAgreementDeleteGuardContext,
   type GcsExtensionAgreementStreamChangeGuardContext,
@@ -290,7 +291,7 @@ const guardAgreementPaymentMutation = async (
       currentStatus?.terminal === true
       && context.nextStatusId !== undefined
       && !await isTerminalStatus(db, context.nextStatusId)
-      && await generatedPaymentStatusResurrectionExceedsCoverage(db, context.paymentId)
+      && await generatedPaymentStatusResurrectionExceedsCoverage(db, context.paymentId, requireGcsExtensionAgreementFinancials(context))
     ) {
       throw paymentCoverageConflict()
     }
@@ -646,6 +647,10 @@ const createGeneratedPaymentLines = async (
   generated: Extract<Awaited<ReturnType<typeof getGeneratedPaymentLines>>, { status: 'handled' }>
 ) => {
   const db = asOutcomeCostAllocationDb(context.trx)
+  if (!await requireGcsExtensionAgreementFinancials(context).validatePaymentAllocations({ allocations: generated.lines })) {
+    throwOutcomeCostAllocationIssues([{ code: 'GCS_OUTCOME_COST_ALLOCATION_PAYMENT_EXCEEDS_REMAINING',
+      path: 'paymentAmount', message: 'apiErrors.extensions.outcome_cost_allocation.payment_exceeds_remaining' }])
+  }
   await db
     .insertInto('Funding_Case_Agreement_Payment_Line')
     .values(generated.lines.map(line => ({
@@ -709,7 +714,8 @@ const handlePaymentCreate = async (context: CreateOperationContext): Promise<Cre
     commitmentId,
     agreementBudgetFiscalYearId,
     paymentAmount,
-    config
+    config,
+    requireGcsExtensionAgreementFinancials(context)
   )
 
   if (generated.status === 'continue') {

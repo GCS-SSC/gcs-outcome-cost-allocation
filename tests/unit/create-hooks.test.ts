@@ -254,6 +254,8 @@ const createContext = (
   db: WriteDb,
   overrides: Partial<GcsExtensionCreateOperationContext> = {}
 ): Omit<GcsExtensionCreateOperationContext, 'extensionKey'> => ({
+  agreementFinancials: { getCommitmentPaymentCapacity: vi.fn(),
+    getCommitmentLinePaymentCoverage: vi.fn(), validatePaymentAllocations: vi.fn(async () => true) },
   operation: 'agreement.commitments.create',
   phase: 'before-create',
   event: {},
@@ -470,6 +472,7 @@ describe('outcome cost allocation create hooks', () => {
     allocationDataMocks.generatedPaymentStatusResurrectionExceedsCoverage.mockResolvedValueOnce(true)
 
     await expect(paymentMutation({
+      agreementFinancials: { getCommitmentPaymentCapacity: vi.fn(), getCommitmentLinePaymentCoverage: vi.fn(), validatePaymentAllocations: vi.fn() },
       operation: 'payment.status-change',
       event: {},
       db: db as unknown as Transaction<unknown>,
@@ -483,7 +486,7 @@ describe('outcome cost allocation create hooks', () => {
     })
     expect(allocationDataMocks.lockAgreementAllocationLifecycle).toHaveBeenCalledWith(db, 'agreement-1')
     expect(db.ownedTableQueriedBeforeLifecycleLock).toBe(false)
-    expect(allocationDataMocks.generatedPaymentStatusResurrectionExceedsCoverage).toHaveBeenCalledWith(db, 'payment-1')
+    expect(allocationDataMocks.generatedPaymentStatusResurrectionExceedsCoverage).toHaveBeenCalledWith(db, 'payment-1', expect.objectContaining({ validatePaymentAllocations: expect.any(Function) }))
   })
 
   it('uses the locked payment status instead of a stale caller status for resurrection coverage', async () => {
@@ -494,6 +497,7 @@ describe('outcome cost allocation create hooks', () => {
     allocationDataMocks.generatedPaymentStatusResurrectionExceedsCoverage.mockResolvedValueOnce(true)
 
     await expect(paymentMutation({
+      agreementFinancials: { getCommitmentPaymentCapacity: vi.fn(), getCommitmentLinePaymentCoverage: vi.fn(), validatePaymentAllocations: vi.fn() },
       operation: 'payment.status-change',
       event: {},
       db: db as unknown as Transaction<unknown>,
@@ -507,7 +511,8 @@ describe('outcome cost allocation create hooks', () => {
     })
     expect(allocationDataMocks.generatedPaymentStatusResurrectionExceedsCoverage).toHaveBeenCalledWith(
       db,
-      'payment-1'
+      'payment-1',
+      expect.objectContaining({ validatePaymentAllocations: expect.any(Function) })
     )
   })
 
@@ -555,6 +560,7 @@ describe('outcome cost allocation create hooks', () => {
       changes: { egcs_fc_comment: 'Allowed note' }
     })).resolves.toBeUndefined()
     await expect(paymentMutation({
+      agreementFinancials: { getCommitmentPaymentCapacity: vi.fn(), getCommitmentLinePaymentCoverage: vi.fn(), validatePaymentAllocations: vi.fn() },
       operation: 'payment.status-change',
       event: {},
       db: generatedDb as unknown as Transaction<unknown>,
@@ -565,7 +571,8 @@ describe('outcome cost allocation create hooks', () => {
     })).resolves.toBeUndefined()
     expect(allocationDataMocks.generatedPaymentStatusResurrectionExceedsCoverage).toHaveBeenCalledWith(
       generatedDb,
-      'payment-1'
+      'payment-1',
+      expect.objectContaining({ validatePaymentAllocations: expect.any(Function) })
     )
   })
 
@@ -1138,6 +1145,19 @@ describe('outcome cost allocation create hooks', () => {
     expect(db.records).toEqual([])
   })
 
+  it('rejects a generated batch that the host says exceeds shared coding capacity before insertion', async () => {
+    const db = new WriteDb()
+    const { payment } = await loadHooks()
+    const financials = { getCommitmentPaymentCapacity: vi.fn(), getCommitmentLinePaymentCoverage: vi.fn(),
+      validatePaymentAllocations: vi.fn(async () => false) }
+    allocationDataMocks.getGeneratedPaymentLines.mockResolvedValue({ status: 'handled', issues: [],
+      lines: [{ commitmentLineId: 'commitment-line-1', amount: '25.00' }] })
+    const payload = createPayload('agreement.payments.create', createPaymentContext(db, { agreementFinancials: financials }))
+    await expect(payment(payload)).rejects.toMatchObject({ code: 'GCS_OUTCOME_COST_ALLOCATION_PAYMENT_EXCEEDS_REMAINING' })
+    expect(financials.validatePaymentAllocations).toHaveBeenCalledWith({ allocations: [{ commitmentLineId: 'commitment-line-1', amount: '25.00' }] })
+    expect(db.records.some(record => record.operation === 'insert' && record.table === 'Funding_Case_Agreement_Payment_Line')).toBe(false)
+  })
+
   it('inserts generated payment lines while leaving host status ownership unchanged', async () => {
     const { payment } = await loadHooks()
     const db = new WriteDb()
@@ -1171,7 +1191,8 @@ describe('outcome cost allocation create hooks', () => {
       '25.00',
       {
         enabledCommitmentTypes: ['1']
-      }
+      },
+      expect.objectContaining({ validatePaymentAllocations: expect.any(Function) })
     )
     expect(allocationDataMocks.lockAgreementAllocationLifecycle).toHaveBeenCalledWith(
       db,

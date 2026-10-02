@@ -478,29 +478,20 @@ const saveAndCompleteAllocationVersion = (
 )
 
 describe('generated payment status resurrection coverage', () => {
-  it('allows a generated payment with no active lines', async () => {
+  it.each([true, false])('uses the host batch decision %s with the restored Payment excluded', async valid => {
+    const db = new ScriptedDb()
+    db.enqueue('select', 'Funding_Case_Agreement_Payment_Line', [{ commitment_line_id: 'line-1', payment_amount: '60.00' }])
+    const financials = { validatePaymentAllocations: vi.fn(async () => valid) }
+    await expect(generatedPaymentStatusResurrectionExceedsCoverage(asAllocationDb(db), 'payment-1', financials)).resolves.toBe(!valid)
+    expect(financials.validatePaymentAllocations).toHaveBeenCalledWith({ excludePaymentId: 'payment-1', allocations: [{ commitmentLineId: 'line-1', amount: '60.00' }] })
+    expect(db.records.filter(record => record.table === 'Funding_Case_Agreement_Payment_Line')).toHaveLength(1)
+  })
+  it('validates an empty batch without interpreting host financial policy', async () => {
     const db = new ScriptedDb()
     db.enqueue('select', 'Funding_Case_Agreement_Payment_Line', [])
-
-    await expect(generatedPaymentStatusResurrectionExceedsCoverage(
-      asAllocationDb(db),
-      'payment-1'
-    )).resolves.toBe(false)
-  })
-
-  it('detects when restoring a denied payment would exceed its commitment line', async () => {
-    const db = new ScriptedDb()
-    db.enqueue('select', 'Funding_Case_Agreement_Payment_Line', [{
-      commitment_line_id: 'line-1',
-      payment_amount: '60.00',
-      commitment_amount: '100.00'
-    }])
-    db.enqueue('select', 'Funding_Case_Agreement_Payment_Line', [{ paid_amount: '50.00' }])
-
-    await expect(generatedPaymentStatusResurrectionExceedsCoverage(
-      asAllocationDb(db),
-      'payment-1'
-    )).resolves.toBe(true)
+    const financials = { validatePaymentAllocations: vi.fn(async () => true) }
+    await expect(generatedPaymentStatusResurrectionExceedsCoverage(asAllocationDb(db), 'payment-1', financials)).resolves.toBe(false)
+    expect(financials.validatePaymentAllocations).toHaveBeenCalledWith({ excludePaymentId: 'payment-1', allocations: [] })
   })
 })
 
@@ -2267,7 +2258,8 @@ describe('generated outcome allocation payment edge cases', () => {
       'missing',
       'year-1',
       10,
-      allocationConfig
+      allocationConfig,
+      { getCommitmentLinePaymentCoverage: vi.fn(async () => ({ paidAmount: '0.00' })) }
     )).resolves.toEqual({ status: 'continue' })
 
     const unsupportedDb = new ScriptedDb()
@@ -2282,7 +2274,8 @@ describe('generated outcome allocation payment edge cases', () => {
       'commitment-1',
       'year-1',
       10,
-      allocationConfig
+      allocationConfig,
+      { getCommitmentLinePaymentCoverage: vi.fn(async () => ({ paidAmount: '0.00' })) }
     )).resolves.toEqual({ status: 'continue' })
   })
 
@@ -2301,7 +2294,8 @@ describe('generated outcome allocation payment edge cases', () => {
       'commitment-1',
       'year-1',
       10,
-      allocationConfig
+      allocationConfig,
+      { getCommitmentLinePaymentCoverage: vi.fn(async () => ({ paidAmount: '0.00' })) }
     )).resolves.toMatchObject({
       status: 'handled',
       issues: [{
@@ -2338,7 +2332,6 @@ describe('generated outcome allocation payment edge cases', () => {
       provenance_outcome_id: null,
       provenance_stream_commitment_id: null
     }])
-    db.enqueue('select', 'Funding_Case_Agreement_Payment_Line', [])
 
     await expect(getGeneratedPaymentLines(
       asAllocationDb(db),
@@ -2347,7 +2340,8 @@ describe('generated outcome allocation payment edge cases', () => {
       'commitment-1',
       'year-1',
       40,
-      allocationConfig
+      allocationConfig,
+      { getCommitmentLinePaymentCoverage: vi.fn(async () => ({ paidAmount: '0.00' })) }
     )).resolves.toEqual({
       status: 'handled',
       issues: [],
@@ -2369,31 +2363,6 @@ describe('generated outcome allocation payment edge cases', () => {
       ]
     })
 
-    const priorPaymentsQuery = db.records.find(record =>
-      record.table === 'Funding_Case_Agreement_Payment_Line'
-    )
-    expect(priorPaymentsQuery?.joins.map(join => ({
-      table: join.args[0],
-      predicates: join.predicates
-    }))).toEqual([
-      {
-        table: 'Funding_Case_Agreement_Payment',
-        predicates: [[
-          'onRef',
-          'Funding_Case_Agreement_Payment.id',
-          'Funding_Case_Agreement_Payment_Line.egcs_fc_fundingagreementpayment'
-        ]]
-      }
-    ])
-    expect(priorPaymentsQuery?.wheres).toEqual([
-      [
-        'Funding_Case_Agreement_Payment_Line.egcs_fc_fundingagreementcommitmentline',
-        'in',
-        ['commitment-line-1']
-      ],
-      ['Funding_Case_Agreement_Payment_Line._deleted', '=', false],
-      ['Funding_Case_Agreement_Payment._deleted', '=', false],
-      [expect.any(Object)]
-    ])
+    expect(db.records.some(record => record.table === 'Funding_Case_Agreement_Payment_Line')).toBe(false)
   })
 })
