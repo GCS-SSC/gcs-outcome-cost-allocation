@@ -254,7 +254,7 @@ const createContext = (
   db: WriteDb,
   overrides: Partial<GcsExtensionCreateOperationContext> = {}
 ): Omit<GcsExtensionCreateOperationContext, 'extensionKey'> => ({
-  agreementFinancials: { getRecordedPaidToDate: vi.fn(), getPaidAccountingProjection: vi.fn(), getCommitmentPaymentCapacity: vi.fn(),
+  agreementFinancials: { getClaimRecoveryProjection: vi.fn(async () => ({ agreementId: 'agreement-1', entries: [] })), getRecordedPaidToDate: vi.fn(), getPaidAccountingProjection: vi.fn(), getCommitmentPaymentCapacity: vi.fn(),
     getCommitmentLinePaymentCoverage: vi.fn(), validatePaymentAllocations: vi.fn(async () => true) },
   operation: 'agreement.commitments.create',
   phase: 'before-create',
@@ -356,7 +356,7 @@ describe('outcome cost allocation create hooks', () => {
   it('uses the same native currency for Payment generation and atomic host batch validation', async () => {
     const db = new WriteDb()
     const { payment } = await loadHooks()
-    const financials = { getRecordedPaidToDate: vi.fn(), getPaidAccountingProjection: vi.fn(), getCommitmentPaymentCapacity: vi.fn(), getCommitmentLinePaymentCoverage: vi.fn(),
+    const financials = { getClaimRecoveryProjection: vi.fn(async () => ({ agreementId: 'agreement-1', entries: [] })), getRecordedPaidToDate: vi.fn(), getPaidAccountingProjection: vi.fn(), getCommitmentPaymentCapacity: vi.fn(), getCommitmentLinePaymentCoverage: vi.fn(),
       validatePaymentAllocations: vi.fn(async () => true) }
     allocationDataMocks.getGeneratedPaymentLines.mockResolvedValue({ status: 'handled', issues: [], lines: [{ commitmentLineId: 'line-usd', amount: '25.01' }] })
     await payment(createPayload('agreement.payments.create', createPaymentContext(db, { agreementFinancials: financials,
@@ -493,7 +493,7 @@ describe('outcome cost allocation create hooks', () => {
     allocationDataMocks.generatedPaymentStatusResurrectionExceedsCoverage.mockResolvedValueOnce(true)
 
     await expect(paymentMutation({
-      agreementFinancials: { getRecordedPaidToDate: vi.fn(), getPaidAccountingProjection: vi.fn(), getCommitmentPaymentCapacity: vi.fn(), getCommitmentLinePaymentCoverage: vi.fn(), validatePaymentAllocations: vi.fn() },
+      agreementFinancials: { getClaimRecoveryProjection: vi.fn(async () => ({ agreementId: 'agreement-1', entries: [] })), getRecordedPaidToDate: vi.fn(), getPaidAccountingProjection: vi.fn(), getCommitmentPaymentCapacity: vi.fn(), getCommitmentLinePaymentCoverage: vi.fn(), validatePaymentAllocations: vi.fn() },
       operation: 'payment.status-change',
       event: {},
       db: db as unknown as Transaction<unknown>,
@@ -518,7 +518,7 @@ describe('outcome cost allocation create hooks', () => {
     allocationDataMocks.generatedPaymentStatusResurrectionExceedsCoverage.mockResolvedValueOnce(true)
 
     await expect(paymentMutation({
-      agreementFinancials: { getRecordedPaidToDate: vi.fn(), getPaidAccountingProjection: vi.fn(), getCommitmentPaymentCapacity: vi.fn(), getCommitmentLinePaymentCoverage: vi.fn(), validatePaymentAllocations: vi.fn() },
+      agreementFinancials: { getClaimRecoveryProjection: vi.fn(async () => ({ agreementId: 'agreement-1', entries: [] })), getRecordedPaidToDate: vi.fn(), getPaidAccountingProjection: vi.fn(), getCommitmentPaymentCapacity: vi.fn(), getCommitmentLinePaymentCoverage: vi.fn(), validatePaymentAllocations: vi.fn() },
       operation: 'payment.status-change',
       event: {},
       db: db as unknown as Transaction<unknown>,
@@ -581,7 +581,7 @@ describe('outcome cost allocation create hooks', () => {
       changes: { egcs_fc_comment: 'Allowed note' }
     })).resolves.toBeUndefined()
     await expect(paymentMutation({
-      agreementFinancials: { getRecordedPaidToDate: vi.fn(), getPaidAccountingProjection: vi.fn(), getCommitmentPaymentCapacity: vi.fn(), getCommitmentLinePaymentCoverage: vi.fn(), validatePaymentAllocations: vi.fn() },
+      agreementFinancials: { getClaimRecoveryProjection: vi.fn(async () => ({ agreementId: 'agreement-1', entries: [] })), getRecordedPaidToDate: vi.fn(), getPaidAccountingProjection: vi.fn(), getCommitmentPaymentCapacity: vi.fn(), getCommitmentLinePaymentCoverage: vi.fn(), validatePaymentAllocations: vi.fn() },
       operation: 'payment.status-change',
       event: {},
       db: generatedDb as unknown as Transaction<unknown>,
@@ -1170,7 +1170,7 @@ describe('outcome cost allocation create hooks', () => {
   it('rejects a generated batch that the host says exceeds shared coding capacity before insertion', async () => {
     const db = new WriteDb()
     const { payment } = await loadHooks()
-    const financials = { getRecordedPaidToDate: vi.fn(), getPaidAccountingProjection: vi.fn(), getCommitmentPaymentCapacity: vi.fn(), getCommitmentLinePaymentCoverage: vi.fn(),
+    const financials = { getClaimRecoveryProjection: vi.fn(async () => ({ agreementId: 'agreement-1', entries: [] })), getRecordedPaidToDate: vi.fn(), getPaidAccountingProjection: vi.fn(), getCommitmentPaymentCapacity: vi.fn(), getCommitmentLinePaymentCoverage: vi.fn(),
       validatePaymentAllocations: vi.fn(async () => false) }
     allocationDataMocks.getGeneratedPaymentLines.mockResolvedValue({ status: 'handled', issues: [],
       lines: [{ commitmentLineId: 'commitment-line-1', amount: '25.00' }] })

@@ -2804,6 +2804,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
       resurrecting = waiterDb.transaction().execute(async trx => {
         await guard({
           agreementFinancials: {
+            getClaimRecoveryProjection: vi.fn(async () => ({ agreementId: '12', entries: [] })),
             getRecordedPaidToDate: vi.fn(), getPaidAccountingProjection: vi.fn(), getCommitmentPaymentCapacity: vi.fn(), getCommitmentLinePaymentCoverage: vi.fn(),
             validatePaymentAllocations: async input => {
               expect(input).toEqual({ currency: 'cad', excludePaymentId: '190', allocations: [{ commitmentLineId: '190', amount: '60.00' }] })
