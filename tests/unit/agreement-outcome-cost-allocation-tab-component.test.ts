@@ -134,6 +134,7 @@ const jsonResponse = (value: unknown): Response => new Response(JSON.stringify(v
 })
 
 const allocationResponse = {
+  currency: 'cad',
   outcomes: [{
     id: 'outcome-1',
     label_en: 'Outcome 1',
@@ -330,7 +331,9 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
     expect(valueFields[0]!.attributes('label')).toContain('Value — Outcome 1 (2026-2027)')
     expect(wrapper.findAll('[required]').some(field => field.attributes('label') === 'Method — Outcome 1 (2026-2027)')).toBe(true)
 
+    expect(valueFields[0]!.get('input').attributes('data-currency')).toBe('cad')
     await methodSelects[0]?.get('select').setValue('percentage')
+    expect(valueFields[0]!.get('input').attributes('data-currency')).toBeUndefined()
     await valueFields[0]!.get('input').setValue('12.3456')
     methodSelects[0]?.vm.$emit('update:modelValue', ['amount'])
     await wrapper.vm.$nextTick()
@@ -528,6 +531,26 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
     wrapper.unmount()
   })
 
+  it.each([
+    ['en', '$100.00'],
+    ['fr', '100,00 $US']
+  ])('uses owning USD currency for allocation inputs and displayed totals in %s', async (language, expected) => {
+    const response = { ...allocationResponse, currency: 'usd', allocations: [{
+      allocationVersionId: 'version-1', commitmentType: '1', streamCommitmentId: 'stream-commitment-1',
+      agreementBudgetFiscalYearId: '1', outcomeId: 'outcome-1', allocationMethod: 'amount', allocationValue: '100.0000'
+    }] }
+    const fetchMock = vi.fn(async (): Promise<Response> => jsonResponse(response))
+    const wrapper = await mountTab(fetchMock as typeof fetch, config, language)
+    expect(wrapper.get('[data-cell="value"] input').attributes('data-currency')).toBe('usd')
+    const formatter = wrapper.findComponent({ name: 'GcsCommonCurrencyInput' }).vm.$attrs['format-value'] as (value: string, locale: string, currency: string) => string | null
+    expect(formatter('100.2350', language, 'usd')).toBe(language === 'fr' ? '100,24 $US' : '$100.24')
+    expect(formatter('', language, 'usd')).toBeNull()
+    expect(formatter('1e3', language, 'usd')).toBeNull()
+    expect(formatter('999999999999999.9949', language, 'usd')).toBe(language === 'fr' ? '999 999 999 999 999,99 $US' : '$999,999,999,999,999.99')
+    expect(wrapper.get('[data-cell="amount"]').text()).toBe(expected)
+    wrapper.unmount()
+  })
+
   it('renders completed amount and funding snapshots after the current budget changes', async () => {
     const completedResponse = {
       ...allocationResponse,
@@ -633,12 +656,12 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
 
     expect(associationRows).toHaveLength(2)
     expect(associationRows.map(row => row.get('[data-cell="amount"]').text())).toEqual([
-      '$0.03',
-      '$0.02'
+      'CA$0.03',
+      'CA$0.02'
     ])
     expect(wrapper.findAll('[data-cell="unallocated"]').map(cell => cell.text()))
-      .toContain('$0.00')
-    expect(wrapper.text()).not.toContain('-$0.01')
+      .toContain('CA$0.00')
+    expect(wrapper.text()).not.toContain('-CA$0.01')
 
     wrapper.unmount()
   })
@@ -691,7 +714,7 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
       .filter(Boolean)
 
     expect(groupResiduals.length).toBeGreaterThan(1)
-    expect(new Set(groupResiduals)).toEqual(new Set(['$0.00', '-$20.00', '$20.00']))
+    expect(new Set(groupResiduals)).toEqual(new Set(['CA$0.00', '-CA$20.00', 'CA$20.00']))
 
     wrapper.unmount()
   })

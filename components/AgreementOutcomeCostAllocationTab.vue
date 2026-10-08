@@ -13,6 +13,7 @@ import {
   ExtensionFormField,
   ExtensionIcon,
   ExtensionInput,
+  ExtensionCurrencyInput,
   ExtensionModal,
   ExtensionSaveButton,
   ExtensionSelect,
@@ -63,6 +64,7 @@ import {
 } from '../shared/agreement-outcome-cost-allocation-tab'
 
 interface AllocationResponse {
+  currency: string
   outcomes: Array<{
     id: string
     label_en: string
@@ -239,15 +241,33 @@ const allocationColumns = computed(() => [
 ])
 
 const ZERO_MONEY = parseAllocationMoney('0')!
-const formatMoney = (value: AllocationMoney) => {
+/**
+ * Formats exact allocated cents in the owning denomination.
+ * @param value - Canonical allocated money.
+ * @param language - Current interface locale.
+ * @param currency - Owning Agreement denomination.
+ * @returns Localized currency text without numeric coercion.
+ */
+const formatCurrencyAmount = (value: AllocationMoney, language: string, currency: string) => {
   const [integer = '0', fraction = '00'] = value.split('.')
-  const negative = integer.startsWith('-')
-  const digits = negative ? integer.slice(1) : integer
-  const grouped = digits.replace(/\B(?=(\d{3})+(?!\d))/g, locale.value === 'fr' ? '\u00a0' : ',')
-  const amount = `${grouped}${locale.value === 'fr' ? ',' : '.'}${fraction}`
-  return locale.value === 'fr'
-    ? `${negative ? '-' : ''}${amount}\u00a0$`
-    : `${negative ? '-' : ''}$${amount}`
+  const units = integer === '-0' ? -0 : BigInt(integer)
+  return new Intl.NumberFormat(language, {
+    style: 'currency', currency, minimumFractionDigits: 2, maximumFractionDigits: 2
+  }).formatToParts(units).map(part => part.type === 'fraction' ? fraction : part.value).join('')
+}
+const formatMoney = (value: AllocationMoney) => data.value?.currency
+  ? formatCurrencyAmount(value, locale.value, data.value.currency)
+  : '—'
+/**
+ * Displays existing scale-four allocation drafts using the allocation's exact cent rounding.
+ * @param value - Unmodified numeric(19,4) draft text.
+ * @param language - Current interface locale.
+ * @param currency - Owning Agreement denomination.
+ * @returns Formatted cents, or null to retain invalid draft text.
+ */
+const formatAllocationInput = (value: string, language: string, currency: string): string | null => {
+  const units = toExactNumeric19Scale4Units(value)
+  return units === null ? null : formatCurrencyAmount(fromCents((units + BigInt(50)) / BigInt(100)), language, currency)
 }
 
 const formatDate = (value?: string | null) => {
@@ -1108,8 +1128,11 @@ const canDeleteVersion = (version: CostAllocationVersion) =>
               v-if="row.original.rowType === 'association' && row.original.association"
               :label="`${tLocal('value')} — ${row.original.outcomeLabel} (${row.original.yearLabel})`"
               required>
-              <ExtensionInput
-                :model-value="getAllocation(row.original.association)?.allocationValue ?? '0'"
+              <component
+                :is="getAllocation(row.original.association)?.allocationMethod === 'percentage' ? ExtensionInput : ExtensionCurrencyInput"
+                :model-value="String(getAllocation(row.original.association)?.allocationValue ?? '0')"
+                :currency="getAllocation(row.original.association)?.allocationMethod === 'percentage' ? undefined : data?.currency"
+                :format-value="getAllocation(row.original.association)?.allocationMethod === 'percentage' ? undefined : formatAllocationInput"
                 inputmode="decimal"
                 class="w-full min-w-0"
                 :disabled="!canEditSelectedVersion || hasPendingDraftMutation"
