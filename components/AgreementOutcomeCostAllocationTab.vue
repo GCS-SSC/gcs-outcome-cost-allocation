@@ -10,14 +10,17 @@ import type {
 import {
   ExtensionBadge,
   ExtensionButton,
+  ExtensionEntityEditorWorkspace,
   ExtensionFormField,
   ExtensionIcon,
   ExtensionInput,
   ExtensionCurrencyInput,
   ExtensionModal,
+  ExtensionRouteTabs,
   ExtensionSaveButton,
   ExtensionSelect,
   ExtensionSelectMenu,
+  ExtensionSupplementaryInformationSection,
   ExtensionTable,
   ExtensionWorkflowSection,
   useHostApi,
@@ -116,6 +119,11 @@ const isCompleting: Ref<boolean> = ref(false)
 const isCreatingDraft: Ref<boolean> = ref(false)
 const deletingVersionId: Ref<string> = ref('')
 const workflowRefreshKey: Ref<number> = ref(0)
+const selectedWorkflowView: Ref<string> = ref('workflows')
+const workflowViews = computed(() => [
+  { key: 'workflows', value: 'workflows', label: tLocal('workflows'), icon: 'i-lucide-workflow' },
+  { key: 'supplementary-information', value: 'supplementary-information', label: tLocal('supplementaryInformation'), icon: 'i-lucide-clipboard-list' }
+])
 const saveError: Ref<string> = ref('')
 const expandedRows: Ref<Record<string, boolean>> = ref({})
 const isGenerateModalOpen: Ref<boolean> = ref(false)
@@ -1179,21 +1187,37 @@ const canDeleteVersion = (version: CostAllocationVersion) =>
     </div>
 
     <div v-if="selectedVersion" class="min-w-0 space-y-4 border-t border-zinc-200 pt-6 dark:border-zinc-800">
-      <div class="space-y-1">
-        <h3 class="text-base font-semibold text-zinc-900 dark:text-white">
-          {{ tLocal('workflows') }}
-        </h3>
-        <p class="text-sm text-zinc-500 dark:text-zinc-400">
-          {{ tLocal('workflowsDescription') }}
-        </p>
-      </div>
-      <ExtensionWorkflowSection
-        :key="selectedVersion.id"
-        entity-type="gcs-outcome-cost-allocation:allocation-version"
-        :entity-id="selectedVersion.id"
-        :can-edit="!hasPendingDraftMutation"
-        :refresh-key="workflowRefreshKey"
-        @changed="handleWorkflowChanged" />
+      <ExtensionEntityEditorWorkspace content-test-id="allocation-version-workflow-content">
+        <template #sidebar>
+          <ExtensionRouteTabs
+            v-model="selectedWorkflowView"
+            :items="workflowViews"
+            orientation="vertical"
+            :ui="{ root: 'w-full', list: 'w-full flex-col items-stretch p-0', trigger: 'w-full justify-start' }" />
+        </template>
+        <div v-if="selectedWorkflowView === 'workflows'" class="space-y-4">
+          <div class="space-y-1">
+            <h3 class="text-base font-semibold text-zinc-900 dark:text-white">
+              {{ tLocal('workflows') }}
+            </h3>
+            <p class="text-sm text-zinc-500 dark:text-zinc-400">
+              {{ tLocal('workflowsDescription') }}
+            </p>
+          </div>
+          <ExtensionWorkflowSection
+            :key="selectedVersion.id"
+            entity-type="gcs-outcome-cost-allocation:allocation-version"
+            :entity-id="selectedVersion.id"
+            :can-edit="!hasPendingDraftMutation"
+            :refresh-key="workflowRefreshKey"
+            @changed="handleWorkflowChanged" />
+        </div>
+        <ExtensionSupplementaryInformationSection
+          v-else-if="selectedWorkflowView === 'supplementary-information'"
+          :key="selectedVersion.id"
+          entity-type="gcs-outcome-cost-allocation:allocation-version"
+          :entity-id="selectedVersion.id" />
+      </ExtensionEntityEditorWorkspace>
     </div>
 
     <ExtensionModal v-model:open="isGenerateModalOpen" :title="tLocal('generateRowsTitle')">
