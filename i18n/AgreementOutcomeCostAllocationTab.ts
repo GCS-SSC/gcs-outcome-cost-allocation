@@ -31,7 +31,7 @@ export const AgreementOutcomeCostAllocationTabMessages = defineGcsExtensionMessa
     "records": "allocations",
     "save": "Save",
     "workflows": "Workflows",
-    "supplementaryInformation": "Supplementary Information",
+    "supplementaryInformation": "Supplementary",
     "workflowsDescription": "Start and complete a standard workflow for the selected allocation version.",
     "percentage": "Percentage"
   },
@@ -66,7 +66,7 @@ export const AgreementOutcomeCostAllocationTabMessages = defineGcsExtensionMessa
     "records": "repartitions",
     "save": "Enregistrer",
     "workflows": "Flux de travail",
-    "supplementaryInformation": "Renseignements supplémentaires",
+    "supplementaryInformation": "Supplémentaire",
     "workflowsDescription": "Demarrez et terminez un flux de travail standard pour la version de repartition selectionnee.",
     "percentage": "Pourcentage"
   }

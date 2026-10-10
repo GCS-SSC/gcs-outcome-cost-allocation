@@ -98,7 +98,7 @@ describe('Allocation-version Supplementary Information', () => {
     const { wrapper, locale } = await mountTab()
     expect(wrapper.get('aside nav').attributes('data-orientation')).toBe('vertical')
     expect(wrapper.get('[data-view="workflows"]').text()).toBe('Workflows')
-    expect(wrapper.get('[data-view="supplementary-information"]').text()).toBe('Supplementary Information')
+    expect(wrapper.get('[data-view="supplementary-information"]').text()).toBe('Supplementary')
     expect(wrapper.findComponent(SupplementaryInformation).exists()).toBe(false)
 
     await wrapper.get('[data-view="supplementary-information"]').trigger('click')
@@ -112,7 +112,7 @@ describe('Allocation-version Supplementary Information', () => {
     locale.value = 'fr'
     await flushPromises()
     expect(wrapper.get('[data-view="workflows"]').text()).toBe('Flux de travail')
-    expect(wrapper.get('[data-view="supplementary-information"]').text()).toBe('Renseignements supplémentaires')
+    expect(wrapper.get('[data-view="supplementary-information"]').text()).toBe('Supplémentaire')
     expect(wrapper.get('[data-view="supplementary-information"]').attributes('aria-current')).toBe('page')
     wrapper.unmount()
   })
