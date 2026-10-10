@@ -39,7 +39,7 @@ describe('outcome cost allocation errors', () => {
     expect(getOutcomeCostAllocationErrorMessage(
       createRouteEvent('fr-CA,fr;q=0.9'),
       'GCS_OUTCOME_COST_ALLOCATION_DRAFT_EDIT_REQUIRED'
-    )).toBe('Seules les repartitions des couts en ebauche peuvent etre modifiees.')
+    )).toBe('Seules les répartitions des coûts en ébauche peuvent être modifiées.')
 
     expect(getOutcomeCostAllocationErrorMessage(
       createRouteEvent('en-CA'),
@@ -50,21 +50,21 @@ describe('outcome cost allocation errors', () => {
       'GCS_OUTCOME_COST_ALLOCATION_COMMITMENT_LINES_MISSING'
     )).toEqual({
       en: 'The active cost allocation has no positive allocations for this commitment type.',
-      fr: 'La repartition des couts active ne contient aucune repartition positive pour ce type d engagement.'
+      fr: 'La répartition des coûts active ne contient aucune répartition positive pour ce type d’engagement.'
     })
 
     expect(getOutcomeCostAllocationErrorMessages(
       'GCS_OUTCOME_COST_ALLOCATION_COMMITMENT_TYPE_DISABLED'
     )).toEqual({
       en: 'One saved allocation uses a commitment type that is no longer enabled.',
-      fr: 'Une repartition enregistree utilise un type d engagement qui n est plus autorise.'
+      fr: 'Une répartition enregistrée utilise un type d’engagement qui n’est plus autorisé.'
     })
   })
 
   it('falls back to the generic English error for absent and unknown codes', () => {
     const generic = {
       en: 'Outcome cost allocations are invalid.',
-      fr: 'Les repartitions des couts par resultat sont invalides.'
+      fr: 'Les répartitions des coûts par résultat sont invalides.'
     }
 
     expect(getOutcomeCostAllocationErrorMessages(undefined)).toEqual(generic)
@@ -83,7 +83,7 @@ describe('outcome cost allocation errors', () => {
       message: 'Only draft cost allocations can be deleted.',
       localizedMessage: {
         en: 'Only draft cost allocations can be deleted.',
-        fr: 'Seules les repartitions des couts en ebauche peuvent etre supprimees.'
+        fr: 'Seules les répartitions des coûts en ébauche peuvent être supprimées.'
       },
       details: [{
         path: 'allocationVersionId',
@@ -106,7 +106,7 @@ describe('outcome cost allocation errors', () => {
     expect(localizeAllocationIssues(createRouteEvent('fr'), issues)).toEqual([{
       path: 'years.2026',
       code: 'GCS_OUTCOME_COST_ALLOCATION_YEAR_MISSING',
-      message: 'Le budget complet de l entente doit etre reparti.'
+      message: 'Le budget complet de l’entente doit être réparti.'
     }])
 
     expect(bilingualAllocationIssues(issues)).toEqual([{
@@ -114,7 +114,7 @@ describe('outcome cost allocation errors', () => {
       code: 'GCS_OUTCOME_COST_ALLOCATION_YEAR_MISSING',
       message: {
         en: 'The full agreement budget must be allocated.',
-        fr: 'Le budget complet de l entente doit etre reparti.'
+        fr: 'Le budget complet de l’entente doit être réparti.'
       }
     }])
   })
@@ -123,7 +123,7 @@ describe('outcome cost allocation errors', () => {
 it('retains bilingual generic validation feedback without inventing a field issue', () => {
   const error = createAllocationValidationUserError([])
   expect(error.code).toBe('GCS_OUTCOME_COST_ALLOCATION_INVALID')
-  expect(error.localizedMessage).toEqual({ en: 'Outcome cost allocations are invalid.', fr: 'Les repartitions des couts par resultat sont invalides.' })
+  expect(error.localizedMessage).toEqual({ en: 'Outcome cost allocations are invalid.', fr: 'Les répartitions des coûts par résultat sont invalides.' })
   expect(error.details).toEqual([])
 })
 it.each([null, 'connection unavailable'])('preserves unclassified failures rather than disguising them as translated validation', error => {

@@ -227,8 +227,8 @@ describe('agreement outcome cost allocation tab helpers', () => {
       description: 'Allocation saved.'
     })
     expect(getOutcomeAllocationToastText('fr', 'deleted')).toEqual({
-      title: 'Succes',
-      description: 'Brouillon supprime.'
+      title: 'Succès',
+      description: 'Ébauche supprimée.'
     })
     expect(getOutcomeAllocationToastText('en', 'error')).toEqual({
       title: 'Error',

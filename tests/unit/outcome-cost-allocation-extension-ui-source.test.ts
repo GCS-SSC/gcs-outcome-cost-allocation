@@ -14,7 +14,7 @@ describe('outcome cost allocation extension UI', () => {
 
     expect(streamConfig).toContain(':description="tLocal(\'addAssociationDescription\')"')
     expect(StreamOutcomeCostAllocationConfigMessages.en.addAssociationDescription).toContain('Select a commitment line')
-    expect(StreamOutcomeCostAllocationConfigMessages.fr.addAssociationDescription).toContain('Selectionnez une ligne')
+    expect(StreamOutcomeCostAllocationConfigMessages.fr.addAssociationDescription).toContain('Sélectionnez une ligne')
     expect(streamConfig).toContain('<ExtensionTable')
     expect(streamConfig).toContain('mappingColumns')
     expect(streamConfig).not.toContain('getGroupedRowModel')

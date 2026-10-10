@@ -50,7 +50,7 @@ const extensionDisableBlocked = () => createGcsExtensionUserError({
   statusCode: 409,
   message: {
     en: 'Outcome cost allocation cannot be disabled while allocation-generated commitments exist. Keep the extension enabled so future payments remain managed.',
-    fr: 'La repartition des couts par resultat ne peut pas etre desactivee tant que des engagements generes existent. Gardez l extension activee afin que les paiements futurs restent geres.'
+    fr: 'La répartition des coûts par résultat ne peut pas être désactivée tant que des engagements générés existent. Gardez l’extension activée afin que les paiements futurs restent gérés.'
   }
 })
 
@@ -59,7 +59,7 @@ const agreementStreamChangeBlocked = () => createGcsExtensionUserError({
   statusCode: 409,
   message: {
     en: 'This agreement cannot be moved to another stream because outcome cost allocation history already exists.',
-    fr: 'Cette entente ne peut pas etre deplacee vers un autre volet, car un historique de repartition des couts par resultat existe deja.'
+    fr: 'Cette entente ne peut pas être déplacée vers un autre volet, car un historique de répartition des coûts par résultat existe déjà.'
   }
 })
 
@@ -68,7 +68,7 @@ const agreementDeleteBlocked = () => createGcsExtensionUserError({
   statusCode: 409,
   message: {
     en: 'This agreement cannot be deleted because outcome cost allocation history or generated records exist.',
-    fr: 'Cette entente ne peut pas etre supprimee, car un historique de repartition des couts par resultat ou des enregistrements generes existent.'
+    fr: 'Cette entente ne peut pas être supprimée, car un historique de répartition des coûts par résultat ou des enregistrements générés existent.'
   }
 })
 
@@ -77,7 +77,7 @@ const allocationStatusReferenced = () => createGcsExtensionUserError({
   statusCode: 409,
   message: {
     en: 'This status is still referenced by outcome cost allocation history.',
-    fr: 'Ce statut est toujours reference par un historique de repartition des couts par resultat.'
+    fr: 'Ce statut est toujours référencé par un historique de répartition des coûts par résultat.'
   }
 })
 

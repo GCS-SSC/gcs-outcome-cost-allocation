@@ -352,6 +352,9 @@ watch(config, value => {
 
     <div class="overflow-hidden rounded-md border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
       <ExtensionTable
+        role="group"
+        :aria-label="tLocal('title')"
+        tabindex="0"
         :data="tableRows"
         :columns="mappingColumns"
         class="min-w-full">

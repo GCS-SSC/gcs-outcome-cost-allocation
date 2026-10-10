@@ -138,7 +138,7 @@ const allocationResponse = {
   outcomes: [{
     id: 'outcome-1',
     label_en: 'Outcome 1',
-    label_fr: 'Resultat 1'
+    label_fr: 'Résultat 1'
   }],
   budgetYears: [
     {
@@ -278,7 +278,7 @@ afterEach(() => {
 describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
   it.each([
     ['en', 'Workflows', 'Start and complete a standard workflow for the selected allocation version.'],
-    ['fr', 'Flux de travail', 'Demarrez et terminez un flux de travail standard pour la version de repartition selectionnee.']
+    ['fr', 'Processus', 'Démarrez et terminez un processus standard pour la version de répartition sélectionnée.']
   ])('mounts the standard host Workflow section for the selected qualified target in %s', async (
     locale,
     heading,
@@ -287,6 +287,10 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
     const fetchMock = vi.fn(async (): Promise<Response> => jsonResponse(allocationResponse))
     const wrapper = await mountTab(fetchMock as typeof fetch, config, locale)
 
+    const versionScroll = wrapper.get('[role="group"].overflow-x-auto')
+    expect(versionScroll.attributes('tabindex')).toBe('0')
+    expect(versionScroll.attributes('aria-label')).toBe(versionScroll.get('caption').text())
+    expect(versionScroll.get('table').attributes('role')).toBeUndefined()
     const workflow = wrapper.getComponent(WorkflowSection)
     expect(workflow.props()).toMatchObject({
       entityType: 'gcs-outcome-cost-allocation:allocation-version',
@@ -603,7 +607,7 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
         {
           id: 'outcome-2',
           label_en: 'Outcome 2',
-          label_fr: 'Resultat 2'
+          label_fr: 'Résultat 2'
         }
       ],
       budgetYears: [{

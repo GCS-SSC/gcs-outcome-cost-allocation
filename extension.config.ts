@@ -47,15 +47,15 @@ export default defineGcsExtension({
   ],
   name: {
     en: 'Outcome cost allocation',
-    fr: 'Repartition des couts par resultat'
+    fr: 'Répartition des coûts par résultat'
   },
   description: {
     en: 'Allocates agreement program funding by outcome and generates commitment lines from stream chart-of-account mappings.',
-    fr: 'Repartit le financement de programme par resultat et genere les lignes d engagement a partir des correspondances du volet.'
+    fr: 'Répartit le financement de programme par résultat et génère les lignes d’engagement à partir des correspondances du volet.'
   },
   entities: [{
     type: 'allocation-version',
-    label: { en: 'Outcome cost allocation version', fr: 'Version de repartition des couts par resultat' },
+    label: { en: 'Outcome cost allocation version', fr: 'Version de répartition des coûts par résultat' },
     completion: 'supported',
     approvalSubmission: 'on_completion',
     standardWorkflow: 'explicit',
@@ -76,7 +76,7 @@ export default defineGcsExtension({
         id: 'outcome-cost-allocation',
         label: {
           en: 'Cost Allocation',
-          fr: 'Repartition des couts'
+          fr: 'Répartition des coûts'
         },
         icon: 'i-lucide-chart-no-axes-combined',
         path: './components/AgreementOutcomeCostAllocationTab.vue',

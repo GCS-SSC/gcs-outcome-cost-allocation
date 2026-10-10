@@ -383,7 +383,7 @@ describe('outcome allocation routes', () => {
       code: 'GCS_OUTCOME_COST_ALLOCATION_INVALID',
       localizedMessage: {
         en: 'Outcome cost allocations are invalid.',
-        fr: 'Les repartitions des couts par resultat sont invalides.'
+        fr: 'Les répartitions des coûts par résultat sont invalides.'
       },
       details: [{
         path,
@@ -411,7 +411,7 @@ describe('outcome allocation routes', () => {
       code: 'GCS_OUTCOME_COST_ALLOCATION_STALE_COORDINATE',
       message: 'One allocation reference is no longer available for this agreement. Refresh the allocation and try again.',
       localizedMessage: {
-        fr: 'Une reference de repartition n est plus disponible pour cette entente. Actualisez la repartition et reessayez.'
+        fr: 'Une référence de répartition n’est plus disponible pour cette entente. Actualisez la répartition et réessayez.'
       },
       details: [{
         path: 'allocations',

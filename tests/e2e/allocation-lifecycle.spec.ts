@@ -9,7 +9,7 @@ const openAllocation = async (page: Page, agreementId: string, locale: 'en' | 'f
   if ((page.viewportSize()?.width ?? 1280) < 768) {
     await page.getByRole('button', { name: locale === 'fr' ? 'Basculer la navigation' : 'Toggle navigation' }).click()
   }
-  await page.getByRole('tab', { name: locale === 'fr' ? 'Repartition des couts' : 'Cost Allocation', exact: true }).last().click()
+  await page.getByRole('tab', { name: locale === 'fr' ? 'Répartition des coûts' : 'Cost Allocation', exact: true }).last().click()
 }
 
 
@@ -536,8 +536,8 @@ test('saves and submits qualified standard Workflow Recommendations across termi
   const nestedVersionId = await createAllocationVersion(page, agreement.agreementId)
   await page.setViewportSize({ width: 390, height: 844 })
   await openAllocation(page, agreement.agreementId, 'fr')
-  await expect(page.getByRole('heading', { name: 'Flux de travail', exact: true })).toBeVisible()
-  await page.getByRole('button', { name: 'Ajouter un flux de travail' }).click()
+  await expect(page.getByRole('heading', { name: 'Processus', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Ajouter un processus' }).click()
   await page.getByRole('button', { name: /Flux de repartition qualifie avec approbation imbriquee/ }).click()
   await page.getByRole('button', { name: 'Démarrer le processus' }).click()
   await page.getByRole('radio', { name: 'Recommandé', exact: true }).check()
@@ -555,7 +555,7 @@ test('saves and submits qualified standard Workflow Recommendations across termi
   await approveNestedRecommendation(page, nestedRecommendation!.id)
   await page.reload()
   await page.getByRole('button', { name: 'Basculer la navigation' }).click()
-  await page.getByRole('tab', { name: 'Repartition des couts', exact: true }).last().click()
+  await page.getByRole('tab', { name: 'Répartition des coûts', exact: true }).last().click()
   await expect(page.getByText('Approuvé', { exact: true }).first()).toBeVisible()
   expect((await readQualifiedWorkflow(page, nestedVersionId)).current?.runtimeState).toBe('approved')
 
@@ -594,7 +594,7 @@ test('executes allocation draft, access, localization, and disable gates', async
 
   await page.setViewportSize({ width: 390, height: 844 })
   await openAllocation(page, agreementId, 'fr')
-  await expect(page.getByRole('heading', { name: 'Repartition des couts', exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Répartition des coûts', exact: true })).toBeVisible()
 
   const deleteResponse = await page.request.delete(
     `/api/extensions/${EXTENSION_KEY}/agreements/${agreementId}/allocation-versions/${created.version.id}`

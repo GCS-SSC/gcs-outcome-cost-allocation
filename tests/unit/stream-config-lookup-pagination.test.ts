@@ -13,6 +13,7 @@ it.each(['en', 'fr'])('loads and selects labels past the first page (%s)', async
   vi.stubGlobal('watch', watch)
   vi.stubGlobal('useI18n', () => ({ locale: ref(locale), n: (value: number) => String(value) }))
   const runtime = installExtensionTestUiRuntime()
+  runtime.components.UTable = defineComponent({ inheritAttrs: false, setup: (_, { attrs }) => () => h('div', attrs, h('table')) })
   const requestedPages: string[] = []
   vi.stubGlobal('fetch', vi.fn(async (input: string) => {
     const url = new URL(String(input), 'http://localhost')
@@ -34,6 +35,10 @@ it.each(['en', 'fr'])('loads and selects labels past the first page (%s)', async
     extension: {} as never, streamId: 'stream', transferPaymentId: 'program', modelValue: { enabledCommitmentTypes: [], mappings: [] }
   }) }) }))
   await flushPromises()
+  const scroll = wrapper.get('[role="group"]')
+  expect(scroll.attributes('tabindex')).toBe('0')
+  expect(scroll.attributes('aria-label')).toBe(wrapper.get('h2').text())
+  expect(scroll.get('table').attributes('role')).toBeUndefined()
   const component = wrapper.findComponent(StreamConfig)
   const instance = component.vm.$
   if (!instance) throw new Error('Stream configuration component did not mount')

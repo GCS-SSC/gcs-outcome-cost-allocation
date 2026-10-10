@@ -36,38 +36,38 @@ export const AgreementOutcomeCostAllocationTabMessages = defineGcsExtensionMessa
     "percentage": "Percentage"
   },
   "fr": {
-    "title": "Repartition des couts",
-    "empty": "Ajoutez des activites avec des resultats, des exercices budgetaires et la configuration de repartition des couts du volet avant de repartir les couts.",
-    "outcome": "Resultat",
-    "commitmentLine": "Ligne d engagement",
-    "method": "Methode",
+    "title": "Répartition des coûts",
+    "empty": "Ajoutez des activités avec des résultats, des exercices budgétaires et la configuration de répartition des coûts du volet avant de répartir les coûts.",
+    "outcome": "Résultat",
+    "commitmentLine": "Ligne d’engagement",
+    "method": "Méthode",
     "value": "Valeur",
     "amount": "Montant",
-    "unallocated": "Non reparti",
+    "unallocated": "Non réparti",
     "version": "Version",
     "status": "Statut",
     "actions": "Actions",
-    "allocationVersions": "Repartitions des couts",
-    "selectedAllocation": "Repartition selectionnee",
-    "generateRows": "Generer les lignes",
-    "generateRowsTitle": "Generer des lignes de repartition",
-    "commitmentType": "Type d engagement",
+    "allocationVersions": "Répartitions des coûts",
+    "selectedAllocation": "Répartition sélectionnée",
+    "generateRows": "Générer les lignes",
+    "generateRowsTitle": "Générer des lignes de répartition",
+    "commitmentType": "Type d’engagement",
     "fiscalYears": "Exercices",
-    "removeRowsTitle": "Supprimer les lignes de repartition obsoletes?",
-    "removeRowsDescription": "La generation supprimera les lignes qui ne correspondent plus au type d engagement, aux exercices et aux resultats de l entente selectionnes.",
-    "removeAllocation": "Retirer la repartition",
-    "noRows": "Aucune ligne de repartition n a ete ajoutee a ce brouillon.",
-    "newDraft": "Nouveau brouillon",
+    "removeRowsTitle": "Supprimer les lignes de répartition obsolètes?",
+    "removeRowsDescription": "La génération supprimera les lignes qui ne correspondent plus au type d’engagement, aux exercices et aux résultats de l’entente sélectionnés.",
+    "removeAllocation": "Retirer la répartition",
+    "noRows": "Aucune ligne de répartition n’a été ajoutée à cette ébauche.",
+    "newDraft": "Nouvelle ébauche",
     "complete": "Soumettre pour approbation",
     "view": "Voir",
     "delete": "Supprimer",
-    "selected": "Selectionnee",
-    "readonly": "Seules les repartitions en brouillon peuvent etre modifiees.",
-    "records": "repartitions",
+    "selected": "Sélectionnée",
+    "readonly": "Seules les répartitions en ébauche peuvent être modifiées.",
+    "records": "répartitions",
     "save": "Enregistrer",
-    "workflows": "Flux de travail",
+    "workflows": "Processus",
     "supplementaryInformation": "Supplémentaire",
-    "workflowsDescription": "Demarrez et terminez un flux de travail standard pour la version de repartition selectionnee.",
+    "workflowsDescription": "Démarrez et terminez un processus standard pour la version de répartition sélectionnée.",
     "percentage": "Pourcentage"
   }
 })
@@ -79,7 +79,7 @@ export const AgreementOutcomeCostAllocationTabStatusMessages = defineGcsExtensio
     "inactive": "Inactive"
   },
   "fr": {
-    "draft": "Brouillon",
+    "draft": "Ébauche",
     "active": "Active",
     "inactive": "Inactive"
   }
@@ -98,14 +98,14 @@ export const AgreementOutcomeCostAllocationTabErrorMessages = defineGcsExtension
     "GCS_OUTCOME_COST_ALLOCATION_STALE_BUDGET_YEAR": "One saved allocation references a budget year that is no longer active."
   },
   "fr": {
-    "GCS_OUTCOME_COST_ALLOCATION_YEAR_MISSING": "Le budget complet de l entente doit etre reparti.",
-    "GCS_OUTCOME_COST_ALLOCATION_MIXED_METHODS": "Le budget complet de l entente doit etre reparti.",
-    "GCS_OUTCOME_COST_ALLOCATION_PERCENTAGE_TOTAL_INVALID": "Le budget complet de l entente doit etre reparti.",
-    "GCS_OUTCOME_COST_ALLOCATION_AMOUNT_TOTAL_INVALID": "Le budget complet de l entente doit etre reparti.",
-    "GCS_OUTCOME_COST_ALLOCATION_TOTAL_INVALID": "Le budget complet de l entente doit etre reparti.",
-    "GCS_OUTCOME_COST_ALLOCATION_YEAR_TOTAL_INVALID": "Chaque exercice doit etre entierement reparti selon sa propre valeur budgetaire.",
-    "GCS_OUTCOME_COST_ALLOCATION_YEAR_TOTAL_EXCEEDED": "Une repartition ne peut pas depasser la valeur budgetaire de son exercice.",
-    "GCS_OUTCOME_COST_ALLOCATION_STALE_OUTCOME": "Une repartition enregistree reference un resultat qui n est plus utilise par les activites de l entente.",
-    "GCS_OUTCOME_COST_ALLOCATION_STALE_BUDGET_YEAR": "Une repartition enregistree reference un exercice budgetaire qui n est plus actif."
+    "GCS_OUTCOME_COST_ALLOCATION_YEAR_MISSING": "Le budget complet de l’entente doit être réparti.",
+    "GCS_OUTCOME_COST_ALLOCATION_MIXED_METHODS": "Le budget complet de l’entente doit être réparti.",
+    "GCS_OUTCOME_COST_ALLOCATION_PERCENTAGE_TOTAL_INVALID": "Le budget complet de l’entente doit être réparti.",
+    "GCS_OUTCOME_COST_ALLOCATION_AMOUNT_TOTAL_INVALID": "Le budget complet de l’entente doit être réparti.",
+    "GCS_OUTCOME_COST_ALLOCATION_TOTAL_INVALID": "Le budget complet de l’entente doit être réparti.",
+    "GCS_OUTCOME_COST_ALLOCATION_YEAR_TOTAL_INVALID": "Chaque exercice doit être entièrement réparti selon sa propre valeur budgétaire.",
+    "GCS_OUTCOME_COST_ALLOCATION_YEAR_TOTAL_EXCEEDED": "Une répartition ne peut pas dépasser la valeur budgétaire de son exercice.",
+    "GCS_OUTCOME_COST_ALLOCATION_STALE_OUTCOME": "Une répartition enregistrée référence un résultat qui n’est plus utilisé par les activités de l’entente.",
+    "GCS_OUTCOME_COST_ALLOCATION_STALE_BUDGET_YEAR": "Une répartition enregistrée référence un exercice budgétaire qui n’est plus actif."
   }
 })

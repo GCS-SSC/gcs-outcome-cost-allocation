@@ -111,7 +111,7 @@ describe('Allocation-version Supplementary Information', () => {
 
     locale.value = 'fr'
     await flushPromises()
-    expect(wrapper.get('[data-view="workflows"]').text()).toBe('Flux de travail')
+    expect(wrapper.get('[data-view="workflows"]').text()).toBe('Processus')
     expect(wrapper.get('[data-view="supplementary-information"]').text()).toBe('Supplémentaire')
     expect(wrapper.get('[data-view="supplementary-information"]').attributes('aria-current')).toBe('page')
     wrapper.unmount()

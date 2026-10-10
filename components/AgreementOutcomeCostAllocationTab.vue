@@ -923,7 +923,11 @@ const canDeleteVersion = (version: CostAllocationVersion) =>
       <h3 class="text-base font-semibold text-zinc-900 dark:text-white">
         {{ tLocal('allocationVersions') }}
       </h3>
-      <div class="w-full min-w-0 overflow-x-auto rounded-sm border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
+      <div
+        role="group"
+        :aria-label="tLocal('allocationVersions')"
+        tabindex="0"
+        class="w-full min-w-0 overflow-x-auto rounded-sm border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
         <table class="w-full min-w-0 table-fixed divide-y divide-zinc-200 text-sm dark:divide-zinc-800">
           <caption class="sr-only">
             {{ tLocal('allocationVersions') }}
