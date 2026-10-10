@@ -1,82 +1,25 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { Kysely, Transaction } from 'kysely'
-import type { GcsExtensionCreateOperation } from '@gcs-ssc/extensions'
+import type { Transaction } from 'kysely'
 import type {
   GcsExtensionAgreementDeleteGuardHookPayload,
   GcsExtensionAgreementStreamChangeGuardHookPayload,
   GcsExtensionAgreementLifecycleLockHookPayload,
   GcsExtensionAgreementPaymentMutationGuardHookPayload,
-  GcsExtensionCreateOperationContext,
-  GcsExtensionCreateOperationHookPayload,
+  GcsExtensionDisableGuardHookPayload,
   GcsExtensionStatusReferenceGuardHookPayload
 } from '@gcs-ssc/extensions/server'
 import { EXTENSION_KEY } from '../../shared/allocation'
 
 const allocationDataMocks = vi.hoisted(() => ({
-  getGeneratedCommitmentLines: vi.fn(),
-  getGeneratedPaymentLines: vi.fn(),
   generatedPaymentStatusResurrectionExceedsCoverage: vi.fn(),
   lockAgreementAllocationAdvisory: vi.fn(),
   lockAgreementAllocationLifecycle: vi.fn(),
-  lockAndGetOutcomeCostAllocationConfig: vi.fn(),
   lockOutcomeCostAllocationScope: vi.fn()
 }))
 
 vi.mock('../../server/allocation-data', () => allocationDataMocks)
 
-interface WriteRecord {
-  operation: 'insert' | 'update'
-  table: string
-  values?: unknown
-  update?: unknown
-  wheres: unknown[][]
-}
-
-class WriteQuery {
-  constructor(
-    private readonly db: WriteDb,
-    private readonly record: WriteRecord
-  ) {}
-
-  values(value: unknown) {
-    this.record.values = value
-    return this
-  }
-
-  set(value: unknown) {
-    this.record.update = value
-    return this
-  }
-
-  where(...args: unknown[]) {
-    this.record.wheres.push(args)
-    return this
-  }
-
-  returningAll() {
-    return this
-  }
-
-  returning() {
-    return this
-  }
-
-  async executeTakeFirstOrThrow() {
-    if (this.record.table === 'Funding_Case_Agreement_Commitment') {
-      return this.db.commitment
-    }
-    throw new Error(`Unexpected single-row write for ${this.record.table}`)
-  }
-
-  async execute() {
-    return this.record.table === 'Funding_Case_Agreement_Commitment_Line'
-      ? this.db.commitmentLines
-      : []
-  }
-}
-
 class WriteDb {
-  readonly records: WriteRecord[] = []
   readonly selectedTables: string[] = []
   agreementLifecycleLocked = false
   ownedTableQueriedBeforeLifecycleLock = false
@@ -90,32 +33,6 @@ class WriteDb {
   generatedPaymentIds = new Set<string>()
   generatedCommitment = false
   generatedCommitmentLine = false
-  commitment = {
-    id: 'commitment-1',
-    egcs_fc_fundingagreement: 'agreement-1',
-    egcs_fc_type: '1',
-    egcs_fc_status: 'inprogress',
-    egcs_fc_financialsystemnumber: null
-  }
-
-  commitmentLines = [
-    {
-      id: 'commitment-line-1',
-      egcs_fc_commitmentlinenumber: 1
-    },
-    {
-      id: 'commitment-line-2',
-      egcs_fc_commitmentlinenumber: 2
-    }
-  ]
-
-  insertInto(table: string) {
-    return this.createQuery('insert', table)
-  }
-
-  updateTable(table: string) {
-    return this.createQuery('update', table)
-  }
 
   getExecutor() {
     return this
@@ -161,6 +78,11 @@ class WriteDb {
       },
       select: () => query,
       forUpdate: () => query,
+      distinct: () => query,
+      orderBy: () => query,
+      execute: async () => table === 'Funding_Case_Agreement_Profile'
+        ? [{ id: 'agreement-1' }]
+        : [],
       executeTakeFirst: async () => {
         if (table === 'extensions.agency_enablement' || table === 'Funding_Case_Agreement_Profile') {
           return this.agencyEnabled ? { id: 'enabled-scope-1', agency_id: 'agency-1' } : undefined
@@ -197,145 +119,29 @@ class WriteDb {
     }
     return query
   }
-
-  private createQuery(operation: WriteRecord['operation'], table: string) {
-    const record: WriteRecord = {
-      operation,
-      table,
-      wheres: []
-    }
-    this.records.push(record)
-    return new WriteQuery(this, record)
-  }
 }
 
-type Hook = (payload: GcsExtensionCreateOperationHookPayload) => Promise<void> | void
+type Hook = (payload: never) => Promise<void> | void
 
 const loadHooks = async () => {
-  const hooks: Hook[] = []
+  const hooks = new Map<string, Hook>()
   const plugin = (await import('../../server/plugins/create-hooks')).default as unknown as (
-    nitroApp: {
-      hooks: {
-        hook: (name: string, handler: Hook) => void
-      }
-    }
+    nitroApp: { hooks: { hook: (name: string, handler: Hook) => void } }
   ) => void
-  plugin({
-    hooks: {
-      hook: (_name, handler) => {
-        hooks.push(handler)
-      }
-    }
-  })
-  expect(hooks).toHaveLength(8)
+  plugin({ hooks: { hook: (name, handler) => { hooks.set(name, handler) } } })
   return {
-    commitment: hooks[0] as Hook,
-    payment: hooks[1] as Hook,
-    disable: hooks[2] as Hook,
-    lifecycle: hooks[3] as unknown as (
-      payload: GcsExtensionAgreementLifecycleLockHookPayload
-    ) => Promise<void>,
-    agreementDelete: hooks[4] as unknown as (
-      payload: GcsExtensionAgreementDeleteGuardHookPayload
-    ) => Promise<void>,
-    streamChange: hooks[5] as unknown as (
-      payload: GcsExtensionAgreementStreamChangeGuardHookPayload
-    ) => Promise<void>,
-    paymentMutation: hooks[6] as unknown as (
-      payload: GcsExtensionAgreementPaymentMutationGuardHookPayload
-    ) => Promise<void>,
-    statusReference: hooks[7] as unknown as (
-      payload: GcsExtensionStatusReferenceGuardHookPayload
-    ) => Promise<void>
+    names: [...hooks.keys()],
+    disable: hooks.get('gcs:extension:disable-guard') as unknown as (payload: GcsExtensionDisableGuardHookPayload) => Promise<void>,
+    lifecycle: hooks.get('gcs:extension:agreement-lifecycle-lock') as unknown as (payload: GcsExtensionAgreementLifecycleLockHookPayload) => Promise<void>,
+    agreementDelete: hooks.get('gcs:extension:agreement-delete-guard') as unknown as (payload: GcsExtensionAgreementDeleteGuardHookPayload) => Promise<void>,
+    streamChange: hooks.get('gcs:extension:agreement-stream-change-guard') as unknown as (payload: GcsExtensionAgreementStreamChangeGuardHookPayload) => Promise<void>,
+    paymentMutation: hooks.get('gcs:extension:agreement-payment-mutation-guard') as unknown as (payload: GcsExtensionAgreementPaymentMutationGuardHookPayload) => Promise<void>,
+    statusReference: hooks.get('gcs:extension:status-reference-guard') as unknown as (payload: GcsExtensionStatusReferenceGuardHookPayload) => Promise<void>
   }
 }
-
-const createContext = (
-  db: WriteDb,
-  overrides: Partial<GcsExtensionCreateOperationContext> = {}
-): Omit<GcsExtensionCreateOperationContext, 'extensionKey'> => ({
-  agreementFinancials: { getClaimRecoveryProjection: vi.fn(async () => ({ agreementId: 'agreement-1', entries: [] })), getRecordedPaidToDate: vi.fn(), getPaidAccountingProjection: vi.fn(), getCommitmentPaymentCapacity: vi.fn(),
-    getCommitmentLinePaymentCoverage: vi.fn(), validatePaymentAllocations: vi.fn(async () => true) },
-  operation: 'agreement.commitments.create',
-  phase: 'before-create',
-  event: {},
-  db: db as unknown as Transaction<unknown>,
-  trx: db as unknown as Kysely<unknown>,
-  agreementId: 'agreement-1',
-  agencyId: 'agency-1',
-  streamId: 'stream-1',
-  scope: {
-    type: 'agency',
-    agencyId: 'agency-1'
-  },
-  config: {
-    enabledCommitmentTypes: ['1']
-  },
-  validatedBody: {
-    egcs_fc_type: '1'
-  },
-  ...overrides
-})
-
-const createPaymentContext = (
-  db: WriteDb,
-  overrides: Partial<GcsExtensionCreateOperationContext> = {}
-) => createContext(db, {
-  operation: 'agreement.payments.create',
-  phase: 'after-create',
-  validatedBody: {
-    egcs_fc_fundingagreementcommitment: 'commitment-1',
-    egcs_fc_fiscalyear: 'year-1',
-    egcs_fc_paymentamount: '25.00'
-  },
-  createdRecord: {
-    id: 'payment-1'
-  },
-  ...overrides
-})
-
-const createPayload = (
-  operation: GcsExtensionCreateOperation,
-  context: Omit<GcsExtensionCreateOperationContext, 'extensionKey'>,
-  enabled = true
-): GcsExtensionCreateOperationHookPayload => ({
-  operation,
-  enabledExtensionKeys: enabled ? new Set([EXTENSION_KEY]) : new Set(),
-  contexts: {
-    [EXTENSION_KEY]: context
-  },
-  results: []
-})
-
-const createGeneratedCommitmentLine = (
-  suffix: '1' | '2',
-  amount: number,
-  allocationVersionId = 'version-1'
-) => ({
-  allocationVersionId,
-  streamCommitmentId: `stream-commitment-${suffix}`,
-  allocation: {
-    commitmentType: '1',
-    streamCommitmentId: `stream-commitment-${suffix}`,
-    agreementBudgetFiscalYearId: 'year-1',
-    outcomeId: `outcome-${suffix}`,
-    allocationMethod: 'amount',
-    allocationValue: amount.toFixed(4),
-    amount: amount.toFixed(2)
-  }
-})
 
 beforeEach(() => {
   vi.clearAllMocks()
-  allocationDataMocks.getGeneratedCommitmentLines.mockResolvedValue({
-    status: 'continue'
-  })
-  allocationDataMocks.getGeneratedPaymentLines.mockResolvedValue({
-    status: 'continue'
-  })
-  allocationDataMocks.lockAndGetOutcomeCostAllocationConfig.mockResolvedValue({
-    enabledCommitmentTypes: ['1']
-  })
   allocationDataMocks.lockAgreementAllocationLifecycle.mockImplementation(async (db: WriteDb) => {
     db.agreementLifecycleLocked = true
     return 'stream-1'
@@ -345,26 +151,38 @@ beforeEach(() => {
   allocationDataMocks.generatedPaymentStatusResurrectionExceedsCoverage.mockResolvedValue(false)
 })
 
-describe('outcome cost allocation create hooks', () => {
-  it('forwards the selected native currency into Commitment generation', async () => {
-    const db = new WriteDb()
-    const { commitment } = await loadHooks()
-    await commitment(createPayload('agreement.commitments.create', createContext(db, { validatedBody: { egcs_fc_type: '1', egcs_fc_currency: 'usd' } })))
-    expect(allocationDataMocks.getGeneratedCommitmentLines).toHaveBeenCalledWith(db, 'agreement-1', 'stream-1', '1', { enabledCommitmentTypes: ['1'] }, 'usd')
+describe('outcome cost allocation lifecycle hooks', () => {
+  it('registers lifecycle guards without superseded create handlers', async () => {
+    const { names } = await loadHooks()
+    expect(names).toEqual([
+      'gcs:extension:disable-guard',
+      'gcs:extension:agreement-lifecycle-lock',
+      'gcs:extension:agreement-delete-guard',
+      'gcs:extension:agreement-stream-change-guard',
+      'gcs:extension:agreement-payment-mutation-guard',
+      'gcs:extension:status-reference-guard'
+    ])
   })
 
-  it('uses the same native currency for Payment generation and atomic host batch validation', async () => {
+  it('retains disable protection for legacy generated commitments under lifecycle locks', async () => {
+    const { disable } = await loadHooks()
     const db = new WriteDb()
-    const { payment } = await loadHooks()
-    const financials = { getClaimRecoveryProjection: vi.fn(async () => ({ agreementId: 'agreement-1', entries: [] })), getRecordedPaidToDate: vi.fn(), getPaidAccountingProjection: vi.fn(), getCommitmentPaymentCapacity: vi.fn(), getCommitmentLinePaymentCoverage: vi.fn(),
-      validatePaymentAllocations: vi.fn(async () => true) }
-    allocationDataMocks.getGeneratedPaymentLines.mockResolvedValue({ status: 'handled', issues: [], lines: [{ commitmentLineId: 'line-usd', amount: '25.01' }] })
-    await payment(createPayload('agreement.payments.create', createPaymentContext(db, { agreementFinancials: financials,
-      validatedBody: { egcs_fc_fundingagreementcommitment: 'commitment-1', egcs_fc_fiscalyear: 'year-1', egcs_fc_paymentamount: '25.01', egcs_fc_currency: 'usd' },
-      createdRecord: { id: 'payment-usd', egcs_fc_currency: 'usd' } })))
-    expect(allocationDataMocks.getGeneratedPaymentLines).toHaveBeenCalledWith(db, 'agreement-1', 'stream-1', 'commitment-1', 'year-1', '25.01', { enabledCommitmentTypes: ['1'] }, financials, 'usd')
-    expect(financials.validatePaymentAllocations).toHaveBeenCalledExactlyOnceWith({ allocations: [{ commitmentLineId: 'line-usd', amount: '25.01' }], currency: 'usd' })
-    expect(db.records).toMatchObject([{ table: 'Funding_Case_Agreement_Payment_Line', values: [{ egcs_fc_fundingagreementpayment: 'payment-usd', egcs_fc_fundingagreementcommitmentline: 'line-usd' }] }])
+    db.generatedCommitmentLine = true
+
+    await expect(disable({
+      extensionKey: EXTENSION_KEY,
+      event: {},
+      db: db as unknown as Transaction<unknown>,
+      agencyId: 'agency-1',
+      streamId: 'stream-1',
+      scope: 'stream'
+    })).rejects.toMatchObject({
+      code: 'GCS_OUTCOME_COST_ALLOCATION_DISABLE_BLOCKED',
+      statusCode: 409
+    })
+    expect(allocationDataMocks.lockOutcomeCostAllocationScope).toHaveBeenCalledWith(db, 'agency-1', 'stream-1')
+    expect(allocationDataMocks.lockAgreementAllocationLifecycle).toHaveBeenCalledWith(db, 'agreement-1')
+    expect(db.ownedTableQueriedBeforeLifecycleLock).toBe(false)
   })
 
   it('blocks deletion of a status referenced by active allocation history', async () => {
@@ -493,7 +311,7 @@ describe('outcome cost allocation create hooks', () => {
     allocationDataMocks.generatedPaymentStatusResurrectionExceedsCoverage.mockResolvedValueOnce(true)
 
     await expect(paymentMutation({
-      agreementFinancials: { getClaimRecoveryProjection: vi.fn(async () => ({ agreementId: 'agreement-1', entries: [] })), getRecordedPaidToDate: vi.fn(), getPaidAccountingProjection: vi.fn(), getCommitmentPaymentCapacity: vi.fn(), getCommitmentLinePaymentCoverage: vi.fn(), validatePaymentAllocations: vi.fn() },
+      agreementFinancials: { getPaymentCalculation: vi.fn(), getClaimRecoveryProjection: vi.fn(async () => ({ agreementId: 'agreement-1', entries: [] })), getRecordedPaidToDate: vi.fn(), getPaidAccountingProjection: vi.fn(), getCommitmentPaymentCapacity: vi.fn(), getCommitmentLinePaymentCoverage: vi.fn(), validatePaymentAllocations: vi.fn() },
       operation: 'payment.status-change',
       event: {},
       db: db as unknown as Transaction<unknown>,
@@ -518,7 +336,7 @@ describe('outcome cost allocation create hooks', () => {
     allocationDataMocks.generatedPaymentStatusResurrectionExceedsCoverage.mockResolvedValueOnce(true)
 
     await expect(paymentMutation({
-      agreementFinancials: { getClaimRecoveryProjection: vi.fn(async () => ({ agreementId: 'agreement-1', entries: [] })), getRecordedPaidToDate: vi.fn(), getPaidAccountingProjection: vi.fn(), getCommitmentPaymentCapacity: vi.fn(), getCommitmentLinePaymentCoverage: vi.fn(), validatePaymentAllocations: vi.fn() },
+      agreementFinancials: { getPaymentCalculation: vi.fn(), getClaimRecoveryProjection: vi.fn(async () => ({ agreementId: 'agreement-1', entries: [] })), getRecordedPaidToDate: vi.fn(), getPaidAccountingProjection: vi.fn(), getCommitmentPaymentCapacity: vi.fn(), getCommitmentLinePaymentCoverage: vi.fn(), validatePaymentAllocations: vi.fn() },
       operation: 'payment.status-change',
       event: {},
       db: db as unknown as Transaction<unknown>,
@@ -581,7 +399,7 @@ describe('outcome cost allocation create hooks', () => {
       changes: { egcs_fc_comment: 'Allowed note' }
     })).resolves.toBeUndefined()
     await expect(paymentMutation({
-      agreementFinancials: { getClaimRecoveryProjection: vi.fn(async () => ({ agreementId: 'agreement-1', entries: [] })), getRecordedPaidToDate: vi.fn(), getPaidAccountingProjection: vi.fn(), getCommitmentPaymentCapacity: vi.fn(), getCommitmentLinePaymentCoverage: vi.fn(), validatePaymentAllocations: vi.fn() },
+      agreementFinancials: { getPaymentCalculation: vi.fn(), getClaimRecoveryProjection: vi.fn(async () => ({ agreementId: 'agreement-1', entries: [] })), getRecordedPaidToDate: vi.fn(), getPaidAccountingProjection: vi.fn(), getCommitmentPaymentCapacity: vi.fn(), getCommitmentLinePaymentCoverage: vi.fn(), validatePaymentAllocations: vi.fn() },
       operation: 'payment.status-change',
       event: {},
       db: generatedDb as unknown as Transaction<unknown>,
@@ -738,126 +556,6 @@ describe('outcome cost allocation create hooks', () => {
     })).resolves.toBeUndefined()
   })
 
-  it('registers both operations and gates disabled extensions before invoking allocation services', async () => {
-    const hooks = await loadHooks()
-    const db = new WriteDb()
-    const commitmentPayload = createPayload(
-      'agreement.commitments.create',
-      createContext(db),
-      false
-    )
-    const paymentPayload = createPayload(
-      'agreement.payments.create',
-      createPaymentContext(db),
-      false
-    )
-
-    await hooks.commitment(commitmentPayload)
-    await hooks.payment(paymentPayload)
-
-    expect(commitmentPayload.results).toEqual([])
-    expect(paymentPayload.results).toEqual([])
-    expect(allocationDataMocks.getGeneratedCommitmentLines).not.toHaveBeenCalled()
-    expect(allocationDataMocks.getGeneratedPaymentLines).not.toHaveBeenCalled()
-  })
-
-  it('continues commitment creation for invalid host types and extension-deferred types', async () => {
-    const { commitment } = await loadHooks()
-    const db = new WriteDb()
-    const invalidPayload = createPayload(
-      'agreement.commitments.create',
-      createContext(db, {
-        validatedBody: {
-          egcs_fc_type: 'unsupported'
-        }
-      })
-    )
-
-    await commitment(invalidPayload)
-    expect(invalidPayload.results).toEqual([{
-      extensionKey: EXTENSION_KEY,
-      result: {
-        status: 'continue'
-      }
-    }])
-    expect(allocationDataMocks.getGeneratedCommitmentLines).not.toHaveBeenCalled()
-
-    const deferredPayload = createPayload(
-      'agreement.commitments.create',
-      createContext(db)
-    )
-    await commitment(deferredPayload)
-    expect(deferredPayload.results[0]?.result).toEqual({
-      status: 'continue'
-    })
-    expect(allocationDataMocks.getGeneratedCommitmentLines).toHaveBeenCalledWith(
-      db,
-      'agreement-1',
-      'stream-1',
-      '1',
-      {
-        enabledCommitmentTypes: ['1']
-      },
-      'cad'
-    )
-    expect(allocationDataMocks.lockAgreementAllocationLifecycle).toHaveBeenCalledWith(
-      db,
-      'agreement-1'
-    )
-    expect(
-      allocationDataMocks.lockAgreementAllocationLifecycle.mock.invocationCallOrder[0]
-    ).toBeLessThan(
-      allocationDataMocks.getGeneratedCommitmentLines.mock.invocationCallOrder[0] as number
-    )
-  })
-
-  it('rechecks enablement under the scope lock before taking the agreement lock', async () => {
-    const { commitment } = await loadHooks()
-    const db = new WriteDb()
-    allocationDataMocks.lockAndGetOutcomeCostAllocationConfig.mockResolvedValue(null)
-    const payload = createPayload(
-      'agreement.commitments.create',
-      createContext(db, { phase: 'after-create', createdRecord: db.commitment })
-    )
-
-    await commitment(payload)
-
-    expect(payload.results[0]?.result).toEqual({ status: 'continue' })
-    expect(allocationDataMocks.lockAndGetOutcomeCostAllocationConfig).toHaveBeenCalledWith(
-      db,
-      'agency-1',
-      'stream-1'
-    )
-    expect(allocationDataMocks.lockAgreementAllocationLifecycle).not.toHaveBeenCalled()
-    expect(allocationDataMocks.getGeneratedCommitmentLines).not.toHaveBeenCalled()
-  })
-
-  it('fails closed when the agreement moved streams before its lifecycle lock', async () => {
-    const { commitment, payment } = await loadHooks()
-    const db = new WriteDb()
-    allocationDataMocks.lockAgreementAllocationLifecycle.mockResolvedValue('stream-2')
-    const commitmentPayload = createPayload(
-      'agreement.commitments.create',
-      createContext(db)
-    )
-    const paymentPayload = createPayload(
-      'agreement.payments.create',
-      createPaymentContext(db)
-    )
-
-    await expect(commitment(commitmentPayload)).rejects.toMatchObject({
-      code: 'GCS_OUTCOME_COST_ALLOCATION_SCOPE_CHANGED'
-    })
-    await expect(payment(paymentPayload)).rejects.toMatchObject({
-      code: 'GCS_OUTCOME_COST_ALLOCATION_SCOPE_CHANGED'
-    })
-
-    expect(commitmentPayload.results).toEqual([])
-    expect(paymentPayload.results).toEqual([])
-    expect(allocationDataMocks.getGeneratedCommitmentLines).not.toHaveBeenCalled()
-    expect(allocationDataMocks.getGeneratedPaymentLines).not.toHaveBeenCalled()
-  })
-
   it('skips owned-table lifecycle queries when the extension has never been enabled', async () => {
     const { agreementDelete, paymentMutation, streamChange } = await loadHooks()
     const db = new WriteDb()
@@ -892,361 +590,4 @@ describe('outcome cost allocation create hooks', () => {
     expect(allocationDataMocks.lockOutcomeCostAllocationScope).not.toHaveBeenCalled()
   })
 
-  it('returns localized allocation issues without inserting a commitment', async () => {
-    const { commitment } = await loadHooks()
-    const db = new WriteDb()
-    allocationDataMocks.getGeneratedCommitmentLines.mockResolvedValue({
-      status: 'handled',
-      issues: [{
-        code: 'GCS_OUTCOME_COST_ALLOCATION_ACTIVE_REQUIRED',
-        path: 'allocationVersion',
-        message: 'apiErrors.extensions.outcome_cost_allocation.active_required'
-      }],
-      lines: []
-    })
-
-    await expect(commitment(createPayload(
-      'agreement.commitments.create',
-      createContext(db)
-    ))).rejects.toMatchObject({
-      code: 'GCS_OUTCOME_COST_ALLOCATION_ACTIVE_REQUIRED',
-      details: [{
-        path: 'allocationVersion',
-        code: 'GCS_OUTCOME_COST_ALLOCATION_ACTIVE_REQUIRED'
-      }]
-    })
-    expect(db.records).toEqual([])
-  })
-
-  it('does not insert a parent or child record when the managed type has no positive allocation lines', async () => {
-    const { commitment } = await loadHooks()
-    const db = new WriteDb()
-    allocationDataMocks.getGeneratedCommitmentLines.mockResolvedValue({
-      status: 'handled',
-      issues: [{
-        code: 'GCS_OUTCOME_COST_ALLOCATION_COMMITMENT_LINES_MISSING',
-        path: 'allocations',
-        message: 'apiErrors.extensions.outcome_cost_allocation.commitment_lines_missing'
-      }],
-      lines: []
-    })
-
-    await expect(commitment(createPayload(
-      'agreement.commitments.create',
-      createContext(db)
-    ))).rejects.toMatchObject({
-      code: 'GCS_OUTCOME_COST_ALLOCATION_COMMITMENT_LINES_MISSING',
-      details: [{
-        path: 'allocations',
-        code: 'GCS_OUTCOME_COST_ALLOCATION_COMMITMENT_LINES_MISSING'
-      }]
-    })
-    expect(db.records).toEqual([])
-  })
-
-  it('inserts a generated commitment, its lines, and allocation provenance', async () => {
-    const { commitment } = await loadHooks()
-    const db = new WriteDb()
-    allocationDataMocks.getGeneratedCommitmentLines.mockResolvedValue({
-      status: 'handled',
-      issues: [],
-      lines: [
-        createGeneratedCommitmentLine('1', 60),
-        createGeneratedCommitmentLine('2', 40)
-      ]
-    })
-    const payload = createPayload(
-      'agreement.commitments.create',
-      createContext(db, { phase: 'after-create', createdRecord: db.commitment })
-    )
-
-    await commitment(payload)
-
-    expect(allocationDataMocks.getGeneratedCommitmentLines).toHaveBeenCalled()
-    expect(payload.results).toEqual([{
-      extensionKey: EXTENSION_KEY,
-      result: {
-        status: 'continue'
-      }
-    }])
-    expect(db.records).toEqual([
-      expect.objectContaining({
-        operation: 'insert',
-        table: 'Funding_Case_Agreement_Commitment_Line',
-        values: [
-          {
-            egcs_fc_commitment: 'commitment-1',
-            egcs_fc_commitmentlinenumber: 1,
-            egcs_fc_transferpaymentstreamchartofaccount: 'stream-commitment-1',
-            egcs_fc_amount: expect.anything()
-          },
-          {
-            egcs_fc_commitment: 'commitment-1',
-            egcs_fc_commitmentlinenumber: 2,
-            egcs_fc_transferpaymentstreamchartofaccount: 'stream-commitment-2',
-            egcs_fc_amount: expect.anything()
-          }
-        ]
-      }),
-      expect.objectContaining({
-        operation: 'insert',
-        table: 'extensions.gcs_outcome_cost_allocation_commitment_lines',
-        values: [
-          {
-            allocation_version_id: 'version-1',
-            generated_commitment_id: 'commitment-1',
-            commitment_line_id: 'commitment-line-1',
-            agreement_id: 'agreement-1',
-            agreement_budget_fiscal_year_id: 'year-1',
-            outcome_id: 'outcome-1',
-            stream_commitment_id: 'stream-commitment-1',
-            generated_amount: expect.anything()
-          },
-          {
-            allocation_version_id: 'version-1',
-            generated_commitment_id: 'commitment-1',
-            commitment_line_id: 'commitment-line-2',
-            agreement_id: 'agreement-1',
-            agreement_budget_fiscal_year_id: 'year-1',
-            outcome_id: 'outcome-2',
-            stream_commitment_id: 'stream-commitment-2',
-            generated_amount: expect.anything()
-          }
-        ]
-      })
-    ])
-  })
-
-  it('associates provenance by commitment line number when returned rows are reversed', async () => {
-    const { commitment } = await loadHooks()
-    const db = new WriteDb()
-    db.commitmentLines.reverse()
-    allocationDataMocks.getGeneratedCommitmentLines.mockResolvedValue({
-      status: 'handled',
-      issues: [],
-      lines: [
-        createGeneratedCommitmentLine('1', 60),
-        createGeneratedCommitmentLine('2', 40, 'version-2')
-      ]
-    })
-
-    await commitment(createPayload(
-      'agreement.commitments.create',
-      createContext(db, { phase: 'after-create', createdRecord: db.commitment })
-    ))
-
-    expect(db.records.find(record =>
-      record.table === 'extensions.gcs_outcome_cost_allocation_commitment_lines'
-    )?.values).toEqual([
-      expect.objectContaining({
-        allocation_version_id: 'version-2',
-        commitment_line_id: 'commitment-line-2',
-        outcome_id: 'outcome-2',
-        stream_commitment_id: 'stream-commitment-2',
-        generated_amount: expect.anything()
-      }),
-      expect.objectContaining({
-        allocation_version_id: 'version-1',
-        commitment_line_id: 'commitment-line-1',
-        outcome_id: 'outcome-1',
-        stream_commitment_id: 'stream-commitment-1',
-        generated_amount: expect.anything()
-      })
-    ])
-  })
-
-  it('continues after host payment creation when required inputs or generated lines are absent', async () => {
-    const { payment } = await loadHooks()
-    const db = new WriteDb()
-    const missingPayload = createPayload(
-      'agreement.payments.create',
-      createPaymentContext(db, {
-        validatedBody: {},
-        createdRecord: {
-          id: 'payment-1'
-        }
-      })
-    )
-
-    await payment(missingPayload)
-    expect(missingPayload.results[0]?.result).toEqual({
-      status: 'continue'
-    })
-    expect(allocationDataMocks.getGeneratedPaymentLines).not.toHaveBeenCalled()
-
-    allocationDataMocks.getGeneratedPaymentLines.mockResolvedValue({
-      status: 'handled',
-      issues: [],
-      lines: []
-    })
-    const emptyLinesPayload = createPayload(
-      'agreement.payments.create',
-      createPaymentContext(db)
-    )
-    await payment(emptyLinesPayload)
-    expect(emptyLinesPayload.results[0]?.result).toEqual({
-      status: 'continue'
-    })
-    expect(db.records).toEqual([])
-  })
-
-  it('establishes the managed agreement context before the host inserts a payment', async () => {
-    const { payment } = await loadHooks()
-    const db = new WriteDb()
-    const payload = createPayload(
-      'agreement.payments.create',
-      createPaymentContext(db, {
-        phase: 'before-create',
-        createdRecord: undefined
-      })
-    )
-
-    await payment(payload)
-
-    expect(allocationDataMocks.lockAgreementAllocationLifecycle).toHaveBeenCalledWith(
-      db,
-      'agreement-1'
-    )
-    expect(allocationDataMocks.getGeneratedPaymentLines).not.toHaveBeenCalled()
-    expect(payload.results[0]?.result).toEqual({
-      status: 'continue'
-    })
-  })
-
-  it('rejects payment values outside the exact scale-four number envelope', async () => {
-    const { payment } = await loadHooks()
-    const db = new WriteDb()
-
-    await expect(payment(createPayload(
-      'agreement.payments.create',
-      createPaymentContext(db, {
-        validatedBody: {
-          egcs_fc_fundingagreementcommitment: 'commitment-1',
-          egcs_fc_fiscalyear: 'year-1',
-          egcs_fc_paymentamount: 900_719_925_474.0992
-        }
-      })
-    ))).rejects.toMatchObject({
-      code: 'GCS_OUTCOME_COST_ALLOCATION_INVALID',
-      details: [{
-        path: 'egcs_fc_paymentamount',
-        code: 'GCS_OUTCOME_COST_ALLOCATION_INVALID'
-      }]
-    })
-    expect(allocationDataMocks.lockAgreementAllocationLifecycle).not.toHaveBeenCalled()
-  })
-
-  it('returns payment allocation issues without writing generated lines', async () => {
-    const { payment } = await loadHooks()
-    const db = new WriteDb()
-    allocationDataMocks.getGeneratedPaymentLines.mockResolvedValue({
-      status: 'handled',
-      issues: [{
-        code: 'GCS_OUTCOME_COST_ALLOCATION_PAYMENT_LINES_MISSING',
-        path: 'paymentLines',
-        message: 'apiErrors.extensions.outcome_cost_allocation.payment_lines_missing'
-      }],
-      lines: []
-    })
-
-    await expect(payment(createPayload(
-      'agreement.payments.create',
-      createPaymentContext(db, {
-        validatedBody: {
-          egcs_fc_fiscalyear: 'year-1',
-          egcs_fc_paymentamount: '25.00'
-        },
-        createdRecord: {
-          id: 'payment-1',
-          egcs_fc_fundingagreementcommitment: 'commitment-1'
-        }
-      })
-    ))).rejects.toMatchObject({
-      code: 'GCS_OUTCOME_COST_ALLOCATION_PAYMENT_LINES_MISSING'
-    })
-    expect(db.records).toEqual([])
-  })
-
-  it('rejects a generated batch that the host says exceeds shared coding capacity before insertion', async () => {
-    const db = new WriteDb()
-    const { payment } = await loadHooks()
-    const financials = { getClaimRecoveryProjection: vi.fn(async () => ({ agreementId: 'agreement-1', entries: [] })), getRecordedPaidToDate: vi.fn(), getPaidAccountingProjection: vi.fn(), getCommitmentPaymentCapacity: vi.fn(), getCommitmentLinePaymentCoverage: vi.fn(),
-      validatePaymentAllocations: vi.fn(async () => false) }
-    allocationDataMocks.getGeneratedPaymentLines.mockResolvedValue({ status: 'handled', issues: [],
-      lines: [{ commitmentLineId: 'commitment-line-1', amount: '25.00' }] })
-    const payload = createPayload('agreement.payments.create', createPaymentContext(db, { agreementFinancials: financials }))
-    await expect(payment(payload)).rejects.toMatchObject({ code: 'GCS_OUTCOME_COST_ALLOCATION_PAYMENT_EXCEEDS_REMAINING' })
-    expect(financials.validatePaymentAllocations).toHaveBeenCalledWith({ currency: 'cad', allocations: [{ commitmentLineId: 'commitment-line-1', amount: '25.00' }] })
-    expect(db.records.some(record => record.operation === 'insert' && record.table === 'Funding_Case_Agreement_Payment_Line')).toBe(false)
-  })
-
-  it('inserts generated payment lines while leaving host status ownership unchanged', async () => {
-    const { payment } = await loadHooks()
-    const db = new WriteDb()
-    allocationDataMocks.getGeneratedPaymentLines.mockResolvedValue({
-      status: 'handled',
-      issues: [],
-      lines: [
-        {
-          commitmentLineId: 'commitment-line-1',
-          amount: '15.00'
-        },
-        {
-          commitmentLineId: 'commitment-line-2',
-          amount: '10.00'
-        }
-      ]
-    })
-    const payload = createPayload(
-      'agreement.payments.create',
-      createPaymentContext(db)
-    )
-
-    await payment(payload)
-
-    expect(allocationDataMocks.getGeneratedPaymentLines).toHaveBeenCalledWith(
-      db,
-      'agreement-1',
-      'stream-1',
-      'commitment-1',
-      'year-1',
-      '25.00',
-      {
-        enabledCommitmentTypes: ['1']
-      },
-      expect.objectContaining({ validatePaymentAllocations: expect.any(Function) }),
-      'cad'
-    )
-    expect(allocationDataMocks.lockAgreementAllocationLifecycle).toHaveBeenCalledWith(
-      db,
-      'agreement-1'
-    )
-    expect(
-      allocationDataMocks.lockAgreementAllocationLifecycle.mock.invocationCallOrder[0]
-    ).toBeLessThan(
-      allocationDataMocks.getGeneratedPaymentLines.mock.invocationCallOrder[0] as number
-    )
-    expect(db.records).toEqual([
-      {
-        operation: 'insert',
-        table: 'Funding_Case_Agreement_Payment_Line',
-        values: [
-          {
-            egcs_fc_fundingagreementpayment: 'payment-1',
-            egcs_fc_fundingagreementcommitmentline: 'commitment-line-1',
-            egcs_fc_amount: expect.anything()
-          },
-          {
-            egcs_fc_fundingagreementpayment: 'payment-1',
-            egcs_fc_fundingagreementcommitmentline: 'commitment-line-2',
-            egcs_fc_amount: expect.anything()
-          }
-        ],
-        wheres: []
-      }
-    ])
-    expect(payload.results[0]?.result).toEqual({
-      status: 'continue'
-    })
-  })
 })

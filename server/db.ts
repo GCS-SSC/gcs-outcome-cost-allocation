@@ -94,6 +94,7 @@ export interface OutcomeCostAllocationHostDatabase {
     id: string
     egcs_ay_fiscalyear: string
     egcs_ay_currency: string
+    egcs_ay_kind: 'commitment' | 'account_receivable' | 'credit_memo'
     egcs_ay_accountingdimensions: JSONColumnType<Array<{ label_en: string, label_fr: string, value: string }>>
     _deleted: boolean
   }

@@ -65,6 +65,10 @@ describe('outcome cost allocation extension UI', () => {
     expect(manifest).toContain("approvalSubmission: 'on_completion'")
     expect(manifest).toContain("standardWorkflow: 'explicit'")
     expect(manifest).not.toContain('workflowRequired')
+    expect(manifest).toContain("'coding-allocator'")
+    expect(manifest).toContain("codingAllocator: { path: './server/allocator.ts' }")
+    expect(manifest).not.toContain('createActions:')
+    expect(manifest).not.toContain('CreateOutcomeCommitmentAction')
   })
 
   it('does not create draft allocation rows as a render side effect', async () => {

@@ -12,7 +12,7 @@ export const createNativeFundingSourceFixture = async (db: Kysely<Record<string,
     CREATE TABLE "Transfer_Payment_Stream" (id bigint PRIMARY KEY, egcs_tp_transferpaymentprofile bigint, _deleted boolean DEFAULT false);
     CREATE TABLE "Transfer_Payment_Fiscal_Year_Budget" (id bigint PRIMARY KEY, egcs_tp_transferpaymentprofile bigint, egcs_tp_fiscalyear bigint, egcs_tp_currency text, _deleted boolean DEFAULT false);
     CREATE TABLE "Transfer_Payment_Stream_Budget" (id bigint PRIMARY KEY, egcs_tp_transferpaymentbudget bigint, egcs_tp_transferpaymentstream bigint, _deleted boolean DEFAULT false);
-    CREATE TABLE "Agency_Chart_of_Account" (id bigint PRIMARY KEY, egcs_ay_fiscalyear bigint, egcs_ay_currency text, egcs_ay_accountingdimensions jsonb DEFAULT '[]', _deleted boolean DEFAULT false);
+    CREATE TABLE "Agency_Chart_of_Account" (id bigint PRIMARY KEY, egcs_ay_fiscalyear bigint, egcs_ay_currency text, egcs_ay_kind text DEFAULT 'commitment', egcs_ay_accountingdimensions jsonb DEFAULT '[]', _deleted boolean DEFAULT false);
     CREATE TABLE "Transfer_Payment_Stream_Chart_of_Account" (id bigint PRIMARY KEY, egcs_tp_agencychartofaccount bigint, egcs_tp_transferpaymentstream bigint, _deleted boolean DEFAULT false);
     INSERT INTO "Funding_Case_Agreement_Profile" VALUES (1,'cad',false);
     INSERT INTO "Agency_Fiscal_Year" VALUES (1,2026,'2026–2027',false);
@@ -22,7 +22,7 @@ export const createNativeFundingSourceFixture = async (db: Kysely<Record<string,
     INSERT INTO "Transfer_Payment_Stream" VALUES (2,1,false);
     INSERT INTO "Transfer_Payment_Fiscal_Year_Budget" VALUES (201,1,1,'cad',false),(202,1,1,'usd',false);
     INSERT INTO "Transfer_Payment_Stream_Budget" VALUES (301,201,2,false),(302,202,2,false);
-    INSERT INTO "Agency_Chart_of_Account" VALUES (401,1,'cad','[]',false),(402,1,'usd','[]',false);
+    INSERT INTO "Agency_Chart_of_Account" VALUES (401,1,'cad','commitment','[]',false),(402,1,'usd','commitment','[]',false);
     INSERT INTO "Transfer_Payment_Stream_Chart_of_Account" VALUES (501,401,2,false),(502,402,2,false);
   `
   for (const statement of source.split(';').filter(statement => statement.trim())) await sql.raw(statement).execute(db)

@@ -13,8 +13,8 @@ import {
   completeAllocationVersionInTransaction as completeAllocationVersionInTransactionWithExpectedScope,
   createDraftAllocationVersion as createDraftAllocationVersionWithExpectedScope,
   getAgreementBudgetYears,
-  getGeneratedCommitmentLines,
-  getGeneratedPaymentLines,
+  getActiveStreamCommitmentBudgetIds,
+  getStreamCommitmentLines,
   getSavedAllocations,
   lockAndGetOutcomeCostAllocationConfig,
   lockAgreementAllocationAdvisory,
@@ -23,6 +23,7 @@ import {
   saveAllocations as saveAllocationsWithExpectedScope,
   saveAndCompleteAllocationVersionWithCurrentConfiguration
 } from '../../server/allocation-data'
+import allocator from '../../server/allocator'
 import type { OutcomeCostAllocationDb, OutcomeCostAllocationHostDatabase } from '../../server/db'
 import migration0001 from '../../server/migrations/0001_outcome_cost_allocation'
 import migration0002 from '../../server/migrations/0002_versioned_allocations'
@@ -669,6 +670,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         id bigint PRIMARY KEY,
         egcs_ay_fiscalyear bigint NOT NULL,
         egcs_ay_currency text NOT NULL DEFAULT 'cad',
+        egcs_ay_kind text NOT NULL DEFAULT 'commitment',
         egcs_ay_accountingdimensions jsonb NOT NULL DEFAULT '[]'::jsonb,
         _deleted boolean NOT NULL DEFAULT false
       )
@@ -1201,6 +1203,20 @@ describe('outcome allocation PostgreSQL concurrency', () => {
       .execute())
   })
 
+  it('excludes receivable and credit codes from allocation lookups and writable mappings', async () => {
+    for (const kind of ['account_receivable', 'credit_memo']) {
+      await sql`UPDATE "Agency_Chart_of_Account" SET egcs_ay_kind=${kind} WHERE id=12`.execute(observerDb)
+      try {
+        expect(await getStreamCommitmentLines(observerDb, '4')).toEqual([])
+        expect(await getActiveStreamCommitmentBudgetIds(observerDb, '4')).toEqual(new Map())
+      } finally {
+        await sql`UPDATE "Agency_Chart_of_Account" SET egcs_ay_kind='commitment' WHERE id=12`.execute(observerDb)
+      }
+    }
+    expect(await getStreamCommitmentLines(observerDb, '4')).toHaveLength(1)
+    expect(await getActiveStreamCommitmentBudgetIds(observerDb, '4')).toEqual(new Map([['12', '72']]))
+  })
+
   it('uses only the requested stream profile fiscal-year budget when profiles share a fiscal year', async () => {
     const budgetYears = await getAgreementBudgetYears(observerDb, '4', '4')
     expect(budgetYears).toEqual([{
@@ -1273,31 +1289,13 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         fundingBasisAmount: '100.00'
       })
     ])
-    await expect(getGeneratedCommitmentLines(
-      observerDb,
-      '4',
-      '4',
-      '4',
-      {
-        enabledCommitmentTypes: ['4'],
-        mappings: [{
-          commitmentType: '4',
-          outcomeId: '32',
-          streamBudgetId: '72',
-          streamCommitmentId: '12'
-        }]
-      }
-    )).resolves.toMatchObject({
-      status: 'handled',
-      issues: [],
-      lines: [{
-        allocation: {
-          amount: '100.00',
-          resolvedAmount: '100.00',
-          fundingBasisAmount: '100.00'
-        }
-      }]
-    })
+    await expect(allocator({
+      db: observerDb as unknown as Transaction<unknown>, agreementId: '4', agencyId: '4000', streamId: '4', amount: '100.00', currency: 'cad',
+      output: { kind: 'commitment', commitmentTypeId: '4' },
+      codingLines: [{ codingLineId: '12', agencyChartOfAccountId: '12', agencyFiscalYearId: '50', accountingDimensions: [] }],
+      commitmentCodingLines: [], existingLines: [], codingPaidFloors: [], codingAvailableAmounts: [],
+      config: { enabledCommitmentTypes: ['4'], mappings: [] }, agencyConfig: {}
+    })).resolves.toEqual([{ codingLineId: '12', amount: '100.00' }])
     await sql`
       UPDATE "Funding_Case_Agreement_Budget_Line_Item"
       SET egcs_fc_programfunding = 100
@@ -2520,7 +2518,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
     }
   })
 
-  it('observes a payment status committed while completion waits for coverage locks', async () => {
+  it('completes unpaid allocation changes independently of a pending payment status update', async () => {
     const { version } = await seedDraftScenario(observerDb, 21, 121, 121, 121)
     await sql`
       INSERT INTO "Funding_Case_Agreement_Commitment" (
@@ -2558,6 +2556,20 @@ describe('outcome allocation PostgreSQL concurrency', () => {
       ) VALUES (210, 210, 210, 100.02)
     `.execute(observerDb)
 
+    await sql`
+      INSERT INTO "Agency_Chart_of_Account" (id, egcs_ay_fiscalyear, egcs_ay_accountingdimensions)
+      VALUES (80, 50, '[{"label_en":"G/L","label_fr":"G/L","value":"5010"}]'::jsonb);
+      INSERT INTO "Transfer_Payment_Stream_Chart_of_Account" (id, egcs_tp_agencychartofaccount, egcs_tp_transferpaymentstream)
+      VALUES (80, 80, 2)
+    `.execute(observerDb)
+    await saveAllocations(observerDb, '21', version.id, [{
+      commitmentType: '1', streamCommitmentId: '80', agreementBudgetFiscalYearId: budgetYearStableId(121),
+      outcomeId: '30', allocationMethod: 'amount', allocationValue: '100.0000'
+    }])
+    const reallocationConfig = {
+      enabledCommitmentTypes: ['1'], mappings: [{ commitmentType: '1', outcomeId: '30', streamBudgetId: '70', streamCommitmentId: '80' }]
+    }
+
     const paymentUpdated = createLatch()
     const releasePayment = createLatch()
     const holderPid = await sql<{ pid: number }>`SELECT pg_backend_pid()::integer AS pid`
@@ -2583,22 +2595,14 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         '21',
         '2',
         version.id,
-        streamTwoAllocationConfig
+        reallocationConfig
       )
-      await vi.waitFor(async () => {
-        const result = await sql<{ blocker_pids: number[] }>`
-          SELECT pg_blocking_pids(${waiterPid})::integer[] AS blocker_pids
-        `.execute(observerDb)
-        expect(result.rows[0]?.blocker_pids).toContain(holderPid)
-      })
+      await expect(completing).resolves.toMatchObject({ status: 'active' })
+      expect(await getSavedAllocations(observerDb, '21', version.id)).toEqual([expect.objectContaining({ streamCommitmentId: '80', resolvedAmount: '100.00' })])
 
       releasePayment.release()
       await expect(approvingPayment).resolves.toBeUndefined()
-      await expect(completing).rejects.toMatchObject({
-        issues: [{
-          code: 'GCS_OUTCOME_COST_ALLOCATION_PAYMENT_EXCEEDS_GENERATED_LINE'
-        }]
-      })
+
     } finally {
       releasePayment.release()
       await Promise.allSettled([approvingPayment, ...(completing ? [completing] : [])])
@@ -2757,19 +2761,15 @@ describe('outcome allocation PostgreSQL concurrency', () => {
       .then(result => result.rows[0]?.pid)
     const creatingPayment = holderDb.transaction().execute(async trx => {
       await lockAgreementAllocationLifecycle(trx, '12')
-      const generated = await getGeneratedPaymentLines(
-        trx,
-        '12',
-        '12',
-        '190',
-        budgetYearStableId(35),
-        50,
-        {},
-        { getCommitmentLinePaymentCoverage: async () => ({ paidAmount: '0.00' }) }
-      )
-      if (generated.status !== 'handled' || generated.issues.length > 0 || generated.lines.length !== 1) {
-        throw new Error('Expected one valid generated payment line before resurrection.')
-      }
+      const generated = await allocator({
+        db: trx as unknown as Transaction<unknown>, agreementId: '12', agencyId: '12000', streamId: '12', currency: 'cad', amount: '50.00',
+        output: { kind: 'payment', commitmentId: '190', commitmentTypeId: '12', fiscalYearId: budgetYearStableId(35) },
+        codingLines: [{ codingLineId: '20', agencyChartOfAccountId: '20', agencyFiscalYearId: '50', accountingDimensions: [] }],
+        commitmentCodingLines: [], existingLines: [], codingPaidFloors: [], codingAvailableAmounts: [{ codingLineId: '20', amount: '100.00' }],
+        config: { enabledCommitmentTypes: ['12'], mappings: [] }, agencyConfig: {}
+      })
+      expect(generated).toEqual([{ codingLineId: '20', amount: '50.00' }])
+      if (!generated) throw new Error('Expected managed payment allocation.')
       await trx
         .insertInto('Funding_Case_Agreement_Payment')
         .values({
@@ -2782,10 +2782,10 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         .execute()
       await trx
         .insertInto('Funding_Case_Agreement_Payment_Line')
-        .values(generated.lines.map(line => ({
+        .values(generated.map(line => ({
           id: '191',
           egcs_fc_fundingagreementpayment: '191',
-          egcs_fc_fundingagreementcommitmentline: line.commitmentLineId,
+          egcs_fc_fundingagreementcommitmentline: '190',
           egcs_fc_amount: sql`${line.amount}::numeric`
         })))
         .execute()
@@ -2804,6 +2804,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
       resurrecting = waiterDb.transaction().execute(async trx => {
         await guard({
           agreementFinancials: {
+            getPaymentCalculation: vi.fn(),
             getClaimRecoveryProjection: vi.fn(async () => ({ agreementId: '12', entries: [] })),
             getRecordedPaidToDate: vi.fn(), getPaidAccountingProjection: vi.fn(), getCommitmentPaymentCapacity: vi.fn(), getCommitmentLinePaymentCoverage: vi.fn(),
             validatePaymentAllocations: async input => {
@@ -2903,7 +2904,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
     }
   })
 
-  it('follows payment-line then payment lock order without deadlocking deletion', async () => {
+  it('completes allocation snapshots independently of pending payment deletion', async () => {
     const { version } = await seedDraftScenario(observerDb, 24, 124, 124, 124)
     await sql`
       INSERT INTO "Funding_Case_Agreement_Commitment" (
@@ -2973,12 +2974,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         version.id,
         streamTwoAllocationConfig
       )
-      await vi.waitFor(async () => {
-        const result = await sql<{ blocker_pids: number[] }>`
-          SELECT pg_blocking_pids(${waiterPid})::integer[] AS blocker_pids
-        `.execute(observerDb)
-        expect(result.rows[0]?.blocker_pids).toContain(holderPid)
-      })
+      await expect(completing).resolves.toMatchObject({ status: 'active' })
 
       releaseDeletion.release()
       await expect(deletingPayment).resolves.toBeUndefined()
@@ -3894,37 +3890,25 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         .execute()
     })
 
-    const generated = await observerDb.transaction().execute(async trx =>
-      await getGeneratedPaymentLines(
-        trx,
-        '920000',
-        '11',
-        '180',
-        budgetYearStableId(34),
-        0.01,
-        {},
-        { getCommitmentLinePaymentCoverage: async () => ({ paidAmount: '0.00' }) }
-      )
-    )
-    expect(generated).toEqual({
-      status: 'handled',
-      issues: [],
-      lines: [{
-        commitmentLineId: '179',
-        amount: '0.01'
-      }]
-    })
+    const generated = await observerDb.transaction().execute(async trx => allocator({
+      db: trx as unknown as Transaction<unknown>, agreementId: '920000', agencyId: '9000', streamId: '11', amount: '0.01', currency: 'cad',
+      output: { kind: 'payment', commitmentId: '180', commitmentTypeId: '11', fiscalYearId: budgetYearStableId(34) },
+      codingLines: ['18', '19'].map(codingLineId => ({ codingLineId, agencyChartOfAccountId: codingLineId, agencyFiscalYearId: '50', accountingDimensions: [] })),
+      commitmentCodingLines: [], existingLines: [], codingPaidFloors: [], codingAvailableAmounts: [{ codingLineId: '18', amount: '50.00' }, { codingLineId: '19', amount: '50.00' }],
+      config: { enabledCommitmentTypes: ['11'], mappings: [] }, agencyConfig: {}
+    }))
+    expect(generated).toEqual([{ codingLineId: '19', amount: '0.01' }])
 
     await observerDb.transaction().execute(async trx => {
-      if (generated.status !== 'handled') throw new Error('Expected Outcome allocation payment lines.')
+      if (!generated) throw new Error('Expected Outcome allocation payment coding.')
       await lockAgreementAllocationLifecycle(trx, '920000')
       await trx.insertInto('Funding_Case_Agreement_Payment').values({
         id: '181', egcs_fc_fundingagreementcommitment: '180',
         egcs_fc_fiscalyear: budgetYearStableId(34), egcs_fc_paymentamount: '0.01', egcs_fc_status: '1'
       }).execute()
-      await trx.insertInto('Funding_Case_Agreement_Payment_Line').values(generated.lines.map(line => ({
+      await trx.insertInto('Funding_Case_Agreement_Payment_Line').values(generated.map(line => ({
         id: '181', egcs_fc_fundingagreementpayment: '181',
-        egcs_fc_fundingagreementcommitmentline: line.commitmentLineId, egcs_fc_amount: sql`${line.amount}::numeric`
+        egcs_fc_fundingagreementcommitmentline: line.codingLineId === '18' ? '179' : '181', egcs_fc_amount: sql`${line.amount}::numeric`
       }))).execute()
     })
     expect(Number((await observerDb.selectFrom('Funding_Case_Agreement_Payment_Line')

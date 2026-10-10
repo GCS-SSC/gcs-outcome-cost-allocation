@@ -1,6 +1,6 @@
 # gcs-outcome-cost-allocation
 
-Standalone GCS-SSC extension that allocates agreement program funding across referenced outcomes and generates commitment lines from those allocations.
+Standalone GCS-SSC extension that allocates agreement program funding across referenced outcomes and supplies Commitment and Payment coding through the host allocator interface.
 
 ## PostgreSQL concurrency integration test
 
@@ -33,7 +33,7 @@ bun run typecheck
 
 The host loads the extension from `extensions/gcs-outcome-cost-allocation` and applies the extension migration when the extension is enabled for an agency.
 
-Completed versions snapshot each allocation's resolved amount and fiscal-year funding basis, plus the version's total agreement funding basis. Historical displays and later commitment generation use those immutable values even when the current agreement budget changes.
+Completed versions snapshot each allocation's resolved amount and fiscal-year funding basis, plus the version's total agreement funding basis. Historical displays and later Commitment allocation use those immutable values even when the current agreement budget changes.
 
 Financial source queries and SDK coverage amounts use exact decimal text. Percentage,
 cent balancing and weighted Payment calculations use scaled integer/BigInt arithmetic.
@@ -41,11 +41,39 @@ Persisted rows obey their PostgreSQL NUMERIC precision, while aggregate funding 
 its full exact decimal value. Legacy numeric inputs are accepted only when their scaled
 units remain safely representable; they do not limit exact string transport.
 
-Agency or stream disablement is blocked once the extension has generated commitment provenance. Those commitments need the extension's payment handler for their remaining lifecycle, so the extension must stay enabled.
+## Host coding allocator
+
+Requires SDK `^0.3.10` and the `coding-allocator` capability. The extension supplies
+`server/allocator.ts`; the host owns authorization, financial locks, validation and
+persistence. The standard host Commitment modal declares the total and native currency.
+The extension no longer replaces that modal or inserts Commitment/Payment lines through
+creation hooks. New coding has no extension-generated provenance and follows ordinary
+host editing rules.
+
+For a mapped Commitment type, the active completed allocation supplies weights. Already-paid
+amounts remain on their existing accounting codes. The allocator subtracts the host paid
+floors from the declared total and applies the new weights only to the remaining unpaid
+funds, then adds each paid floor back. For example, a $100 total with $20 already paid
+on code A and a new 75:25 split produces $80 on A and $20 on B: the remaining $80
+splits $60/$20, while the paid $20 stays on A.
+
+Payments split against the selected Commitment's remaining unpaid capacity, including
+host-applied Journal Vouchers, Corrections and credits. Paid amounts are not weighted again.
+Largest-remainder cent balancing distributes rounding across codes deterministically,
+keeping each proportional share within one cent; the host validates the complete batch
+against both individual lines and shared accounting-code ceilings before saving it.
+
+Unmapped Commitment types and their Payments use the host's manual coding flow. Receivables
+and Credit Memos also retain manual coding. Missing or invalid allocation evidence for a
+mapped type fails explicitly rather than silently switching to manual coding.
+
+Historical generated-line provenance remains intact. Existing disablement and mutation
+guards still protect those records; newly allocated host-owned rows do not create new
+provenance or extend those legacy guards.
 
 ## Translation ownership
 
-Requires SDK 0.3.0. Interface catalogs live in this package's `i18n/` directory.
+Interface catalogs live in this package's `i18n/` directory.
 Define matching English/French keys and named placeholders with
 `defineGcsExtensionMessages`, then use `useExtensionI18n(catalog)` in UI or
 `translateGcsExtensionMessage` in shared/server code. There is no host message
@@ -57,8 +85,8 @@ The package owns translation tests and includes catalogs in its coverage invento
 
 Allocation versions, allocations and commitment links follow `agreement_id` through the Agreement’s Program stream to its Agency. Host commitment/payment rows retain their host audit ownership.
 
-The manifest targets SDK ^0.3.7 and explicitly declares its dedicated tables (an empty
-list when there are none). Extension migration journals remain global infrastructure.
+The manifest explicitly declares its dedicated tables. Extension migration journals remain
+global infrastructure.
 
 Run `bun run test:audit` from this extension inside a GCS-SSC host checkout with
 `tooling/gcs-ssc` available. The extension owns its concrete fixtures; the private
@@ -69,41 +97,24 @@ Set `AUDIT_EXTENSION_POSTGRES_URL` to a disposable PostgreSQL database URL endin
 in `_test` to run the same suite on PostgreSQL; the adapter creates and removes an
 isolated database. Without that variable, the suite uses in-memory PGlite.
 
-SDK 0.3.7 `agreement-payment-capacity` supplies post-JV paid floors for Payment line generation. Generated allocation weights and provenance remain extension-owned; current paid coverage comes from `agreementFinancials.getCommitmentLinePaymentCoverage`. Before inserting the batch in the host write transaction, the extension invokes `validatePaymentAllocations` so duplicate coding rows cannot overdraw a shared Agency chart balance. Denied-Payment restoration uses the same host batch validator with the restored Payment excluded. JVs do not rewrite saved allocation versions, mappings or generated-line weights.
-
-Posted Corrections contribute through that same host coverage and batch-validation boundary. Run `bun run test:e2e` in this package for the managed browser journey: it publishes allocation and financial approval routes through public host APIs, fully covers a generated Commitment, posts a signed Correction, rejects an overdraw, and generates a subsequent Payment against the restored shared capacity. The saved allocation snapshot, generated Commitment weights and source Payment remain unchanged. Screenshots retain the posted Correction and resulting Payment.
+The package-owned managed browser journey uses public host APIs and the standard
+Commitment creation flow. Run `bun run test:e2e` from this package.
 
 ## Native currency contract
 
-Requires SDK `^0.3.7`; older hosts cannot safely honor selected-currency financial calls.
-The Commitment creation action submits both `egcs_fc_type` and the required lowercase
-`egcs_fc_currency`. The allocation lookup now returns `currency`, read from the required,
-immutable Agreement profile even when funding lines are empty. The bilingual required
-currency control displays that fixed value and is disabled; it cannot choose a different
-native unit. Creation stays blocked while lookup is pending, on missing currency or a
-source error. An earlier Agreement lookup cannot replace the current native value.
+Each Agreement has exactly one immutable native currency. Different currencies require
+separate Agreements; the allocator applies no FX conversion. Allocation lookup returns
+that currency even when funding lines are empty. Active Budget lines must match it.
+Program fiscal budgets are joined by both fiscal year and currency, and Stream accounting
+lines resolve through their Chart currency to the matching Program budget.
 
-Previously the budget source joined every Program fiscal budget for the same year and
-combined native amounts. It now joins the Program budget with the Budget line currency,
-returns `budgetYears[].currency`, and maps each Stream accounting line through its Chart
-currency to the matching native Program fiscal budget. Active Budget lines must match the
-owning Agreement currency. The same currency is passed into Commitment generation,
-Payment generation, SDK exact-line paid coverage and batch allocation validation,
-including denied-Payment restoration. Requested Commitment/Payment currency must match
-the Agreement, and Payment Commitments must have that same currency; no FX conversion
-is applied.
-
-Each Agreement has exactly one currency. Different currencies require separate Agreements.
-The immutable allocation version retains its scalar funding basis. Invalid imported mixed
+The host allocator supplies the authoritative currency and eligible accounting catalog.
+Requested Commitment/Payment currency must match the Agreement. Invalid imported mixed
 Budget lines fail explicitly with `GCS_OUTCOME_COST_ALLOCATION_MIXED_CURRENCY_UNSUPPORTED`;
-a foreign-only basis fails with `GCS_OUTCOME_COST_ALLOCATION_CURRENCY_MISMATCH`. These are
-corruption defenses, not supported mixed-Agreement flows. Existing completed snapshots,
-generated amounts, provenance and payment weighting are retained; historical evidence is
-not rewritten.
+a foreign-only basis fails with `GCS_OUTCOME_COST_ALLOCATION_CURRENCY_MISMATCH`.
+Existing completed snapshots and historical provenance are not rewritten.
 
 The public allocation write payload, lifecycle authorization, locks, conflicts and retry
-rules are unchanged. The package-owned browser caller supplies the required Commitment
-currency. Native SQL fixtures, creation-hook tests, rendered English/French control tests
-and immutable-weight Payment tests cover the new source and SDK boundaries. Set
-`GCS_PAYMENT_AUDIT_DIR` when running PostgreSQL tests to emit
+rules remain unchanged. Native SQL fixtures and allocator tests cover the source and SDK
+boundaries. Set `GCS_PAYMENT_AUDIT_DIR` when running PostgreSQL tests to emit
 `outcome-native-source-scenarios.csv` with independently asserted native source amounts.

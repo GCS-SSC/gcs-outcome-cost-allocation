@@ -29,20 +29,19 @@ export default defineGcsExtension({
     }
   ]),
   key: 'gcs-outcome-cost-allocation',
-  sdkVersion: '^0.3.7',
+  sdkVersion: '^0.3.10',
   requiredHostCapabilities: [
     'agreement-payment-capacity',
     'audit-ownership',
     'stream-config-modal',
     'entity-tabs',
-    'create-actions',
+    'coding-allocator',
     'server-handlers',
     'server-handler-rbac',
     'migrations',
     'extension-ui',
     'extension-api-client',
     'host-api-client',
-    'extension-create-operation-hooks',
     'extension-lifecycle-hooks',
     'lifecycle-entities'
   ],
@@ -81,23 +80,6 @@ export default defineGcsExtension({
         },
         icon: 'i-lucide-chart-no-axes-combined',
         path: './components/AgreementOutcomeCostAllocationTab.vue',
-        rbac: {
-          subject: 'agreement',
-          action: 'update'
-        }
-      }
-    ],
-    createActions: [
-      {
-        operation: 'agreement.commitments.create',
-        id: 'create-outcome-commitment',
-        mode: 'replace',
-        label: {
-          en: 'Add commitment',
-          fr: 'Ajouter un engagement'
-        },
-        icon: 'i-lucide-plus',
-        path: './components/CreateOutcomeCommitmentAction.vue',
         rbac: {
           subject: 'agreement',
           action: 'update'
@@ -170,5 +152,6 @@ export default defineGcsExtension({
       }
     }
   ],
+  codingAllocator: { path: './server/allocator.ts' },
   nitroPlugin: './server/plugins/create-hooks.ts'
 })

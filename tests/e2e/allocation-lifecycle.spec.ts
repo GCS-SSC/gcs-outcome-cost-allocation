@@ -4,6 +4,14 @@ import { completeAndApprove, configureSingleApprovalSubmission, deleteUnsubmitte
 
 const EXTENSION_KEY = 'gcs-outcome-cost-allocation'
 const ALLOCATION_VERSION_ENTITY_TYPE = `${EXTENSION_KEY}:allocation-version`
+const openAllocation = async (page: Page, agreementId: string, locale: 'en' | 'fr' = 'en') => {
+  await page.goto(`/${locale}/${locale === 'fr' ? 'ententes' : 'agreements'}/${agreementId}`)
+  if ((page.viewportSize()?.width ?? 1280) < 768) {
+    await page.getByRole('button', { name: locale === 'fr' ? 'Basculer la navigation' : 'Toggle navigation' }).click()
+  }
+  await page.getByRole('tab', { name: locale === 'fr' ? 'Repartition des couts' : 'Cost Allocation', exact: true }).last().click()
+}
+
 
 type ShowcaseAgreement = {
   agreementId: string
@@ -54,33 +62,79 @@ const expectOk = async (response: APIResponse, label: string): Promise<void> => 
   if (!response.ok()) throw new Error(`${label}: ${response.status()} ${await response.text()}`)
 }
 
-const readShowcaseAgreement = async (page: Page): Promise<ShowcaseAgreement> => {
-  const agreementsResponse = await page.request.get(
-    '/api/agreements?page=1&limit=10&search=Health%20Canada%20Cost%20Agreement%201%20-%20Showcase'
-  )
-  await expectOk(agreementsResponse, 'Read managed outcome-allocation Agreement')
-  const agreements = await responseJson<{
-    items: Array<{ id: string | number, egcs_fc_title_en: string }>
-  }>(agreementsResponse)
-  const matches = agreements.items.filter(item =>
-    item.egcs_fc_title_en === 'Health Canada Cost Agreement 1 - Showcase')
-  if (matches.length !== 1) {
-    throw new Error(`Expected one managed outcome-allocation agreement, found ${matches.length}.`)
+// Each case owns a fresh Agreement; the final NCIA snapshot supplies only public catalogs.
+const createManagedAgreement = async (page: Page): Promise<ShowcaseAgreement> => {
+  const referenceTitle = 'Aurora Community Kitchen Renewal'
+  const response = await page.request.get(`/api/agreements?limit=100&search=${encodeURIComponent(referenceTitle)}`)
+  await expectOk(response, 'Read the NCIA reference Agreement')
+  const references = await responseJson<{ items: Array<{ id: string; egcs_fc_title_en: string }> }>(response)
+  const reference = references.items.find(item => item.egcs_fc_title_en === referenceTitle)
+  expect(reference, 'The managed NCIA snapshot contains the reference Agreement').toBeTruthy()
+  const profileResponse = await page.request.get(`/api/agreements/${reference!.id}`)
+  await expectOk(profileResponse, 'Read NCIA native Agreement configuration')
+  const profile = await responseJson<{
+    agency_id: string; program_id: string; egcs_fc_transferpaymentstream: string
+    egcs_fc_agreementsubtype: string; egcs_fc_holdbackbasis: string
+  }>(profileResponse)
+  const token = String(Date.now())
+  const createInput = {
+    egcs_fc_transferpaymentstream: String(profile.egcs_fc_transferpaymentstream),
+    egcs_fc_agreementnumber: `OCA${token.slice(-10)}`,
+    egcs_fc_financialsystemnumber: token,
+    egcs_fc_currency: 'cad',
+    egcs_fc_title_en: `Outcome allocator journey ${token}`,
+    egcs_fc_title_fr: `Parcours de repartition ${token}`,
+    egcs_fc_description_en: `Independent package-owned unpaid funding test ${token}.`,
+    egcs_fc_description_fr: `Essai independant du financement non paye ${token}.`,
+    egcs_fc_agreementsubtype: String(profile.egcs_fc_agreementsubtype),
+    egcs_fc_furtherdistribution: false, egcs_fc_holdback: 0,
+    egcs_fc_holdbackbasis: String(profile.egcs_fc_holdbackbasis),
+    egcs_fc_authorizedassistancestartdate: '2026-04-01', egcs_fc_authorizedassistanceenddate: '2027-03-31',
+    egcs_fc_applicantrecipients: [{ egcs_fc_applicantrecipient: '171', egcs_fc_applicantrecipientsubtype: '21', egcs_fc_agencyfinancialid: '2' }]
   }
-  const agreementId = String(matches[0]!.id)
-  const detailResponse = await page.request.get(`/api/agreements/${agreementId}`)
-  await expectOk(detailResponse, 'Read managed outcome-allocation Agreement detail')
-  const detail = await responseJson<{
-    agency_id: string | number
-    program_id: string | number
-    egcs_fc_transferpaymentstream: string | number
-  }>(detailResponse)
-  return {
-    agreementId,
-    agencyId: String(detail.agency_id),
-    programId: String(detail.program_id),
-    streamId: String(detail.egcs_fc_transferpaymentstream)
+  let createdResponse = await page.request.post('/api/agreements', { data: createInput })
+  if (createdResponse.status() === 409) {
+    const conflict = await responseJson<{ data: { code: string; warnings: Array<{ fingerprint: string }> } }>(createdResponse)
+    expect(conflict.data.code).toBe('FUNDING_HISTORY_SIMILARITY_CONFIRMATION_REQUIRED')
+    createdResponse = await page.request.post('/api/agreements', { data: {
+      ...createInput, confirmations: conflict.data.warnings.map(warning => warning.fingerprint)
+    } })
   }
+  await expectOk(createdResponse, 'Create an isolated NCIA outcome allocation Agreement')
+  const agreementId = String((await responseJson<{ id: string }>(createdResponse)).id)
+  const owner = { agreementId, agencyId: String(profile.agency_id), programId: String(profile.program_id), streamId: String(profile.egcs_fc_transferpaymentstream) }
+  await expectOk(await page.request.patch(`/api/extensions/agency/${owner.agencyId}`, { data: { extensionKey: EXTENSION_KEY, enabled: true } }), 'Enable the allocation Agency')
+  await expectOk(await page.request.patch(`/api/extensions/streams/${owner.streamId}`, { data: { extensionKey: EXTENSION_KEY, enabled: true } }), 'Enable the allocation Stream')
+  const outcomeResponse = await page.request.post(`/api/transfer-payments/${owner.programId}/outcomes`, { data: {
+    egcs_tp_name_en: `Unpaid allocation outcome ${token}`, egcs_tp_name_fr: `Resultat de repartition ${token}`,
+    egcs_tp_description_en: 'Package-owned outcome.', egcs_tp_description_fr: 'Resultat du module.'
+  } })
+  await expectOk(outcomeResponse, 'Create an allocation outcome')
+  const outcomeId = String((await responseJson<{ id: string }>(outcomeResponse)).id)
+  const parties = await responseJson<{ items: Array<{ id: string }> }>(await page.request.get(`/api/agreements/${agreementId}/activities/lookups/responsible-parties?limit=100`))
+  await expectOk(await page.request.post(`/api/agreements/${agreementId}/activities`, { data: {
+    egcs_fc_name_en: 'Outcome allocation activity', egcs_fc_name_fr: 'Activite de repartition',
+    egcs_fc_description_en: 'Allocate unpaid funding.', egcs_fc_description_fr: 'Repartir le financement non paye.',
+    egcs_fc_expectedresults_en: 'Preserve paid coding.', egcs_fc_expectedresults_fr: 'Conserver le codage paye.',
+    egcs_fc_startdate: '2026-04-01', egcs_fc_enddate: '2027-03-31',
+    outcome_ids: [outcomeId], responsible_party_ids: [String(parties.items[0]!.id)]
+  } }), 'Reference the outcome in an Agreement activity')
+  const yearResponse = await page.request.post(`/api/agreements/${agreementId}/budget-fiscal-years`, { data: { egcs_fc_fiscalyear: '41' } })
+  await expectOk(yearResponse, 'Add the NCIA 2026 fiscal year')
+  const budgetYearId = String((await responseJson<{ id: string }>(yearResponse)).id)
+  await expectOk(await page.request.post(`/api/agreements/${agreementId}/budget-line-items`, { data: {
+    egcs_fc_fundingagreementbudgetfiscalyear: budgetYearId, egcs_fc_organizationcostcategory: '89',
+    egcs_fc_costsubsection: 'Unpaid allocation', egcs_fc_description: 'Independent allocation funding basis.',
+    egcs_fc_totalamount: '100.00', egcs_fc_programfunding: '100.00', egcs_fc_currency: 'cad'
+  } }), 'Fund the allocation with exactly one hundred dollars')
+  const chartResponse = await page.request.post(`/api/agency/${owner.agencyId}/chart-of-accounts`, { data: {
+    egcs_ay_kind: 'commitment', egcs_ay_fiscalyear: '41', egcs_ay_currency: 'cad',
+    egcs_ay_accountingdimensions: [{ value: `OCA-${token}`, label_en: 'Outcome allocation account', label_fr: 'Compte de repartition' }]
+  } })
+  await expectOk(chartResponse, 'Create a second fiscal-year Commitment code')
+  const chartId = String((await responseJson<{ id: string }>(chartResponse)).id)
+  await expectOk(await page.request.post(`/api/transfer-payments/${owner.programId}/streams/${owner.streamId}/chart-of-accounts`, { data: { egcs_tp_agencychartofaccount: chartId } }), 'Select the second Commitment code')
+  return owner
 }
 
 const createAllocationVersion = async (page: Page, agreementId: string): Promise<string> => {
@@ -327,12 +381,11 @@ const approveNestedRecommendation = async (
 test('saves and submits qualified standard Workflow Recommendations across terminal branches', async ({ page }) => {
   test.setTimeout(180_000)
   await login(page, 'root@example.com')
-  const agreement = await readShowcaseAgreement(page)
+  const agreement = await createManagedAgreement(page)
   const topology = await provisionQualifiedWorkflowTopology(page, agreement)
 
   const positiveVersionId = await createAllocationVersion(page, agreement.agreementId)
-  await page.goto(`/en/agreements/${agreement.agreementId}`)
-  await page.getByRole('tab', { name: 'Cost Allocation' }).click()
+  await openAllocation(page, agreement.agreementId)
   await expect(page.getByRole('heading', { name: 'Workflows', exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Add workflow' }).click()
   await page.getByRole('button', { name: /Qualified allocation recommendation workflow/ }).click()
@@ -349,7 +402,7 @@ test('saves and submits qualified standard Workflow Recommendations across termi
   expect(savedRecommendation.status(), await savedRecommendation.text()).toBe(200)
 
   await page.reload()
-  await page.getByRole('tab', { name: 'Cost Allocation' }).click()
+  await page.getByRole('tab', { name: 'Cost Allocation', exact: true }).last().click()
   await expect(page.getByRole('radio', { name: 'Recommended', exact: true })).toBeChecked()
   const submitResponse = page.waitForResponse(response =>
     response.url().includes('/api/workflows/recommendation/submit?') && response.request().method() === 'POST')
@@ -357,7 +410,7 @@ test('saves and submits qualified standard Workflow Recommendations across termi
   expect((await submitResponse).status()).toBe(200)
   await expect(page.getByText('Succeeded', { exact: true }).first()).toBeVisible()
   await page.reload()
-  await page.getByRole('tab', { name: 'Cost Allocation' }).click()
+  await page.getByRole('tab', { name: 'Cost Allocation', exact: true }).last().click()
   await expect(page.getByText('Succeeded', { exact: true }).first()).toBeVisible()
   const duplicateAfterTerminal = await page.request.post(
     recommendationRoute(positiveVersionId, true),
@@ -374,8 +427,7 @@ test('saves and submits qualified standard Workflow Recommendations across termi
     data: recommendationResponses('not_recommended', await currentRecommendationRevision(page, negativeVersionId))
   }), 'Submit qualified negative Recommendation')
   expect((await readQualifiedWorkflow(page, negativeVersionId)).current?.runtimeState).toBe('unsuccessful')
-  await page.goto(`/en/agreements/${agreement.agreementId}`)
-  await page.getByRole('tab', { name: 'Cost Allocation' }).click()
+  await openAllocation(page, agreement.agreementId)
   await expect(page.getByText('Unsuccessful', { exact: true }).first()).toBeVisible()
   await expect(page.getByText('Not recommended', { exact: true }).first()).toBeVisible()
   await deleteDraftVersion(page, agreement.agreementId, negativeVersionId)
@@ -483,9 +535,7 @@ test('saves and submits qualified standard Workflow Recommendations across termi
 
   const nestedVersionId = await createAllocationVersion(page, agreement.agreementId)
   await page.setViewportSize({ width: 390, height: 844 })
-  await page.goto(`/fr/ententes/${agreement.agreementId}`)
-  await page.getByRole('button', { name: 'Basculer la navigation' }).click()
-  await page.getByRole('tab', { name: 'Repartition des couts' }).last().click()
+  await openAllocation(page, agreement.agreementId, 'fr')
   await expect(page.getByRole('heading', { name: 'Flux de travail', exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Ajouter un flux de travail' }).click()
   await page.getByRole('button', { name: /Flux de repartition qualifie avec approbation imbriquee/ }).click()
@@ -505,7 +555,7 @@ test('saves and submits qualified standard Workflow Recommendations across termi
   await approveNestedRecommendation(page, nestedRecommendation!.id)
   await page.reload()
   await page.getByRole('button', { name: 'Basculer la navigation' }).click()
-  await page.getByRole('tab', { name: 'Repartition des couts' }).last().click()
+  await page.getByRole('tab', { name: 'Repartition des couts', exact: true }).last().click()
   await expect(page.getByText('Approuvé', { exact: true }).first()).toBeVisible()
   expect((await readQualifiedWorkflow(page, nestedVersionId)).current?.runtimeState).toBe('approved')
 
@@ -520,23 +570,7 @@ test('executes allocation draft, access, localization, and disable gates', async
   test.setTimeout(90_000)
   await login(page, 'root@example.com')
 
-  const agreementsResponse = await page.request.get(
-    '/api/agreements?page=1&limit=10&search=Health%20Canada%20Cost%20Agreement%201%20-%20Showcase'
-  )
-  expect(agreementsResponse.ok(), await agreementsResponse.text()).toBe(true)
-  const agreements = await responseJson<{
-    items: Array<{ id: string | number, egcs_fc_title_en: string }>
-  }>(agreementsResponse)
-  const matches = agreements.items.filter(item =>
-    item.egcs_fc_title_en === 'Health Canada Cost Agreement 1 - Showcase')
-  if (matches.length !== 1) {
-    throw new Error(`Expected one managed outcome-allocation agreement, found ${matches.length}.`)
-  }
-  const agreementId = String(matches[0]!.id)
-  const detailResponse = await page.request.get(`/api/agreements/${agreementId}`)
-  expect(detailResponse.ok(), await detailResponse.text()).toBe(true)
-  const agreement = await responseJson<{ agency_id: string | number }>(detailResponse)
-  const agencyId = String(agreement.agency_id)
+  const { agreementId, agencyId } = await createManagedAgreement(page)
 
   const createResponse = await page.request.post(
     `/api/extensions/${EXTENSION_KEY}/agreements/${agreementId}/allocation-versions`
@@ -544,25 +578,22 @@ test('executes allocation draft, access, localization, and disable gates', async
   expect(createResponse.ok()).toBe(true)
   const created = await createResponse.json() as { version: { id: string, versionNumber: number } }
 
-  await page.goto(`/en/agreements/${agreementId}`)
-  await page.getByRole('tab', { name: 'Cost Allocation' }).click()
+  await openAllocation(page, agreementId)
   await expect(page.getByRole('heading', { name: 'Cost allocation', exact: true })).toBeVisible()
   await expect(page.getByText(`Version ${created.version.versionNumber}`, { exact: true })).toBeVisible()
   await page.reload()
-  await page.getByRole('tab', { name: 'Cost Allocation' }).click()
+  await page.getByRole('tab', { name: 'Cost Allocation', exact: true }).last().click()
   await expect(page.getByText(`Version ${created.version.versionNumber}`, { exact: true })).toBeVisible()
 
   const other = await browser.newPage()
-  await login(other, 'user11@example.com')
+  await login(other, 'user03@example.com')
   expect((await other.request.put(`/api/extensions/${EXTENSION_KEY}/agreements/${agreementId}/allocations`, {
     data: { allocationVersionId: created.version.id, allocations: [] }
   })).status()).toBe(403)
   await other.close()
 
   await page.setViewportSize({ width: 390, height: 844 })
-  await page.goto(`/fr/ententes/${agreementId}`)
-  await page.getByRole('button', { name: 'Basculer la navigation' }).click()
-  await page.getByRole('tab', { name: 'Repartition des couts' }).last().click()
+  await openAllocation(page, agreementId, 'fr')
   await expect(page.getByRole('heading', { name: 'Repartition des couts', exact: true })).toBeVisible()
 
   const deleteResponse = await page.request.delete(
@@ -578,8 +609,10 @@ test('executes allocation draft, access, localization, and disable gates', async
   })
   expect(disableResponse.status()).toBe(200)
   await page.goto(`/en/agreements/${agreementId}`)
-  await page.getByRole('button', { name: 'Toggle navigation' }).click()
-  await expect(page.getByRole('tab', { name: 'Cost Allocation' })).toHaveCount(0)
+  const discoveryResponse = await page.request.get(`/api/extensions/entity-tabs?target=agreement&agreementId=${agreementId}`)
+  await expectOk(discoveryResponse, 'Discover tabs after Agency disablement')
+  const discovery = await responseJson<{ items: Array<{ extensionKey: string }> }>(discoveryResponse)
+  expect(discovery.items.some(item => item.extensionKey === EXTENSION_KEY)).toBe(false)
   expect([403, 404]).toContain((await page.request.get(
     `/api/extensions/${EXTENSION_KEY}/agreements/${agreementId}/allocations`
   )).status())
@@ -591,19 +624,22 @@ test('executes allocation draft, access, localization, and disable gates', async
   }
 })
 
-test('uses posted Corrections as shared Payment coverage while preserving immutable allocation weights and provenance', async ({ page, browser }, testInfo) => {
-  test.setTimeout(180_000)
+test('allocates unpaid funds and uses posted Corrections as shared Payment capacity while preserving immutable snapshots', async ({ page, browser }, testInfo) => {
+  test.setTimeout(240_000)
   await login(page, 'root@example.com')
-  const owner = await readShowcaseAgreement(page)
+  const owner = await createManagedAgreement(page)
   const approver = await browser.newPage()
-  await login(approver, 'user11@example.com')
+  await login(approver, 'user03@example.com')
   try {
     const statuses = await responseJson<Array<{ id: string; agencyId: string; nameEn: string; isDraft: boolean; terminal: boolean }>>(await page.request.get('/api/statuses'))
     const agencyStatuses = statuses.filter(status => status.agencyId === owner.agencyId)
     const draft = agencyStatuses.find(status => status.isDraft)!.id
-    const approved = agencyStatuses.find(status => status.nameEn === 'Approved')!.id
+    const approved = agencyStatuses.find(status => status.nameEn === 'Committed')!.id
     const paid = agencyStatuses.find(status => status.nameEn === 'Paid' && status.terminal)!.id
-    const denied = agencyStatuses.find(status => status.nameEn === 'Denied')!.id
+    const denied = agencyStatuses.find(status => status.nameEn === 'Returned for revision')!.id
+    const active = agencyStatuses.find(status => status.nameEn === 'Active')!.id
+    await configureSingleApprovalSubmission(page, owner, 'fundingcaseagreement', draft, active, denied)
+    await completeAndApprove(page, approver, 'fundingcaseagreement', owner.agreementId)
     const payments = await responseJson<{ payments: Array<{ id: string; egcs_fc_status: string }> }>(await page.request.get(`/api/agreements/${owner.agreementId}/payments-overview`))
     for (const payment of payments.payments.filter(item => item.egcs_fc_status === draft)) {
       await expectOk(await page.request.delete(`/api/agreements/${owner.agreementId}/payments/${payment.id}`), 'Remove an eligible seeded Payment draft')
@@ -611,14 +647,14 @@ test('uses posted Corrections as shared Payment coverage while preserving immuta
     await deleteUnsubmittedCommitmentDrafts(page, owner)
     await expectOk(await page.request.patch(`/api/extensions/agency/${owner.agencyId}`, { data: { extensionKey: EXTENSION_KEY, enabled: true } }), 'Enable allocation interoperability')
     await expectOk(await page.request.patch(`/api/extensions/streams/${owner.streamId}`, { data: { extensionKey: EXTENSION_KEY, enabled: true } }), 'Enable allocation stream interoperability')
-    // Reimbursement remains manual; Outcome Allocation owns its generated financial lines.
+    // Reimbursement amounts stay manual; the host allocator persists outcome-based coding.
     await expectOk(await page.request.patch(`/api/extensions/streams/${owner.streamId}`, { data: {
       extensionKey: 'gcs-automated-payments', enabled: true, config: { enabledPaymentTypes: ['advance'] }
     } }), 'Select manual reimbursement amounts')
     type Inputs = { outcomes: Array<{ id: string }>; commitmentTypes: Array<{ id: string }>;
-      budgetYears: Array<{ id: string; stream_budget_id: string; program_funding: string }>;
+      budgetYears: Array<{ id: string; fiscal_year_id: string; stream_budget_id: string; program_funding: string }>;
       streamCommitments: Array<{ id: string; stream_budget_id: string }>;
-      allocations: unknown[]; versions: Array<{ id: string; status: string }> }
+      allocations: Array<{ allocationVersionId: string }>; versions: Array<{ id: string; status: string }> }
     const allocationsUrl = `/api/extensions/${EXTENSION_KEY}/agreements/${owner.agreementId}/allocations`
     const inputs = await responseJson<Inputs>(await page.request.get(allocationsUrl))
     const commitmentType = inputs.commitmentTypes[0]!.id
@@ -640,31 +676,105 @@ test('uses posted Corrections as shared Payment coverage while preserving immuta
     await expectOk(await page.request.put(allocationsUrl, { data: { allocationVersionId: versionId, allocations } }), 'Save immutable allocation basis')
     await configureSingleApprovalSubmission(page, owner, ALLOCATION_VERSION_ENTITY_TYPE, draft, approved, denied)
     await completeAndApprove(page, approver, ALLOCATION_VERSION_ENTITY_TYPE, versionId)
-    const commitmentResponse = await page.request.post(`/api/agreements/${owner.agreementId}/commitments`, { data: { egcs_fc_type: commitmentType, egcs_fc_currency: 'cad' } })
+    const commitmentTotal = sumMoney(inputs.budgetYears.map(year => year.program_funding))
+    await page.goto(`/en/agreements/${owner.agreementId}?section=commitments`)
+    await page.getByRole('button', { name: 'Add Commitment', exact: true }).click()
+    const modal = page.getByRole('dialog', { name: 'Add Commitment' })
+    await expect(modal.getByLabel('Total amount')).toBeVisible()
+    await expect(modal.getByLabel('Commitment type')).toBeVisible()
+    await modal.getByRole('button', { name: 'Cancel', exact: true }).click()
+    const commitmentResponse = await page.request.post(`/api/agreements/${owner.agreementId}/commitments`, { data: {
+      egcs_fc_type: commitmentType, egcs_fc_currency: 'cad', egcs_fc_totalamount: commitmentTotal
+    } })
     await expectOk(commitmentResponse, 'Generate a Commitment from approved allocation weights')
-    const commitmentId = String((await responseJson<{ id: string }>(commitmentResponse)).id)
+    let commitmentId = String((await responseJson<{ id: string }>(commitmentResponse)).id)
     await configureSingleApprovalSubmission(page, owner, 'fundingcaseagreementcommitment', draft, approved, denied)
     await completeAndApprove(page, approver, 'fundingcaseagreementcommitment', commitmentId)
-    const commitmentUrl = `/api/agreements/${owner.agreementId}/commitments/${commitmentId}`
-    const commitmentBefore = await responseJson<{ egcs_fc_active: boolean; lines: Array<{ id: string; egcs_fc_amount: string }> }>(await page.request.get(commitmentUrl))
+    type Commitment = { egcs_fc_active: boolean; lines: Array<{
+      id: string; egcs_fc_transferpaymentstreamchartofaccount: string; egcs_fc_amount: string
+    }> }
+    let commitmentUrl = `/api/agreements/${owner.agreementId}/commitments/${commitmentId}`
+    let commitmentBefore = await responseJson<Commitment>(await page.request.get(commitmentUrl))
     expect(commitmentBefore.egcs_fc_active).toBe(true)
     const year = inputs.budgetYears.find(item => toCents(item.program_funding) > BigInt(0))!
     const createPayment = (amount: string) => page.request.post(`/api/agreements/${owner.agreementId}/payments`, { data: {
       egcs_fc_commitmenttype: commitmentType, egcs_fc_fiscalyear: year.id, egcs_fc_paymenttype: 'reimbursement',
-      egcs_fc_periodstart: 0, egcs_fc_periodend: 2, egcs_fc_paymentamount: amount, egcs_fc_currency: 'cad'
+      egcs_fc_periodstart: 0, egcs_fc_periodend: 2, egcs_fc_paymentamount: amount, egcs_fc_currency: 'cad', egcs_fc_applicantrecipient: '171'
     } })
-    const paymentResponse = await createPayment(year.program_funding)
-    await expectOk(paymentResponse, 'Use generated weights to consume the full fiscal-year capacity')
+    type Payment = { lines: Array<{ egcs_fc_fundingagreementcommitmentline: string; egcs_fc_amount: string }> }
+    const partialAmount = fromCents(toCents(year.program_funding) / BigInt(2))
+    const partialResponse = await createPayment(partialAmount)
+    await expectOk(partialResponse, 'Pay part of the original allocation')
+    const partialId = String((await responseJson<{ id: string }>(partialResponse)).id)
+    const partialPayment = await responseJson<Payment>(await page.request.get(`/api/agreements/${owner.agreementId}/payments/${partialId}`))
+    await configureSingleApprovalSubmission(page, owner, 'fundingcasepayment', draft, paid, denied)
+    await completeAndApprove(page, approver, 'fundingcasepayment', partialId)
+    const previousSnapshot = await responseJson<Inputs>(await page.request.get(allocationsUrl))
+    const changedVersionId = await createAllocationVersion(page, owner.agreementId)
+    const changedAllocations = inputs.budgetYears.flatMap(budgetYear => {
+      const lines = mappings.filter(mapping => mapping.streamBudgetId === budgetYear.stream_budget_id)
+      const total = toCents(budgetYear.program_funding)
+      const first = lines.length > 1 ? total / BigInt(5) : total
+      return lines.map((line, index) => ({ commitmentType, streamCommitmentId: line.streamCommitmentId,
+        agreementBudgetFiscalYearId: budgetYear.id, outcomeId, allocationMethod: 'amount',
+        allocationValue: fromCents(index === 0 ? first : index === 1 ? total - first : BigInt(0)) }))
+    })
+    await expectOk(await page.request.put(allocationsUrl, { data: {
+      allocationVersionId: changedVersionId, allocations: changedAllocations
+    } }), 'Change weights for the remaining unpaid funds')
+    await completeAndApprove(page, approver, ALLOCATION_VERSION_ENTITY_TYPE, changedVersionId)
+    const replacementResponse = await page.request.post(`/api/agreements/${owner.agreementId}/commitments`, { data: {
+      egcs_fc_type: commitmentType, egcs_fc_currency: 'cad', egcs_fc_totalamount: commitmentTotal
+    } })
+    await expectOk(replacementResponse, 'Allocate a replacement Commitment without moving paid coding')
+    commitmentId = String((await responseJson<{ id: string }>(replacementResponse)).id)
+    commitmentUrl = `/api/agreements/${owner.agreementId}/commitments/${commitmentId}`
+    const replacement = await responseJson<Commitment>(await page.request.get(commitmentUrl))
+    const unpaidCents = toCents(commitmentTotal) - toCents(partialAmount)
+    const paidByCode = new Map<string, bigint>()
+    for (const line of replacement.lines) {
+      const code = String(line.egcs_fc_transferpaymentstreamchartofaccount)
+      const priorIds = commitmentBefore.lines.filter(prior => String(prior.egcs_fc_transferpaymentstreamchartofaccount) === code).map(prior => String(prior.id))
+      const retainedPaid = partialPayment.lines.filter(paymentLine => priorIds.includes(String(paymentLine.egcs_fc_fundingagreementcommitmentline)))
+        .reduce((sum, paymentLine) => sum + toCents(paymentLine.egcs_fc_amount), BigInt(0))
+      paidByCode.set(code, retainedPaid)
+      const weight = changedAllocations.filter(allocation => allocation.streamCommitmentId === code)
+        .reduce((sum, allocation) => sum + toCents(allocation.allocationValue), BigInt(0))
+      const actualUnpaid = toCents(line.egcs_fc_amount) - retainedPaid
+      const expectedUnpaid = unpaidCents * weight / toCents(commitmentTotal)
+      expect(actualUnpaid >= BigInt(0)).toBe(true)
+      expect(actualUnpaid - expectedUnpaid >= BigInt(0) && actualUnpaid - expectedUnpaid <= BigInt(1)).toBe(true)
+    }
+    expect(sumMoney(replacement.lines.map(line => line.egcs_fc_amount))).toBe(commitmentTotal)
+    await completeAndApprove(page, approver, 'fundingcaseagreementcommitment', commitmentId)
+    commitmentBefore = await responseJson<Commitment>(await page.request.get(commitmentUrl))
+    const changedSnapshot = await responseJson<Inputs>(await page.request.get(allocationsUrl))
+    expect(previousSnapshot.allocations.filter(allocation => allocation.allocationVersionId === versionId).length).toBeGreaterThan(0)
+    expect(changedSnapshot.allocations.filter(allocation => allocation.allocationVersionId === versionId))
+      .toEqual(previousSnapshot.allocations.filter(allocation => allocation.allocationVersionId === versionId))
+    const yearCodes = new Set(mappings.filter(mapping => mapping.streamBudgetId === year.stream_budget_id).map(mapping => mapping.streamCommitmentId))
+    const remainingYearAmount = fromCents(commitmentBefore.lines.filter(line => yearCodes.has(String(line.egcs_fc_transferpaymentstreamchartofaccount)))
+      .reduce((sum, line) => sum + toCents(line.egcs_fc_amount), BigInt(0)) - toCents(partialAmount))
+    const paymentResponse = await createPayment(remainingYearAmount)
+    await expectOk(paymentResponse, 'Consume the remaining fiscal-year capacity using the new unpaid split')
     const paymentId = String((await responseJson<{ id: string }>(paymentResponse)).id)
     const paymentUrl = `/api/agreements/${owner.agreementId}/payments/${paymentId}`
-    type Payment = { lines: Array<{ egcs_fc_fundingagreementcommitmentline: string; egcs_fc_amount: string }> }
     const generated = await responseJson<Payment>(await page.request.get(paymentUrl))
     expect(generated.lines.filter(line => toCents(line.egcs_fc_amount) > BigInt(0)).length).toBeGreaterThan(1)
-    expect(sumMoney(generated.lines.map(line => line.egcs_fc_amount))).toBe(year.program_funding)
+    expect(sumMoney(generated.lines.map(line => line.egcs_fc_amount))).toBe(remainingYearAmount)
+    for (const code of yearCodes) {
+      const replacementLines = commitmentBefore.lines.filter(line => String(line.egcs_fc_transferpaymentstreamchartofaccount) === code)
+      const replacementIds = replacementLines.map(line => String(line.id))
+      const expectedUnpaid = replacementLines.reduce((sum, line) => sum + toCents(line.egcs_fc_amount), BigInt(0))
+        - (paidByCode.get(code) ?? BigInt(0))
+      const allocated = generated.lines.filter(line => replacementIds.includes(String(line.egcs_fc_fundingagreementcommitmentline)))
+        .reduce((sum, line) => sum + toCents(line.egcs_fc_amount), BigInt(0))
+      expect(allocated, `Payment must consume unpaid capacity on coding ${code}`).toBe(expectedUnpaid)
+    }
     await configureSingleApprovalSubmission(page, owner, 'fundingcasepayment', draft, paid, denied)
     await completeAndApprove(page, approver, 'fundingcasepayment', paymentId)
     const frozenAllocations = await responseJson<Inputs>(await page.request.get(allocationsUrl))
-    expect(frozenAllocations.versions.find(version => version.id === versionId)?.status).toBe('active')
+    expect(frozenAllocations.versions.find(version => version.id === changedVersionId)?.status).toBe('active')
     const correction = await postNegativeCorrection(page, approver, owner, commitmentId, paymentId)
     expect(await responseJson(await page.request.get(allocationsUrl))).toEqual(frozenAllocations)
     expect(await responseJson(await page.request.get(commitmentUrl))).toEqual(commitmentBefore)
@@ -676,15 +786,15 @@ test('uses posted Corrections as shared Payment coverage while preserving immuta
     const restoredId = String((await responseJson<{ id: string }>(restored)).id)
     const restoredDetail = await responseJson<Payment>(await page.request.get(`/api/agreements/${owner.agreementId}/payments/${restoredId}`))
     expect(sumMoney(restoredDetail.lines.map(line => line.egcs_fc_amount))).toBe('1.00')
-    const correctedLine = correction.egcs_fc_lines.find(line => line.egcs_fc_originalpaid !== '0.00')!.egcs_fc_commitmentline
+    const correctedLine = correction.egcs_fc_lines.find(line => line.egcs_fc_adjustment === '-1.00')!.egcs_fc_commitmentline
     expect(restoredDetail.lines.filter(line => toCents(line.egcs_fc_amount) > BigInt(0)).map(line => line.egcs_fc_fundingagreementcommitmentline)).toEqual([correctedLine])
     expect(await responseJson(await page.request.get(allocationsUrl))).toEqual(frozenAllocations)
-    await page.goto(`/en/agreements/${owner.agreementId}/corrections/${correction.id}`)
-    await expect(page.getByRole('tab', { name: 'Correction Completion', exact: true })).toBeVisible()
+    await page.goto(`/en/agreements/${owner.agreementId}/corrections/${correction.id}?section=completion`)
+    await expect(page.getByRole('heading', { name: 'Correction Completion', exact: true })).toBeVisible()
     await page.screenshot({ path: testInfo.outputPath('posted-correction-shared-allocation-capacity.png'), fullPage: true })
-    await page.goto(`/en/agreements/${owner.agreementId}/payments/${restoredId}`)
-    await expect(page.getByRole('tab', { name: 'Payment completion', exact: true })).toBeVisible()
-    await page.screenshot({ path: testInfo.outputPath('correction-aware-generated-payment.png'), fullPage: true })
+    await page.goto(`/en/agreements/${owner.agreementId}/payments/${restoredId}?section=completion`)
+    await expect(page.getByRole('heading', { name: 'Payment completion', exact: true })).toBeVisible()
+    await page.screenshot({ path: testInfo.outputPath('correction-aware-allocated-payment.png'), fullPage: true })
   } finally {
     await approver.close()
   }

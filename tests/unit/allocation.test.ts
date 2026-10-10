@@ -7,7 +7,6 @@ import {
   resolveAllocationAmounts,
   sumMoney,
   toMoney,
-  validateGeneratedCommitmentLinePaymentCoverage,
   validateAllocationReferences,
   validateAllocationTotals,
   validateAllocationYearLimits,
@@ -381,125 +380,6 @@ describe('outcome cost allocation logic', () => {
       path: 'allocations.0.streamCommitmentId',
       message: 'apiErrors.extensions.outcome_cost_allocation.stream_commitment_budget_mismatch'
     }])
-  })
-
-  it('rejects generated commitment lines below existing paid amounts', () => {
-    const issues = validateGeneratedCommitmentLinePaymentCoverage([
-      {
-        commitmentType: '1',
-        agreementBudgetFiscalYearId: 'year-1',
-        outcomeId: 'outcome-1',
-        streamCommitmentId: 'stream-commitment-1',
-        amount: 75
-      }
-    ], [
-      {
-        commitmentLineId: 'line-1',
-        commitmentType: '1',
-        agreementBudgetFiscalYearId: 'year-1',
-        streamCommitmentId: 'stream-commitment-1',
-        paidAmount: 80
-      },
-      {
-        commitmentLineId: 'line-2',
-        commitmentType: '2',
-        agreementBudgetFiscalYearId: 'year-1',
-        streamCommitmentId: 'stream-commitment-1',
-        paidAmount: 80
-      }
-    ])
-
-    expect(issues.map(issue => issue.code)).toEqual([
-      'GCS_OUTCOME_COST_ALLOCATION_PAYMENT_EXCEEDS_GENERATED_LINE',
-      'GCS_OUTCOME_COST_ALLOCATION_PAYMENT_EXCEEDS_GENERATED_LINE'
-    ])
-  })
-
-  it('validates paid coverage by commitment type, budget year, and stream commitment', () => {
-    const issues = validateGeneratedCommitmentLinePaymentCoverage([
-      {
-        commitmentType: '1',
-        agreementBudgetFiscalYearId: 'year-1',
-        outcomeId: 'outcome-1',
-        streamCommitmentId: 'stream-commitment-1',
-        amount: 40
-      },
-      {
-        commitmentType: '1',
-        agreementBudgetFiscalYearId: 'year-1',
-        outcomeId: 'outcome-2',
-        streamCommitmentId: 'stream-commitment-1',
-        amount: 35
-      }
-    ], [
-      {
-        commitmentLineId: 'line-1',
-        commitmentType: '1',
-        agreementBudgetFiscalYearId: 'year-1',
-        streamCommitmentId: 'stream-commitment-1',
-        paidAmount: 70
-      }
-    ])
-
-    expect(issues).toEqual([])
-
-    expect(validateGeneratedCommitmentLinePaymentCoverage([
-      {
-        commitmentType: '1',
-        agreementBudgetFiscalYearId: 'year-1',
-        outcomeId: 'outcome-1',
-        streamCommitmentId: 'stream-commitment-1',
-        amount: 40
-      },
-      {
-        commitmentType: '1',
-        agreementBudgetFiscalYearId: 'year-1',
-        outcomeId: 'outcome-2',
-        streamCommitmentId: 'stream-commitment-1',
-        amount: 35
-      }
-    ], [
-      {
-        commitmentLineId: 'line-1',
-        commitmentType: '1',
-        agreementBudgetFiscalYearId: 'year-1',
-        streamCommitmentId: 'stream-commitment-1',
-        paidAmount: 80
-      }
-    ]).map(issue => issue.code)).toEqual([
-      'GCS_OUTCOME_COST_ALLOCATION_PAYMENT_EXCEEDS_GENERATED_LINE'
-    ])
-  })
-
-  it('sums multiple paid lines against the same referenced commitment line', () => {
-    const issues = validateGeneratedCommitmentLinePaymentCoverage([
-      {
-        commitmentType: '1',
-        agreementBudgetFiscalYearId: 'year-1',
-        outcomeId: 'outcome-1',
-        streamCommitmentId: 'stream-commitment-1',
-        amount: 75
-      }
-    ], [
-      {
-        commitmentLineId: 'line-1',
-        commitmentType: '1',
-        agreementBudgetFiscalYearId: 'year-1',
-        streamCommitmentId: 'stream-commitment-1',
-        paidAmount: 40
-      },
-      {
-        commitmentLineId: 'line-1',
-        commitmentType: '1',
-        agreementBudgetFiscalYearId: 'year-1',
-        streamCommitmentId: 'stream-commitment-1',
-        paidAmount: 40
-      }
-    ])
-
-    expect(issues.map(issue => issue.code)).toEqual([
-      'GCS_OUTCOME_COST_ALLOCATION_PAYMENT_EXCEEDS_GENERATED_LINE'
-    ])
   })
 
   it('allocates payment amounts across commitment lines using allocation weights and remaining balances', () => {

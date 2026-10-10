@@ -124,22 +124,6 @@ export interface AllocationValidationIssue {
   message: string
 }
 
-export interface GeneratedCommitmentLineCoverage {
-  commitmentType: CommitmentType
-  agreementBudgetFiscalYearId: string
-  outcomeId: string
-  streamCommitmentId: string
-  amount: AllocationDecimalInput
-}
-
-export interface PaidCommitmentLineCoverage {
-  commitmentLineId: string
-  commitmentType: CommitmentType
-  agreementBudgetFiscalYearId: string
-  streamCommitmentId: string
-  paidAmount: AllocationDecimalInput
-}
-
 export interface PaymentLineAllocationInput {
   commitmentLineId: string
   weightAmount: AllocationDecimalInput
@@ -520,54 +504,6 @@ export const validateCommitmentMappings = (
   return issues
 }
 
-const commitmentLineCoverageKey = (coverage: {
-  commitmentType: CommitmentType
-  agreementBudgetFiscalYearId: string
-  streamCommitmentId: string
-}) => [
-  coverage.commitmentType,
-  coverage.agreementBudgetFiscalYearId,
-  coverage.streamCommitmentId
-].join(':')
-
-/**
- * Aggregates generated and paid lines by commitment coordinates and reports payments exceeding generated coverage.
- */
-export const validateGeneratedCommitmentLinePaymentCoverage = (
-  generatedLines: GeneratedCommitmentLineCoverage[],
-  paidLines: PaidCommitmentLineCoverage[]
-): AllocationValidationIssue[] => {
-  const generatedAmountByKey = new Map<string, bigint>()
-  for (const line of generatedLines) {
-    const key = commitmentLineCoverageKey(line)
-    const existingAmount = generatedAmountByKey.get(key) ?? BIGINT_ZERO
-    generatedAmountByKey.set(key, existingAmount + toCents(line.amount))
-  }
-
-  const paidAmountByKey = new Map<string, { index: number, paidAmount: bigint }>()
-  for (const [index, line] of paidLines.entries()) {
-    const key = commitmentLineCoverageKey(line)
-    const existing = paidAmountByKey.get(key) ?? { index, paidAmount: BIGINT_ZERO }
-    paidAmountByKey.set(key, {
-      ...existing,
-      paidAmount: existing.paidAmount + toCents(line.paidAmount)
-    })
-  }
-
-  return Array.from(paidAmountByKey.entries()).flatMap(([key, paidLine]) => {
-    const generatedAmount = generatedAmountByKey.get(key) ?? BIGINT_ZERO
-    if (paidLine.paidAmount <= generatedAmount) {
-      return []
-    }
-
-    return [{
-      code: 'GCS_OUTCOME_COST_ALLOCATION_PAYMENT_EXCEEDS_GENERATED_LINE',
-      path: `paidCommitmentLines.${paidLine.index}`,
-      message: 'apiErrors.extensions.outcome_cost_allocation.payment_exceeds_generated_line'
-    }]
-  })
-}
-
 const normalizePaymentLineAllocationCandidates = (
   lines: PaymentLineAllocationInput[]
 ): PaymentLineAllocationCandidate[] => lines
@@ -624,16 +560,23 @@ const allocatePaymentRound = (
   const roundStartCents = remainingPaymentCents
   let roundRemainingCents = remainingPaymentCents
   const nextCandidates: PaymentLineAllocationCandidate[] = []
-  for (const [index, line] of candidates.entries()) {
-    const isLastLine = index === candidates.length - 1
-    const lineWeightCents = toCents(line.weightAmount)
+  const shares = candidates.map(line => {
+    const numerator = roundStartCents * toCents(line.weightAmount)
+    return { lineId: line.commitmentLineId, cents: numerator / totalWeightCents, remainder: numerator % totalWeightCents }
+  })
+  let residualCents = roundStartCents - shares.reduce((sum, share) => sum + share.cents, BIGINT_ZERO)
+  shares.sort((left, right) => left.remainder === right.remainder
+    ? left.lineId < right.lineId ? 1 : left.lineId > right.lineId ? -1 : 0
+    : left.remainder > right.remainder ? -1 : 1)
+  for (const share of shares) {
+    if (residualCents <= BIGINT_ZERO) break
+    share.cents += BIGINT_ONE
+    residualCents -= BIGINT_ONE
+  }
+  const targetByLineId = new Map(shares.map(share => [share.lineId, share.cents]))
+  for (const line of candidates) {
     const lineRemainingCents = toCents(line.remainingAmount)
-    const targetCents = isLastLine
-      ? roundRemainingCents
-      : (
-            roundStartCents * lineWeightCents
-            + totalWeightCents / BIGINT_TWO
-          ) / totalWeightCents
+    const targetCents = targetByLineId.get(line.commitmentLineId) ?? BIGINT_ZERO
     const paymentLineCents = [targetCents, lineRemainingCents, roundRemainingCents]
       .reduce((minimum, value) => value < minimum ? value : minimum)
     if (paymentLineCents <= BIGINT_ZERO) {

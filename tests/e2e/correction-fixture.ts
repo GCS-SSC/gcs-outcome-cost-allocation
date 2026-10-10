@@ -3,7 +3,7 @@ import { expect, type APIResponse, type Page } from '@playwright/test'
 type Owner = { agencyId: string; agreementId: string; programId: string; streamId: string }
 type Id = { id: string }
 type Correction = { id: string; egcs_fc_status: string; egcs_fc_outcome: string; egcs_fc_lines: Array<{
-  egcs_fc_commitmentline: string; egcs_fc_originalpaid: string; egcs_fc_jveffect: string; egcs_fc_priorcorrections: string
+  egcs_fc_commitmentline: string; egcs_fc_adjustment: string; egcs_fc_originalpaid: string; egcs_fc_jveffect: string; egcs_fc_priorcorrections: string
 }> }
 const ok = async (response: APIResponse, label: string) => {
   if (!response.ok()) throw new Error(`${label}: ${response.status()} ${await response.text()}`)
@@ -14,7 +14,7 @@ export const configureSingleApprovalSubmission = async (
   page: Page, owner: Owner, entityType: string, start: string, success: string, failure: string
 ): Promise<void> => {
   const users = await json<{ items: Array<{ id: string; egcs_cn_email: string }> }>(await page.request.get('/api/users/lookups?status=active&limit=100'))
-  const verifier = users.items.find(user => user.egcs_cn_email === 'user11@example.com')!
+  const verifier = users.items.find(user => user.egcs_cn_email === 'user03@example.com')!
   const agencyBase = `/api/agency/${owner.agencyId}`
   const streamBase = `/api/transfer-payments/${owner.programId}/streams/${owner.streamId}/workflows`
   const existing = await json<{ items: Array<{ id: string; egcs_cn_entitytype: string; egcs_cn_purpose: string }> }>(
@@ -50,7 +50,11 @@ export const configureSingleApprovalSubmission = async (
 }
 
 export const completeAndApprove = async (page: Page, approver: Page, entityType: string, entityId: string): Promise<void> => {
-  await ok(await page.request.post('/api/completions/complete', { data: { entityType, entityId, comments: 'Package-owned financial interoperability evidence.' } }), 'Complete interoperability evidence')
+  if (entityType === 'fundingcaseagreement') {
+    await ok(await page.request.post('/api/workflows/start', { data: { entityType, entityId, purpose: 'approval_submission' } }), 'Start the explicit Agreement approval submission')
+  } else {
+    await ok(await page.request.post('/api/completions/complete', { data: { entityType, entityId, comments: 'Package-owned financial interoperability evidence.' } }), 'Complete interoperability evidence')
+  }
   type Step = { id: string; can_action: boolean; certifications: Array<{ id: string }> }
   const runtimeResponse = await approver.request.get(`/api/approvals/runtime?entityType=${encodeURIComponent(entityType)}&entityId=${entityId}`)
   await ok(runtimeResponse, 'Read assigned interoperability approval')
@@ -78,7 +82,7 @@ export const postNegativeCorrection = async (
 ): Promise<Correction> => {
   const users = await json<{ items: Array<{ id: string; egcs_cn_email: string }> }>(await page.request.get('/api/users/lookups?status=active&limit=100'))
   const creator = users.items.find(user => user.egcs_cn_email === 'root@example.com')!
-  const verifier = users.items.find(user => user.egcs_cn_email === 'user11@example.com')!
+  const verifier = users.items.find(user => user.egcs_cn_email === 'user03@example.com')!
   expect(creator).toBeTruthy()
   expect(verifier).toBeTruthy()
   const token = `${paymentId}-${Date.now()}`
@@ -146,7 +150,12 @@ export const postNegativeCorrection = async (
     egcs_cn_failurestatus: failure, egcs_cn_successstatus: success, owners: []
   } }), 'Configure terminal Correction approval route')
   await ok(await page.request.post(`${agencyBase}/workflows/${workflow.id}/publish`), 'Publish Correction workflow')
-  await ok(await page.request.post(`/api/transfer-payments/${owner.programId}/streams/${owner.streamId}/workflows`, { data: { egcs_tp_workflow: workflow.id } }), 'Link Correction workflow')
+  const streamWorkflows = `/api/transfer-payments/${owner.programId}/streams/${owner.streamId}/workflows`
+  const existingWorkflows = await json<{ items: Array<{ id: string; egcs_cn_entitytype: string; egcs_cn_purpose: string }> }>(await page.request.get(`${streamWorkflows}?limit=100`))
+  for (const link of existingWorkflows.items.filter(item => item.egcs_cn_entitytype === 'fundingcasecorrection' && item.egcs_cn_purpose === 'approval_submission')) {
+    await ok(await page.request.delete(`${streamWorkflows}/${link.id}`), 'Replace the disposable Correction approval submission')
+  }
+  await ok(await page.request.post(streamWorkflows, { data: { egcs_tp_workflow: workflow.id } }), 'Link Correction workflow')
   await ok(await page.request.post('/api/completions/complete', { data: { entityType: 'fundingcasecorrection', entityId: id } }), 'Complete required Correction submission')
   type Step = { id: string; can_action: boolean; certifications: Array<{ id: string }> }
   const runtime = await json<{ routingSlips?: Array<{ steps: Step[] }>; steps?: Step[] }>(
