@@ -130,7 +130,7 @@ const WorkflowSection = defineComponent({
 
 const DetailPage = defineComponent({ setup: (_, { slots }) => () => h('div', slots.body?.()) })
 const DetailWorkspace = defineComponent({
-  props: ['items', 'modelValue', 'sectionDescription'],
+  props: ['items', 'modelValue', 'sectionDescription', 'priorityValues'],
   emits: ['update:modelValue'],
   setup: (props, { slots, emit }) => () => h('div', [
     h('nav', (props.items ?? []).map((item: { value: string; label: string }) => h('button', {
@@ -410,6 +410,7 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
       hasPendingEffects: false
     }
     const wrapper = await mountTab(vi.fn(async () => jsonResponse(response)) as typeof fetch, config, locale, null, 'summary')
+    expect(wrapper.getComponent(DetailWorkspace).props('priorityValues')).toEqual(['summary'])
     const tables = wrapper.findAll('table')
     const paidTable = tables.find(table => table.find('caption').text() === (locale === 'fr' ? 'Paiements par ligne comptable' : 'Paid by coding line'))!
     expect(paidTable.findAll('tbody tr')).toHaveLength(1)

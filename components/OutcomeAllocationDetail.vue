@@ -831,7 +831,7 @@ watch(() => recordId, () => {
           :is-collapsed="collapsed" icon="i-lucide-chart-no-axes-combined" :title="versionTitle" :description="agreementTitle" :meta-items="[agreementContext?.agreementNumber, tLocal('title')]"
           :badges="selectedVersion ? [{ label: getStatusLabel(selectedVersion.status), uiVariant: 'subtle' }] : []" />
         <ExtensionDetailWorkspace
-          v-if="selectedVersion" v-model="selectedView" :items="views" :priority-values="views.map(view => view.value)" content-test-id="allocation-version-detail-content"
+          v-if="selectedVersion" v-model="selectedView" :items="views" :priority-values="['summary']" content-test-id="allocation-version-detail-content"
           :section-description="selectedView === 'workflows' ? tLocal('workflowsDescription') : undefined">
           <template #actions>
             <template v-if="selectedView === 'allocation' && canUpdate">
