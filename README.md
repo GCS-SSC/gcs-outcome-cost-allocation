@@ -224,7 +224,9 @@ boundaries. Set `GCS_PAYMENT_AUDIT_DIR` when running PostgreSQL tests to emit
 
 ## Matrix editing
 
-The matrix table displays the saved draft values and resolved amounts. Each editable
+The matrix table displays the resulting monetary amounts and unallocated funding,
+with Outcome beneath Commitment line and fiscal year only in the group heading.
+Method and input value appear in the edit dialog. Each editable
 row opens the shared modal with its coding line, outcome and fiscal year context,
 method and exact decimal value, plus a live amount and unallocated funding preview.
 Update applies the copied row to the local matrix; Save persists the matrix. Cancel,

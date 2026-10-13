@@ -71,12 +71,7 @@ const AllocationTable = defineComponent({
     h('div', {
       'data-row-index': String(index)
     }, [
-      slots['method-cell']?.({
-        row: {
-          original
-        }
-      }),
-      h('div', { 'data-cell': 'value' }, slots['value-cell']?.({ row: { original } })),
+      h('div', { 'data-cell': 'commitment' }, slots['commitmentLine-cell']?.({ row: { original } })),
       slots['allocationActions-cell']?.({
         row: {
           original
@@ -1022,6 +1017,12 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
     })
     expect(associationRow?.outcomeLabel).not.toBe('Renamed outcome')
     expect(associationRow?.outcomeLabel).not.toBe('Résultat renommé')
+    const cell = wrapper.get(`[data-row-index="${tableRows.indexOf(associationRow!)}"] [data-cell="commitment"]`)
+    expect(cell.text()).toContain(commitmentLabel)
+    expect(cell.text()).toContain(outcomeLabel)
+    expect(cell.text()).not.toContain('2024-2025')
+    expect((wrapper.getComponent(AllocationTable).vm.$attrs.columns as Array<{ id: string }>).map(column => column.id))
+      .toEqual(['commitmentLine', 'amount', 'unallocated', 'allocationActions'])
 
     wrapper.unmount()
   })

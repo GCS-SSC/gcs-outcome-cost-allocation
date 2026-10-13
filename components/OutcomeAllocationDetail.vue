@@ -242,19 +242,6 @@ const allocationColumns = computed(() => [
     header: tLocal('commitmentLine')
   },
   {
-    id: 'outcome',
-    accessorKey: 'outcomeLabel',
-    header: tLocal('outcome')
-  },
-  {
-    id: 'method',
-    header: tLocal('method')
-  },
-  {
-    id: 'value',
-    header: tLocal('value')
-  },
-  {
     id: 'amount',
     header: tLocal('amount')
   },
@@ -979,35 +966,14 @@ watch(() => recordId, () => {
                     <div v-else class="flex min-w-0 items-center gap-3 py-1 pl-12">
                       <ExtensionIcon name="i-lucide-corner-down-right" class="size-4 shrink-0 text-zinc-400" />
                       <div class="min-w-0">
-                        <div class="truncate text-sm font-semibold text-zinc-900 dark:text-white">
+                        <div class="text-sm font-semibold whitespace-normal text-zinc-900 dark:text-white">
                           {{ row.original.commitmentLineLabel }}
                         </div>
-                        <div class="text-xs text-zinc-500 dark:text-zinc-400">
-                          {{ row.original.yearLabel }}
+                        <div class="text-xs font-medium whitespace-normal text-zinc-500 dark:text-zinc-400">
+                          {{ row.original.outcomeLabel }}
                         </div>
                       </div>
                     </div>
-                  </template>
-
-                  <template #outcome-cell="{ row }">
-                    <span v-if="row.original.rowType !== 'association'" class="text-sm text-zinc-500 dark:text-zinc-400">
-                      {{ row.original.associationCount }} {{ tLocal('records') }}
-                    </span>
-                    <span v-else class="text-sm font-medium text-zinc-700 dark:text-zinc-200">
-                      {{ row.original.outcomeLabel }}
-                    </span>
-                  </template>
-
-                  <template #method-cell="{ row }">
-                    <span v-if="row.original.association">{{ tLocal(getAllocation(row.original.association)?.allocationMethod === 'percentage' ? 'percentage' : 'amount') }}</span>
-                  </template>
-
-                  <template #value-cell="{ row }">
-                    <span v-if="row.original.association">
-                      {{ getAllocation(row.original.association)?.allocationMethod === 'percentage'
-                        ? `${getAllocation(row.original.association)?.allocationValue ?? '0'}%`
-                        : formatMoney(getAllocationAmount(row.original.association)) }}
-                    </span>
                   </template>
 
                   <template #amount-cell="{ row }">
@@ -1227,30 +1193,18 @@ watch(() => recordId, () => {
 }
 
 :deep(.outcome-cost-allocation-table th:nth-child(1)) {
-  width: 24%;
+  width: 46%;
 }
 
 :deep(.outcome-cost-allocation-table th:nth-child(2)) {
-  width: 16%;
+  width: 20%;
 }
 
 :deep(.outcome-cost-allocation-table th:nth-child(3)) {
-  width: 13%;
+  width: 20%;
 }
 
 :deep(.outcome-cost-allocation-table th:nth-child(4)) {
-  width: 13%;
-}
-
-:deep(.outcome-cost-allocation-table th:nth-child(5)) {
-  width: 11%;
-}
-
-:deep(.outcome-cost-allocation-table th:nth-child(6)) {
-  width: 11%;
-}
-
-:deep(.outcome-cost-allocation-table th:nth-child(7)) {
-  width: 12%;
+  width: 14%;
 }
 </style>
