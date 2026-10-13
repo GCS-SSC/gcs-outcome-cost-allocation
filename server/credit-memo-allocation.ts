@@ -2,10 +2,10 @@ import type { GcsCodingAllocatorContext, GcsCodingAllocationResult } from '@gcs-
 import { createGcsExtensionUserError, getExtensionKvEntry } from '@gcs-ssc/extensions/server'
 import { sql } from 'kysely'
 import { z } from 'zod'
-import { AgencyCodingSchema, RetainedAgencyCodingSchema, RetainedCreditMemoCodingSchema, splitAgencyCoding } from '../shared/agency-coding'
-import { fromCents, parseOutcomeCostAllocationConfig, toCents, toExactNumeric19Scale4Units } from '../shared/allocation'
-import { asOutcomeCostAllocationDb } from './db'
-import { databaseNumericText, parseDatabaseMoney } from './numeric'
+import { AgencyCodingSchema, RetainedAgencyCodingSchema, RetainedCreditMemoCodingSchema, splitAgencyCoding } from '../shared/agency-coding.ts'
+import { fromCents, parseOutcomeCostAllocationConfig, toCents, toExactNumeric19Scale4Units } from '../shared/allocation.ts'
+import { asOutcomeCostAllocationDb } from './db.ts'
+import { databaseNumericText, parseDatabaseMoney } from './numeric.ts'
 
 const invalid = () => createGcsExtensionUserError({ code: 'GCS_OUTCOME_COST_ALLOCATION_CODING_CONFIGURATION_INVALID', statusCode: 400,
   message: { en: 'The credit memo allocation policy is invalid. Check its commitment coding, override percentages and dates, and make every target account available in this Stream.',

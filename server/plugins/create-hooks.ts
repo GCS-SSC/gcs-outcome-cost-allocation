@@ -17,7 +17,7 @@ import {
   registerGcsExtensionStatusReferenceGuard
 } from '@gcs-ssc/extensions/server'
 import { sql } from 'kysely'
-import { guardAgencyCodingConfiguration } from '../agency-coding-configuration'
+import { guardAgencyCodingConfiguration } from '../agency-coding-configuration.ts'
 import { asOutcomeCostAllocationDb } from '../db.ts'
 import {
   generatedPaymentStatusResurrectionExceedsCoverage,

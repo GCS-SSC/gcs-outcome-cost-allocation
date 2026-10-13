@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { fromCents, toCents, toExactNumeric19Scale4Units } from './allocation'
+import { fromCents, toCents, toExactNumeric19Scale4Units } from './allocation.ts'
 
 const id = z.string().regex(/^[1-9]\d{0,18}$/).refine(value => /^[1-9]\d{0,18}$/.test(value) && BigInt(value) <= BigInt('9223372036854775807'))
 const percentage = z.string().refine(value => {

@@ -1,6 +1,6 @@
 import { createGcsExtensionUserError, type GcsExtensionConfigurationGuardContext } from '@gcs-ssc/extensions/server'
-import { AgencyCodingSchema } from '../shared/agency-coding'
-import { EXTENSION_KEY } from '../shared/allocation'
+import { AgencyCodingSchema } from '../shared/agency-coding.ts'
+import { EXTENSION_KEY } from '../shared/allocation.ts'
 
 export const guardAgencyCodingConfiguration = async (context: GcsExtensionConfigurationGuardContext) => {
   if (context.targetExtensionKey !== EXTENSION_KEY || context.scope !== 'agency' || !context.enabled) return
