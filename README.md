@@ -100,8 +100,11 @@ funds, then adds each paid floor back. For example, a $100 total with $20 alread
 on code A and a new 75:25 split produces $80 on A and $20 on B: the remaining $80
 splits $60/$20, while the paid $20 stays on A.
 
-Payments split against the selected Commitment's remaining unpaid capacity, including
-host-applied Journal Vouchers, Corrections and credits. Paid amounts are not weighted again.
+Payments require the completed matrix version retained by the selected active Commitment.
+Missing, draft, deleted, foreign or empty matrix evidence blocks creation, even when another
+matrix is active on the Agreement. The retained fiscal-year matrix supplies coding weights;
+the host's remaining unpaid capacities, including Journal Vouchers, Corrections and credits,
+cap each result. A completed historical matrix remains valid for its pinned Commitment.
 Largest-remainder cent balancing distributes rounding across codes deterministically,
 keeping each proportional share within one cent; the host validates the complete batch
 against both individual lines and shared accounting-code ceilings before saving it.

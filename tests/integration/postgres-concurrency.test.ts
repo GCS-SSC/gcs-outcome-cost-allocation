@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { Kysely, PostgresDialect, sql, type Transaction } from 'kysely'
 import { Pool } from 'pg'
 import type {
+  GcsCodingAllocatorContext,
   GcsExtensionAgreementDeleteGuardHookPayload,
   GcsExtensionAgreementStreamChangeGuardHookPayload,
   GcsExtensionAgreementLifecycleLockHookPayload,
@@ -2746,6 +2747,9 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         .set({ status: 'active', completed_at: sql`now()`, funding_basis_amount: '100.00' })
         .where('id', '=', String(version.id))
         .execute()
+      await sql`INSERT INTO extensions.kv_entry (extension_key, owner_type, owner_id, config_key, value)
+        VALUES ('gcs-outcome-cost-allocation', 'fundingcaseagreementcommitment', '190', 'allocation-version',
+          ${JSON.stringify({ versionId: String(version.id) })}::jsonb)`.execute(trx)
       await trx
         .insertInto('extensions.gcs_outcome_cost_allocation_commitment_lines')
         .values({
@@ -3793,7 +3797,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
     }
   })
 
-  it('orders recorded commitment lines deterministically before assigning a residual cent', async () => {
+  it('uses the Commitment matrix weights despite unequal remaining capacity and rejects a missing pin atomically', async () => {
     await sql`
       INSERT INTO "Transfer_Payment_Profile" (id, egcs_tp_agency)
       VALUES (900, 9000);
@@ -3912,6 +3916,9 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         })
         .where('id', '=', String(version.id))
         .execute()
+      await sql`INSERT INTO extensions.kv_entry (extension_key, owner_type, owner_id, config_key, value)
+        VALUES ('gcs-outcome-cost-allocation', 'fundingcaseagreementcommitment', '180', 'allocation-version',
+          ${JSON.stringify({ versionId: String(version.id) })}::jsonb)`.execute(trx)
       await trx
         .insertInto('extensions.gcs_outcome_cost_allocation_commitment_lines')
         .values([
@@ -3939,14 +3946,37 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         .execute()
     })
 
-    const generated = await observerDb.transaction().execute(async trx => allocator({
-      db: trx as unknown as Transaction<unknown>, agreementId: '920000', agencyId: '9000', streamId: '11', amount: '0.01', currency: 'cad',
+    const paymentContext: GcsCodingAllocatorContext = {
+      db: observerDb as unknown as Transaction<unknown>, agreementId: '920000', agencyId: '9000', streamId: '11', amount: '0.01', currency: 'cad',
       output: { kind: 'payment', commitmentId: '180', commitmentTypeId: '11', fiscalYearId: budgetYearStableId(34) },
       codingLines: ['18', '19'].map(codingLineId => ({ codingLineId, agencyChartOfAccountId: codingLineId, agencyFiscalYearId: '50', accountingDimensions: [] })),
-      commitmentCodingLines: [], existingLines: [], codingPaidFloors: [], codingAvailableAmounts: [{ codingLineId: '18', amount: '50.00' }, { codingLineId: '19', amount: '50.00' }],
+      commitmentCodingLines: [], existingLines: [], codingPaidFloors: [], codingAvailableAmounts: [{ codingLineId: '18', amount: '50.00' }, { codingLineId: '19', amount: '1.00' }],
       config: { enabledCommitmentTypes: ['11'], mappings: [] }, agencyConfig: {}
-    }))
+    }
+    const generated = await observerDb.transaction().execute(async trx => allocator({ ...paymentContext, db: trx as unknown as Transaction<unknown> }))
     expect(generated).toEqual([{ codingLineId: '19', amount: '0.01' }])
+
+    // A globally active matrix and available coding cannot substitute for this Commitment's pin.
+    await expect(observerDb.transaction().execute(async trx => {
+      await lockAgreementAllocationLifecycle(trx, '920000')
+      await sql`DELETE FROM extensions.kv_entry WHERE owner_type='fundingcaseagreementcommitment' AND owner_id='180'`.execute(trx)
+      await trx.insertInto('Funding_Case_Agreement_Payment').values({
+        id: '183', egcs_fc_fundingagreementcommitment: '180',
+        egcs_fc_fiscalyear: budgetYearStableId(34), egcs_fc_paymentamount: '0.01', egcs_fc_status: '1'
+      }).execute()
+      await allocator({ ...paymentContext, db: trx as unknown as Transaction<unknown> })
+    })).rejects.toMatchObject({ code: 'GCS_OUTCOME_COST_ALLOCATION_PAYMENT_MATRIX_REQUIRED' })
+    expect(Number((await observerDb.selectFrom('Funding_Case_Agreement_Payment')
+      .select(eb => eb.fn.count('id').as('count')).where('id', '=', '183').executeTakeFirstOrThrow()).count)).toBe(0)
+    expect((await sql`SELECT id FROM extensions.kv_entry WHERE owner_type='fundingcaseagreementcommitment' AND owner_id='180'`.execute(observerDb)).rows).toHaveLength(1)
+
+    await managedMutation(observerDb, '920000', async trx => {
+      await trx.updateTable('extensions.gcs_outcome_cost_allocation_versions')
+        .set({ status: 'inactive' }).where('agreement_id', '=', '920000').execute()
+    })
+    expect(await observerDb.transaction().execute(async trx => allocator({
+      ...paymentContext, db: trx as unknown as Transaction<unknown>
+    }))).toEqual(generated)
 
     await observerDb.transaction().execute(async trx => {
       if (!Array.isArray(generated)) throw new Error('Expected Outcome allocation payment coding.')

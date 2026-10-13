@@ -25,7 +25,8 @@ describe('host-interface outcome allocator', () => {
     )`.execute(db)
     await sql`CREATE TABLE extensions.gcs_outcome_cost_allocation_allocations (
       id bigserial PRIMARY KEY, allocation_version_id bigint, agreement_id bigint,
-      commitment_type bigint, stream_commitment_id bigint, resolved_amount numeric(19,2), _deleted boolean DEFAULT false
+      commitment_type bigint, stream_commitment_id bigint, agreement_budget_fiscal_year_id bigint DEFAULT 2026,
+      resolved_amount numeric(19,2), _deleted boolean DEFAULT false
     )`.execute(db)
   })
   beforeEach(async () => {
@@ -123,27 +124,57 @@ describe('host-interface outcome allocator', () => {
     await expect(allocator(context())).rejects.toMatchObject({ code: 'GCS_OUTCOME_COST_ALLOCATION_COMMITMENT_LINES_MISSING' })
   })
 
-  const payment = (overrides: Partial<GcsCodingAllocatorContext> = {}) => context({
-    output: { kind: 'payment', commitmentId: '1', commitmentTypeId: '1', fiscalYearId: '2026' }, ...overrides
-  })
-  it('weights payments by unpaid balances instead of the original 75/25 split', async () => {
-    expect(await allocator(payment({ amount: '50.00', codingAvailableAmounts: [
-      { codingLineId: '10', amount: '75.00' }, { codingLineId: '20', amount: '10.00' }
-    ] }))).toEqual([{ codingLineId: '10', amount: '44.12' }, { codingLineId: '20', amount: '5.88' }])
-  })
-  it('pays exact remaining capacity, excludes other fiscal years, and rejects a cent overrun', async () => {
-    const input = payment({ amount: '85.00', codingAvailableAmounts: [
-      { codingLineId: '10', amount: '75.00' }, { codingLineId: '20', amount: '10.00' }, { codingLineId: '30', amount: '999.00' }
-    ] })
-    expect(await allocator(input)).toEqual([{ codingLineId: '10', amount: '75.00' }, { codingLineId: '20', amount: '10.00' }])
-    await expect(allocator({ ...input, amount: '85.01' })).rejects.toMatchObject({ code: 'GCS_OUTCOME_COST_ALLOCATION_PAYMENT_EXCEEDS_REMAINING' })
-  })
-  it('balances fractional cents and large exact strings', async () => {
-    expect(await allocator(payment({ amount: '0.01', codingAvailableAmounts: [
-      { codingLineId: '10', amount: '1.00' }, { codingLineId: '20', amount: '1.00' }
-    ] }))).toEqual([{ codingLineId: '20', amount: '0.01' }])
-    expect(await allocator(payment({ amount: '900719925474099.91', codingAvailableAmounts: [
-      { codingLineId: '10', amount: '900719925474099.91' }
-    ] }))).toEqual([{ codingLineId: '10', amount: '900719925474099.91' }])
+  describe('Payments from the selected Commitment matrix', () => {
+    beforeEach(async () => {
+      await sql`INSERT INTO extensions.kv_entry (extension_key,owner_type,owner_id,config_key,value)
+        VALUES ('gcs-outcome-cost-allocation','fundingcaseagreementcommitment','1','allocation-version','{"versionId":"1"}'::jsonb)`.execute(db)
+    })
+    const payment = (overrides: Partial<GcsCodingAllocatorContext> = {}) => context({
+      output: { kind: 'payment', commitmentId: '1', commitmentTypeId: '1', fiscalYearId: '2026' }, ...overrides
+    })
+    it('weights payments by the pinned matrix instead of the remaining balances', async () => {
+      expect(await allocator(payment({ amount: '50.00', codingAvailableAmounts: [
+        { codingLineId: '10', amount: '75.00' }, { codingLineId: '20', amount: '10.00' }
+      ] }))).toEqual([{ codingLineId: '10', amount: '40.00' }, { codingLineId: '20', amount: '10.00' }])
+    })
+    it('pays exact remaining capacity, excludes other fiscal years, and rejects a cent overrun', async () => {
+      await sql`INSERT INTO extensions.gcs_outcome_cost_allocation_allocations
+        (allocation_version_id,agreement_id,commitment_type,stream_commitment_id,agreement_budget_fiscal_year_id,resolved_amount)
+        VALUES (1,1,1,30,2027,999)`.execute(db)
+      const input = payment({ amount: '85.00', codingAvailableAmounts: [
+        { codingLineId: '10', amount: '75.00' }, { codingLineId: '20', amount: '10.00' }, { codingLineId: '30', amount: '999.00' }
+      ] })
+      expect(await allocator(input)).toEqual([{ codingLineId: '10', amount: '75.00' }, { codingLineId: '20', amount: '10.00' }])
+      await expect(allocator({ ...input, amount: '85.01' })).rejects.toMatchObject({ code: 'GCS_OUTCOME_COST_ALLOCATION_PAYMENT_EXCEEDS_REMAINING' })
+    })
+    it('balances fractional cents and large exact strings', async () => {
+      expect(await allocator(payment({ amount: '0.01', codingAvailableAmounts: [
+        { codingLineId: '10', amount: '1.00' }, { codingLineId: '20', amount: '1.00' }
+      ] }))).toEqual([{ codingLineId: '10', amount: '0.01' }])
+      expect(await allocator(payment({ amount: '900719925474099.91', codingAvailableAmounts: [
+        { codingLineId: '10', amount: '900719925474099.91' }
+      ] }))).toEqual([{ codingLineId: '10', amount: '900719925474099.91' }])
+    })
+    it('rejects a missing Commitment pin even when the Agreement has an active matrix', async () => {
+      await sql`DELETE FROM extensions.kv_entry`.execute(db)
+      await expect(allocator(payment())).rejects.toMatchObject({ code: 'GCS_OUTCOME_COST_ALLOCATION_PAYMENT_MATRIX_REQUIRED' })
+    })
+    it.each(['draft', 'deleted', 'foreign', 'empty', 'malformed', 'other-year'])(
+      'rejects a %s retained matrix', async scenario => {
+        if (scenario === 'draft') await sql`UPDATE extensions.gcs_outcome_cost_allocation_versions SET status='draft' WHERE id=1`.execute(db)
+        if (scenario === 'deleted') await sql`UPDATE extensions.gcs_outcome_cost_allocation_versions SET _deleted=true WHERE id=1`.execute(db)
+        if (scenario === 'foreign') await sql`UPDATE extensions.kv_entry SET value='{"versionId":"3"}'::jsonb`.execute(db)
+        if (scenario === 'empty') await sql`DELETE FROM extensions.gcs_outcome_cost_allocation_allocations WHERE allocation_version_id=1`.execute(db)
+        if (scenario === 'malformed') await sql`UPDATE extensions.kv_entry SET value='{"versionId":"broken"}'::jsonb`.execute(db)
+        if (scenario === 'other-year') await sql`UPDATE extensions.gcs_outcome_cost_allocation_allocations SET agreement_budget_fiscal_year_id=2027`.execute(db)
+        await expect(allocator(payment())).rejects.toMatchObject({ code: 'GCS_OUTCOME_COST_ALLOCATION_PAYMENT_MATRIX_REQUIRED' })
+      }
+    )
+    it('uses the Commitment’s completed historical pin instead of a newer active matrix', async () => {
+      await sql`UPDATE extensions.kv_entry SET value='{"versionId":"2"}'::jsonb`.execute(db)
+      expect(await allocator(payment({ amount: '10.00', codingAvailableAmounts: [
+        { codingLineId: '10', amount: '75.00' }, { codingLineId: '20', amount: '25.00' }
+      ] }))).toEqual([{ codingLineId: '10', amount: '10.00' }])
+    })
   })
 })

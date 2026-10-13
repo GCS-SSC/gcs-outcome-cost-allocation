@@ -65,6 +65,10 @@ const errorMessages: Record<string, GcsExtensionLocalizedMessage> = {
     en: 'Complete and activate a cost allocation before creating this commitment.',
     fr: 'Terminez et activez une répartition des coûts avant de créer cet engagement.'
   },
+  GCS_OUTCOME_COST_ALLOCATION_PAYMENT_MATRIX_REQUIRED: {
+    en: 'The active commitment must retain a completed outcome allocation matrix before you can create this payment. Complete a matrix and approve a commitment using it.',
+    fr: 'L’engagement actif doit conserver une matrice de répartition par résultat terminée avant de créer ce paiement. Terminez une matrice et approuvez un engagement qui l’utilise.'
+  },
   GCS_OUTCOME_COST_ALLOCATION_STREAM_BUDGET_MISSING: {
     en: 'A budget year is missing its stream budget mapping.',
     fr: 'Un exercice budgétaire n’a pas de correspondance avec un budget de volet.'

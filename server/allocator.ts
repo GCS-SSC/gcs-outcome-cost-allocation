@@ -53,35 +53,35 @@ const allocator: GcsCodingAllocator = async context => {
   if (!parseOutcomeCostAllocationConfig(context.config).enabledCommitmentTypes.includes(commitmentTypeId)) return null
 
   const catalogIds = new Set(context.codingLines.map(line => line.codingLineId))
-  if (context.output.kind === 'payment') {
-    const candidates = context.codingAvailableAmounts
-      .filter(line => catalogIds.has(line.codingLineId))
-      .map(line => ({ commitmentLineId: line.codingLineId, weightAmount: line.amount, remainingAmount: line.amount }))
-    const split = allocatePaymentAmountToCommitmentLines(candidates, context.amount)
-    if (split.reduce((sum, line) => sum + toCents(line.paymentAmount), BigInt(0)) !== toCents(context.amount)) {
-      throw createOutcomeCostAllocationUserError('GCS_OUTCOME_COST_ALLOCATION_PAYMENT_EXCEEDS_REMAINING', 'paymentAmount')
-    }
-    return split.map(line => ({ codingLineId: line.commitmentLineId, amount: line.paymentAmount }))
-  }
-
+  const isPayment = context.output.kind === 'payment'
+  const paymentYearId = context.output.kind === 'payment' ? context.output.fiscalYearId : null
+  const missingPaymentMatrix = () => createOutcomeCostAllocationUserError('GCS_OUTCOME_COST_ALLOCATION_PAYMENT_MATRIX_REQUIRED')
   const db = asOutcomeCostAllocationDb(context.db)
   const commitmentId = context.output.commitmentId
-  if (!commitmentId) throw createOutcomeCostAllocationUserError('GCS_OUTCOME_COST_ALLOCATION_INVALID', 'commitmentId')
+  if (!commitmentId) throw isPayment ? missingPaymentMatrix() : createOutcomeCostAllocationUserError('GCS_OUTCOME_COST_ALLOCATION_INVALID', 'commitmentId')
+  if (isPayment && !paymentYearId) throw missingPaymentMatrix()
   const kvDb = context.db as unknown as Parameters<typeof getExtensionKvEntry>[0]
   const pinned = await getExtensionKvEntry(kvDb, 'gcs-outcome-cost-allocation', 'fundingcaseagreementcommitment', commitmentId, 'allocation-version')
   const pinnedVersionId = pinned && typeof pinned === 'object' && !Array.isArray(pinned) ? pinned.versionId : null
+  if (isPayment && (typeof pinnedVersionId !== 'string' || !/^[1-9]\d{0,18}$/.test(pinnedVersionId)
+    || BigInt(pinnedVersionId) > BigInt('9223372036854775807'))) throw missingPaymentMatrix()
   if (pinned !== null && typeof pinnedVersionId !== 'string') throw createOutcomeCostAllocationUserError('GCS_OUTCOME_COST_ALLOCATION_INVALID', 'allocationVersion')
   let versionQuery = db.selectFrom('extensions.gcs_outcome_cost_allocation_versions')
     .select('id').where('agreement_id', '=', context.agreementId).where('_deleted', '=', false)
   versionQuery = typeof pinnedVersionId === 'string' ? versionQuery.where('id', '=', pinnedVersionId) : versionQuery.where('status', '=', 'active')
+  if (isPayment) versionQuery = versionQuery.where('status', 'in', ['active', 'inactive'])
   const version = await versionQuery.executeTakeFirst()
+  if (!version && isPayment) throw missingPaymentMatrix()
   if (!version) throw createOutcomeCostAllocationUserError('GCS_OUTCOME_COST_ALLOCATION_ACTIVE_REQUIRED', 'allocationVersion')
 
-  const rows = await db.selectFrom('extensions.gcs_outcome_cost_allocation_allocations')
+  let allocationQuery = db.selectFrom('extensions.gcs_outcome_cost_allocation_allocations')
     .select(['stream_commitment_id', databaseNumericText(sql.ref('resolved_amount')).as('amount')])
     .where('allocation_version_id', '=', String(version.id)).where('agreement_id', '=', context.agreementId)
     .where('commitment_type', '=', commitmentTypeId).where('_deleted', '=', false)
-    .orderBy('stream_commitment_id').execute()
+    .orderBy('stream_commitment_id')
+  if (isPayment) allocationQuery = allocationQuery.where('agreement_budget_fiscal_year_id', '=', paymentYearId!)
+  const rows = await allocationQuery.execute()
+  if (isPayment && rows.length === 0) throw missingPaymentMatrix()
   const weights = new Map<string, bigint>()
   for (const row of rows) {
     if (row.amount === null) throw createOutcomeCostAllocationUserError('GCS_OUTCOME_COST_ALLOCATION_INVALID', 'allocations')
@@ -91,6 +91,17 @@ const allocator: GcsCodingAllocator = async context => {
       throw createOutcomeCostAllocationUserError('GCS_OUTCOME_COST_ALLOCATION_STREAM_COMMITMENT_INACTIVE', 'allocations')
     }
     if (catalogIds.has(codingId)) weights.set(codingId, (weights.get(codingId) ?? BigInt(0)) + amount)
+  }
+
+  if (isPayment) {
+    const available = new Map(context.codingAvailableAmounts.map(line => [line.codingLineId, line.amount]))
+    const split = allocatePaymentAmountToCommitmentLines([...weights].map(([codingId, weight]) => ({
+      commitmentLineId: codingId, weightAmount: fromCents(weight), remainingAmount: available.get(codingId) ?? '0.00'
+    })), context.amount)
+    if (split.reduce((sum, line) => sum + toCents(line.paymentAmount), BigInt(0)) !== toCents(context.amount)) {
+      throw createOutcomeCostAllocationUserError('GCS_OUTCOME_COST_ALLOCATION_PAYMENT_EXCEEDS_REMAINING', 'paymentAmount')
+    }
+    return split.map(line => ({ codingLineId: line.commitmentLineId, amount: line.paymentAmount }))
   }
 
   const paid = new Map<string, bigint>()
