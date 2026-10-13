@@ -9,6 +9,10 @@ import {
 import type { AllocationValidationIssue } from '../shared/allocation.ts'
 
 const errorMessages: Record<string, GcsExtensionLocalizedMessage> = {
+  GCS_OUTCOME_COST_ALLOCATION_PENDING_EFFECTS: {
+    en: 'Resolve pending payments, journal vouchers, corrections and linked credit memos before allocating costs.',
+    fr: 'Réglez les paiements, pièces de journal, corrections et notes de crédit liées en attente avant de répartir les coûts.'
+  },
   GCS_OUTCOME_COST_ALLOCATION_MIXED_CURRENCY_UNSUPPORTED: {
     en: 'The Agreement budget must use its single fixed currency. Use separate Agreements for different currencies.',
     fr: 'Le budget de l’entente doit utiliser sa seule devise fixe. Utilisez des ententes distinctes pour des devises différentes.'
@@ -30,32 +34,32 @@ const errorMessages: Record<string, GcsExtensionLocalizedMessage> = {
     fr: 'Une répartition enregistrée référence un exercice budgétaire qui n’est plus actif.'
   },
   GCS_OUTCOME_COST_ALLOCATION_YEAR_MISSING: {
-    en: 'The full agreement budget must be allocated.',
-    fr: 'Le budget complet de l’entente doit être réparti.'
+    en: 'The remaining agreement funding must be fully allocated.',
+    fr: 'Le financement restant de l’entente doit être entièrement réparti.'
   },
   GCS_OUTCOME_COST_ALLOCATION_MIXED_METHODS: {
-    en: 'The full agreement budget must be allocated.',
-    fr: 'Le budget complet de l’entente doit être réparti.'
+    en: 'The remaining agreement funding must be fully allocated.',
+    fr: 'Le financement restant de l’entente doit être entièrement réparti.'
   },
   GCS_OUTCOME_COST_ALLOCATION_PERCENTAGE_TOTAL_INVALID: {
-    en: 'The full agreement budget must be allocated.',
-    fr: 'Le budget complet de l’entente doit être réparti.'
+    en: 'The remaining agreement funding must be fully allocated.',
+    fr: 'Le financement restant de l’entente doit être entièrement réparti.'
   },
   GCS_OUTCOME_COST_ALLOCATION_AMOUNT_TOTAL_INVALID: {
-    en: 'The full agreement budget must be allocated.',
-    fr: 'Le budget complet de l’entente doit être réparti.'
+    en: 'The remaining agreement funding must be fully allocated.',
+    fr: 'Le financement restant de l’entente doit être entièrement réparti.'
   },
   GCS_OUTCOME_COST_ALLOCATION_TOTAL_INVALID: {
-    en: 'The full agreement budget must be allocated.',
-    fr: 'Le budget complet de l’entente doit être réparti.'
+    en: 'The remaining agreement funding must be fully allocated.',
+    fr: 'Le financement restant de l’entente doit être entièrement réparti.'
   },
   GCS_OUTCOME_COST_ALLOCATION_YEAR_TOTAL_INVALID: {
-    en: 'Each fiscal year must be fully allocated to its own budget value.',
-    fr: 'Chaque exercice doit être entièrement réparti selon sa propre valeur budgétaire.'
+    en: 'Each fiscal year must fully allocate its remaining funding.',
+    fr: 'Le financement restant de chaque exercice doit être entièrement réparti.'
   },
   GCS_OUTCOME_COST_ALLOCATION_YEAR_TOTAL_EXCEEDED: {
-    en: 'An allocation cannot exceed its fiscal-year budget value.',
-    fr: 'Une répartition ne peut pas dépasser la valeur budgétaire de son exercice.'
+    en: 'An allocation cannot exceed its fiscal-year remaining funding.',
+    fr: 'Une répartition ne peut pas dépasser le financement restant de son exercice.'
   },
   GCS_OUTCOME_COST_ALLOCATION_ACTIVE_REQUIRED: {
     en: 'Complete and activate a cost allocation before creating this commitment.',

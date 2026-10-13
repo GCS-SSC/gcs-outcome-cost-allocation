@@ -1,9 +1,39 @@
-import { expect, test, type APIResponse, type Page } from '@playwright/test'
-import { fromCents, sumMoney, toCents } from '../../shared/allocation'
+import { expect, test, type APIResponse, type Page, type Response } from '@playwright/test'
+import { registerAgencyCodingJourney } from './agency-coding-journey'
+import { fromCents, sumMoney, toCents, toExactNumeric19Scale4Units } from '../../shared/allocation'
 import { completeAndApprove, configureSingleApprovalSubmission, deleteUnsubmittedCommitmentDrafts, postNegativeCorrection } from './correction-fixture'
 
 const EXTENSION_KEY = 'gcs-outcome-cost-allocation'
 const ALLOCATION_VERSION_ENTITY_TYPE = `${EXTENSION_KEY}:allocation-version`
+const allocationDetailPath = (
+  agreementId: string,
+  versionId: string,
+  section = 'summary',
+  locale: 'en' | 'fr' = 'en'
+) => `/${locale}/${locale === 'fr' ? 'ententes' : 'agreements'}/${agreementId}/extension/${EXTENSION_KEY}/outcome-cost-allocation/${versionId}?section=${section}`
+
+const openAllocationVersion = async (
+  page: Page,
+  agreementId: string,
+  versionId: string,
+  section = 'summary',
+  locale: 'en' | 'fr' = 'en'
+) => {
+  await page.goto(allocationDetailPath(agreementId, versionId, section, locale))
+  await expect(page.getByTestId('allocation-version-detail-content')).toBeVisible()
+}
+
+const expectAllocationVersionUrl = async (
+  page: Page,
+  agreementId: string,
+  versionId: string,
+  section = 'summary',
+  locale: 'en' | 'fr' = 'en'
+) => {
+  const path = allocationDetailPath(agreementId, versionId, section, locale).split('?')[0]
+  await expect(page).toHaveURL(url => url.pathname === path && (url.searchParams.get('section') ?? 'summary') === section)
+}
+
 const openAllocation = async (page: Page, agreementId: string, locale: 'en' | 'fr' = 'en') => {
   await page.goto(`/${locale}/${locale === 'fr' ? 'ententes' : 'agreements'}/${agreementId}`)
   if ((page.viewportSize()?.width ?? 1280) < 768) {
@@ -42,7 +72,7 @@ type WorkflowTopology = {
   }
 }
 
-const responseJson = async <T>(response: APIResponse): Promise<T> => {
+const responseJson = async <T>(response: APIResponse | Response): Promise<T> => {
   const contentType = response.headers()['content-type'] || ''
   if (!contentType.includes('application/json')) {
     throw new Error(`Expected JSON response but got content-type: ${contentType}`)
@@ -58,12 +88,12 @@ const login = async (page: Page, email: string) => {
   await page.waitForURL(url => !url.pathname.endsWith('/login'))
 }
 
-const expectOk = async (response: APIResponse, label: string): Promise<void> => {
+const expectOk = async (response: APIResponse | Response, label: string): Promise<void> => {
   if (!response.ok()) throw new Error(`${label}: ${response.status()} ${await response.text()}`)
 }
 
 // Each case owns a fresh Agreement; the final NCIA snapshot supplies only public catalogs.
-const createManagedAgreement = async (page: Page): Promise<ShowcaseAgreement> => {
+const createManagedAgreement = async (page: Page, proponentId = '171', financialId = '2'): Promise<ShowcaseAgreement> => {
   const referenceTitle = 'Aurora Community Kitchen Renewal'
   const response = await page.request.get(`/api/agreements?limit=100&search=${encodeURIComponent(referenceTitle)}`)
   await expectOk(response, 'Read the NCIA reference Agreement')
@@ -90,7 +120,7 @@ const createManagedAgreement = async (page: Page): Promise<ShowcaseAgreement> =>
     egcs_fc_furtherdistribution: false, egcs_fc_holdback: 0,
     egcs_fc_holdbackbasis: String(profile.egcs_fc_holdbackbasis),
     egcs_fc_authorizedassistancestartdate: '2026-04-01', egcs_fc_authorizedassistanceenddate: '2027-03-31',
-    egcs_fc_applicantrecipients: [{ egcs_fc_applicantrecipient: '171', egcs_fc_applicantrecipientsubtype: '21', egcs_fc_agencyfinancialid: '2' }]
+    egcs_fc_applicantrecipients: [{ egcs_fc_applicantrecipient: proponentId, egcs_fc_applicantrecipientsubtype: '21', egcs_fc_agencyfinancialid: financialId }]
   }
   let createdResponse = await page.request.post('/api/agreements', { data: createInput })
   if (createdResponse.status() === 409) {
@@ -143,6 +173,54 @@ const createAllocationVersion = async (page: Page, agreementId: string): Promise
   )
   await expectOk(response, 'Create qualified Workflow allocation version')
   return String((await responseJson<{ version: { id: string } }>(response)).version.id)
+}
+
+const completeAllocationThroughDetail = async (
+  page: Page,
+  approver: Page,
+  agreementId: string,
+  versionId: string
+) => {
+  await openAllocationVersion(page, agreementId, versionId, 'completion')
+  await expect(page.getByRole('heading', { name: 'Allocation completion', exact: true })).toBeVisible()
+  await page.getByLabel('Completion Comment', { exact: true }).fill('Allocation completion through the dedicated record page.')
+  const completion = page.waitForResponse(response => response.request().method() === 'POST'
+    && response.url().endsWith('/api/completions/complete'))
+  await page.getByRole('button', { name: 'Submit for approval', exact: true }).click()
+  const completed = await completion
+  await expectOk(completed, 'Submit the allocation from its Completion section')
+  expect(completed.request().postDataJSON()).toMatchObject({
+    entityType: ALLOCATION_VERSION_ENTITY_TYPE,
+    entityId: versionId
+  })
+  await expect(page.getByText('Financial decision', { exact: true })).toBeVisible()
+  const runtimeUrl = `/api/workflows/runtime?entityType=${encodeURIComponent(ALLOCATION_VERSION_ENTITY_TYPE)}&entityId=${versionId}&purpose=approval_submission`
+  const started = await responseJson<{ current: { runtimeId: string; runtimeState: string } }>(await page.request.get(runtimeUrl))
+  expect(started.current.runtimeState).toBe('active')
+  await page.reload()
+  await expect(page.getByRole('heading', { name: 'Allocation completion', exact: true })).toBeVisible()
+  await expect(page.getByText('Financial decision', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Submit for approval', exact: true })).toHaveCount(0)
+  const resumed = await responseJson<typeof started>(await page.request.get(runtimeUrl))
+  expect(resumed.current.runtimeId).toBe(started.current.runtimeId)
+  await page.screenshot({ path: test.info().outputPath('allocation-completion-active-workflow.png'), fullPage: true })
+  await openAllocationVersion(page, agreementId, versionId, 'completion', 'fr')
+  await expect(page.getByText('Décision financière', { exact: true })).toBeVisible()
+  await expect(page.getByText('Allocation completion through the dedicated record page.', { exact: true })).toBeVisible()
+  await openAllocationVersion(approver, agreementId, versionId, 'completion')
+  await expect(approver.getByText('Financial decision', { exact: true })).toBeVisible()
+  await approver.getByRole('button', { name: 'Action', exact: true }).click()
+  const decision = approver.getByRole('dialog', { name: 'Action', exact: true })
+  const approval = approver.waitForResponse(response => response.request().method() === 'POST'
+    && response.url().endsWith('/api/approvals/approve'))
+  await decision.getByRole('button', { name: 'Approve', exact: true }).click()
+  await expectOk(await approval, 'Approve the allocation through its assigned workflow action')
+  await expect(decision).not.toBeVisible()
+  await openAllocationVersion(page, agreementId, versionId, 'completion')
+  await expect(page.getByText('Approved', { exact: true }).first()).toBeVisible()
+  const terminal = await responseJson<typeof started>(await page.request.get(runtimeUrl))
+  expect(terminal.current.runtimeId).toBe(started.current.runtimeId)
+  expect(terminal.current.runtimeState).toBe('approved')
 }
 
 const readQualifiedWorkflow = async (
@@ -252,16 +330,18 @@ const provisionQualifiedWorkflowTopology = async (
   )
   const statusesResponse = await page.request.get(`/api/agency/${agreement.agencyId}/statuses`)
   await expectOk(statusesResponse, 'Read qualified Workflow Agency statuses')
-  const statuses = await responseJson<Array<{ id: string, isDraft: boolean, deleted: boolean }>>(statusesResponse)
-  const draftStatusId = String(statuses.find(status => status.isDraft && !status.deleted)?.id ?? '')
+  const statuses = await responseJson<Array<{ id: string, nameEn: string, isDraft: boolean, deleted: boolean }>>(statusesResponse)
+  const draftStatus = statuses.find(status => status.isDraft && !status.deleted)
+  const draftStatusId = String(draftStatus?.id ?? '')
   expect(draftStatusId).not.toBe('')
 
   const createWorkflow = async (
     nameEn: string,
     nameFr: string,
-    recommendationSetId: string
+    recommendationSetId: string,
+    throughConfigurationUi = false
   ): Promise<string> => {
-    const response = await page.request.post(`${agencyBase}/workflows`, { data: {
+    const input = {
       egcs_cn_entitytype: ALLOCATION_VERSION_ENTITY_TYPE,
       egcs_cn_name_en: nameEn,
       egcs_cn_name_fr: nameFr,
@@ -272,7 +352,37 @@ const provisionQualifiedWorkflowTopology = async (
       egcs_cn_cancellationstatus: draftStatusId,
       egcs_cn_executionfailurestatus: draftStatusId,
       egcs_cn_allowretry: true
-    } })
+    }
+    let response: APIResponse | Response
+    if (throughConfigurationUi) {
+      await page.goto(`/en/agencies/${agreement.agencyId}?section=workflows`)
+      await page.getByRole('button', { name: 'Add workflow setup', exact: true }).click()
+      const dialog = page.getByRole('dialog', { name: 'Add workflow setup', exact: true })
+      await dialog.getByRole('combobox', { name: /Entity Type/ }).click()
+      await page.getByRole('option', { name: 'Outcome cost allocation version', exact: true }).click()
+      await dialog.getByRole('combobox', { name: /Purpose/ }).click()
+      await expect(page.getByRole('option', { name: 'Approval submission', exact: true })).toBeVisible()
+      await page.getByRole('option', { name: 'Standard', exact: true }).click()
+      await dialog.getByLabel('Name (EN)', { exact: false }).fill(nameEn)
+      await dialog.getByLabel('Name (FR)', { exact: false }).fill(nameFr)
+      await dialog.getByLabel('Description (EN)', { exact: false }).fill(input.egcs_cn_description_en)
+      await dialog.getByLabel('Description (FR)', { exact: false }).fill(input.egcs_cn_description_fr)
+      for (const label of ['Allowed start statuses', 'Status after workflow cancellation', 'Status after an execution failure']) {
+        await dialog.getByRole('combobox', { name: new RegExp(label) }).click()
+        await page.getByRole('option', { name: draftStatus!.nameEn, exact: true }).click()
+        if (await page.getByRole('listbox').isVisible()) await page.keyboard.press('Escape')
+        await expect(page.getByRole('listbox')).toHaveCount(0)
+      }
+      await dialog.getByRole('switch', { name: /Allow retry after an unsuccessful workflow/i }).check()
+      const created = page.waitForResponse(candidate => candidate.request().method() === 'POST'
+        && candidate.url().endsWith(`${agencyBase}/workflows`))
+      await dialog.getByRole('button', { name: 'Save', exact: true }).click()
+      response = await created
+      expect(response.request().postDataJSON()).toMatchObject({ egcs_cn_entitytype: ALLOCATION_VERSION_ENTITY_TYPE })
+      await expect(dialog).not.toBeVisible()
+    } else {
+      response = await page.request.post(`${agencyBase}/workflows`, { data: input })
+    }
     await expectOk(response, `Create ${nameEn}`)
     const workflowId = String((await responseJson<{ id: string }>(response)).id)
     await expectOk(await page.request.post(`${agencyBase}/workflows/${workflowId}/members`, { data: {
@@ -283,13 +393,39 @@ const provisionQualifiedWorkflowTopology = async (
       egcs_cn_allowownerredirect: false,
       owners: []
     } }), `Create ${nameEn} member`)
-    await expectOk(
-      await page.request.post(`${agencyBase}/workflows/${workflowId}/publish`),
-      `Publish ${nameEn}`
-    )
-    await expectOk(await page.request.post(`${base}/workflows`, { data: {
-      egcs_tp_workflow: workflowId
-    } }), `Link ${nameEn} to Stream`)
+    if (throughConfigurationUi) {
+      await page.goto(`/en/agencies/${agreement.agencyId}/workflows/${workflowId}`)
+      const published = page.waitForResponse(candidate => candidate.request().method() === 'POST'
+        && candidate.url().endsWith(`${agencyBase}/workflows/${workflowId}/publish`))
+      await page.getByRole('button', { name: 'Publish workflow', exact: true }).click()
+      await expectOk(await published, `Publish ${nameEn} through the Agency editor`)
+      await page.goto(`/en/transfer-payments/${agreement.programId}/streams/${agreement.streamId}?section=extensions`)
+      const row = page.getByRole('row').filter({ hasText: 'Outcome cost allocation' })
+      await row.getByRole('button', { name: 'Configure', exact: true }).click()
+      const configuration = page.getByRole('dialog', { name: 'Outcome cost allocation', exact: true })
+      await expect(configuration.getByRole('heading', { name: 'Workflows', exact: true })).toBeVisible()
+      const lookup = page.waitForResponse(candidate => candidate.request().method() === 'GET'
+        && new URL(candidate.url()).pathname === `${agencyBase}/workflows`)
+      await configuration.getByRole('button', { name: 'Add', exact: true }).click()
+      const workflow = page.getByRole('dialog', { name: 'Workflows', exact: true })
+      await workflow.getByRole('combobox', { name: /Workflows/ }).click()
+      const lookupResponse = await lookup
+      await expectOk(lookupResponse, 'Read published allocation Workflow catalog')
+      const lookupUrl = new URL(lookupResponse.url())
+      expect(lookupUrl.searchParams.get('entityType')).toBe(ALLOCATION_VERSION_ENTITY_TYPE)
+      expect(lookupUrl.searchParams.get('publicationState')).toBe('published')
+      await page.getByRole('listbox').getByRole('combobox', { name: 'Search...', exact: true }).fill(nameEn)
+      await page.getByRole('option', { name: new RegExp(nameEn) }).click()
+      const linked = page.waitForResponse(candidate => candidate.request().method() === 'POST'
+        && candidate.url().endsWith(`${base}/workflows`))
+      await workflow.getByRole('button', { name: 'Add', exact: true }).click()
+      await expectOk(await linked, `Link ${nameEn} through the extension Stream editor`)
+      await expect(configuration.getByRole('link', { name: new RegExp(nameEn) })).toBeVisible()
+      await configuration.getByRole('button', { name: 'Cancel', exact: true }).click()
+    } else {
+      await expectOk(await page.request.post(`${agencyBase}/workflows/${workflowId}/publish`), `Publish ${nameEn}`)
+      await expectOk(await page.request.post(`${base}/workflows`, { data: { egcs_tp_workflow: workflowId } }), `Link ${nameEn} to Stream`)
+    }
     return workflowId
   }
 
@@ -303,7 +439,8 @@ const provisionQualifiedWorkflowTopology = async (
       direct: await createWorkflow(
         'Qualified allocation recommendation workflow',
         'Flux de recommandation de repartition qualifiee',
-        direct.recommendationSetId
+        direct.recommendationSetId,
+        true
       ),
       nested: await createWorkflow(
         'Qualified allocation nested approval workflow',
@@ -385,7 +522,7 @@ test('saves and submits qualified standard Workflow Recommendations across termi
   const topology = await provisionQualifiedWorkflowTopology(page, agreement)
 
   const positiveVersionId = await createAllocationVersion(page, agreement.agreementId)
-  await openAllocation(page, agreement.agreementId)
+  await openAllocationVersion(page, agreement.agreementId, positiveVersionId, 'workflows')
   await expect(page.getByRole('heading', { name: 'Workflows', exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Add workflow' }).click()
   await page.getByRole('button', { name: /Qualified allocation recommendation workflow/ }).click()
@@ -402,7 +539,7 @@ test('saves and submits qualified standard Workflow Recommendations across termi
   expect(savedRecommendation.status(), await savedRecommendation.text()).toBe(200)
 
   await page.reload()
-  await page.getByRole('tab', { name: 'Cost Allocation', exact: true }).last().click()
+  await expect(page).toHaveURL(allocationDetailPath(agreement.agreementId, positiveVersionId, 'workflows'))
   await expect(page.getByRole('radio', { name: 'Recommended', exact: true })).toBeChecked()
   const submitResponse = page.waitForResponse(response =>
     response.url().includes('/api/workflows/recommendation/submit?') && response.request().method() === 'POST')
@@ -410,7 +547,6 @@ test('saves and submits qualified standard Workflow Recommendations across termi
   expect((await submitResponse).status()).toBe(200)
   await expect(page.getByText('Succeeded', { exact: true }).first()).toBeVisible()
   await page.reload()
-  await page.getByRole('tab', { name: 'Cost Allocation', exact: true }).last().click()
   await expect(page.getByText('Succeeded', { exact: true }).first()).toBeVisible()
   const duplicateAfterTerminal = await page.request.post(
     recommendationRoute(positiveVersionId, true),
@@ -427,7 +563,7 @@ test('saves and submits qualified standard Workflow Recommendations across termi
     data: recommendationResponses('not_recommended', await currentRecommendationRevision(page, negativeVersionId))
   }), 'Submit qualified negative Recommendation')
   expect((await readQualifiedWorkflow(page, negativeVersionId)).current?.runtimeState).toBe('unsuccessful')
-  await openAllocation(page, agreement.agreementId)
+  await openAllocationVersion(page, agreement.agreementId, negativeVersionId, 'workflows')
   await expect(page.getByText('Unsuccessful', { exact: true }).first()).toBeVisible()
   await expect(page.getByText('Not recommended', { exact: true }).first()).toBeVisible()
   await deleteDraftVersion(page, agreement.agreementId, negativeVersionId)
@@ -535,7 +671,7 @@ test('saves and submits qualified standard Workflow Recommendations across termi
 
   const nestedVersionId = await createAllocationVersion(page, agreement.agreementId)
   await page.setViewportSize({ width: 390, height: 844 })
-  await openAllocation(page, agreement.agreementId, 'fr')
+  await openAllocationVersion(page, agreement.agreementId, nestedVersionId, 'workflows', 'fr')
   await expect(page.getByRole('heading', { name: 'Processus', exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Ajouter un processus' }).click()
   await page.getByRole('button', { name: /Flux de repartition qualifie avec approbation imbriquee/ }).click()
@@ -554,8 +690,6 @@ test('saves and submits qualified standard Workflow Recommendations across termi
     document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true)
   await approveNestedRecommendation(page, nestedRecommendation!.id)
   await page.reload()
-  await page.getByRole('button', { name: 'Basculer la navigation' }).click()
-  await page.getByRole('tab', { name: 'Répartition des coûts', exact: true }).last().click()
   await expect(page.getByText('Approuvé', { exact: true }).first()).toBeVisible()
   expect((await readQualifiedWorkflow(page, nestedVersionId)).current?.runtimeState).toBe('approved')
 
@@ -572,18 +706,42 @@ test('executes allocation draft, access, localization, and disable gates', async
 
   const { agreementId, agencyId } = await createManagedAgreement(page)
 
-  const createResponse = await page.request.post(
-    `/api/extensions/${EXTENSION_KEY}/agreements/${agreementId}/allocation-versions`
-  )
-  expect(createResponse.ok()).toBe(true)
-  const created = await createResponse.json() as { version: { id: string, versionNumber: number } }
-
   await openAllocation(page, agreementId)
-  await expect(page.getByRole('heading', { name: 'Cost allocation', exact: true })).toBeVisible()
-  await expect(page.getByText(`Version ${created.version.versionNumber}`, { exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Cost Allocation', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Generate rows', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: 'Workflows', exact: true })).toHaveCount(0)
+  const creation = page.waitForResponse(response => response.request().method() === 'POST'
+    && response.url().endsWith(`/api/extensions/${EXTENSION_KEY}/agreements/${agreementId}/allocation-versions`))
+  await page.getByRole('button', { name: 'New draft', exact: true }).click()
+  const createResponse = await creation
+  await expectOk(createResponse, 'Create an allocation from its collection toolbar')
+  const created = await responseJson<{ version: { id: string, versionNumber: number } }>(createResponse)
+  const versionLink = page.getByRole('link', { name: `Version ${created.version.versionNumber}`, exact: true })
+  await expect(versionLink).toBeVisible()
+  await versionLink.focus()
+  await page.keyboard.press('Enter')
+  await expectAllocationVersionUrl(page, agreementId, created.version.id)
+  await expect(page.getByRole('heading', { name: 'Summary', exact: true })).toBeVisible()
+  const balances = page.getByRole('table', { name: 'Current funding balances', exact: true })
+  await expect(balances).toBeVisible()
+  await expect(balances.getByRole('columnheader', { name: 'Funding', exact: true })).toBeVisible()
+  await expect(balances.getByRole('columnheader', { name: 'Effective paid', exact: true })).toBeVisible()
+  await expect(balances.getByRole('columnheader', { name: 'Remaining to allocate', exact: true })).toBeVisible()
+  await expect(balances.getByRole('cell', { name: /100\.00/ })).toHaveCount(2)
+  await page.screenshot({ path: test.info().outputPath('allocation-record-summary.png'), fullPage: true })
+  for (const section of ['Summary', 'Allocation', 'Supplementary', 'Workflows', 'Allocation completion']) {
+    await expect(page.getByRole('tab', { name: section, exact: true })).toBeVisible()
+  }
+  await page.getByRole('tab', { name: 'Supplementary', exact: true }).click()
+  await expect(page).toHaveURL(allocationDetailPath(agreementId, created.version.id, 'supplementary-information'))
   await page.reload()
-  await page.getByRole('tab', { name: 'Cost Allocation', exact: true }).last().click()
-  await expect(page.getByText(`Version ${created.version.versionNumber}`, { exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Supplementary', exact: true })).toBeVisible()
+  await page.getByRole('link', { name: 'Cost allocations', exact: true }).click()
+  await expect(page).toHaveURL(url => url.searchParams.get('section') === `extension:${EXTENSION_KEY}:agreement:outcome-cost-allocation`)
+  await expect(versionLink).toBeVisible()
+  await versionLink.click()
+  await expectAllocationVersionUrl(page, agreementId, created.version.id)
+  await expect(page.getByRole('heading', { name: 'Summary', exact: true })).toBeVisible()
 
   const other = await browser.newPage()
   await login(other, 'user03@example.com')
@@ -593,8 +751,11 @@ test('executes allocation draft, access, localization, and disable gates', async
   await other.close()
 
   await page.setViewportSize({ width: 390, height: 844 })
-  await openAllocation(page, agreementId, 'fr')
-  await expect(page.getByRole('heading', { name: 'Répartition des coûts', exact: true })).toBeVisible()
+  await openAllocationVersion(page, agreementId, created.version.id, 'summary', 'fr')
+  await expect(page.getByRole('table', { name: 'Soldes de financement actuels', exact: true })).toBeVisible()
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true)
+  await page.reload()
+  await expect(page.getByRole('table', { name: 'Soldes de financement actuels', exact: true })).toBeVisible()
 
   const deleteResponse = await page.request.delete(
     `/api/extensions/${EXTENSION_KEY}/agreements/${agreementId}/allocation-versions/${created.version.id}`
@@ -626,6 +787,7 @@ test('executes allocation draft, access, localization, and disable gates', async
 
 test('allocates unpaid funds and uses posted Corrections as shared Payment capacity while preserving immutable snapshots', async ({ page, browser }, testInfo) => {
   test.setTimeout(240_000)
+  page.setDefaultTimeout(15_000)
   await login(page, 'root@example.com')
   const owner = await createManagedAgreement(page)
   const approver = await browser.newPage()
@@ -652,9 +814,9 @@ test('allocates unpaid funds and uses posted Corrections as shared Payment capac
       extensionKey: 'gcs-automated-payments', enabled: true, config: { enabledPaymentTypes: ['advance'] }
     } }), 'Select manual reimbursement amounts')
     type Inputs = { outcomes: Array<{ id: string }>; commitmentTypes: Array<{ id: string }>;
-      budgetYears: Array<{ id: string; fiscal_year_id: string; stream_budget_id: string; program_funding: string }>;
+      budgetYears: Array<{ id: string; fiscal_year_id: string; stream_budget_id: string; program_funding: string; remaining_funding: string }>;
       streamCommitments: Array<{ id: string; stream_budget_id: string }>;
-      allocations: Array<{ allocationVersionId: string }>; versions: Array<{ id: string; status: string }> }
+      allocations: Array<{ allocationVersionId: string }>; versions: Array<{ id: string; status: string; versionNumber: number }> }
     const allocationsUrl = `/api/extensions/${EXTENSION_KEY}/agreements/${owner.agreementId}/allocations`
     const inputs = await responseJson<Inputs>(await page.request.get(allocationsUrl))
     const commitmentType = inputs.commitmentTypes[0]!.id
@@ -673,20 +835,97 @@ test('allocates unpaid funds and uses posted Corrections as shared Payment capac
         agreementBudgetFiscalYearId: year.id, outcomeId, allocationMethod: 'amount',
         allocationValue: fromCents(index === 0 ? first : index === 1 ? total - first : BigInt(0)) }))
     })
-    await expectOk(await page.request.put(allocationsUrl, { data: { allocationVersionId: versionId, allocations } }), 'Save immutable allocation basis')
+    await openAllocationVersion(page, owner.agreementId, versionId, 'allocation')
+    await page.getByRole('button', { name: 'Generate rows', exact: true }).click()
+    const generation = page.getByRole('dialog', { name: 'Generate allocation rows' })
+    await generation.getByRole('button', { name: 'Generate rows', exact: true }).click()
+    const editButtons = page.getByRole('button', { name: /^Edit allocation:/ })
+    await expect(editButtons).toHaveCount(allocations.length)
+    for (let index = 0; index < allocations.length; index += 1) {
+      await editButtons.nth(index).click()
+      const editor = page.getByRole('dialog', { name: 'Edit allocation', exact: true })
+      const amount = editor.getByLabel(/^Amount/)
+      await expect(amount).toHaveAttribute('required', '')
+      await expect(amount).toHaveAttribute('aria-required', 'true')
+      await amount.click()
+      await expect(amount).toHaveValue('0')
+      if (index === 0) {
+        await amount.fill('101')
+        await editor.getByRole('button', { name: 'Update', exact: true }).click()
+        await expect(editor.getByText('An allocation cannot exceed its fiscal-year remaining funding.')).toBeVisible()
+        await expect(amount).toHaveAttribute('aria-invalid', 'true')
+        expect(await amount.evaluate(element => (element.getAttribute('aria-describedby') ?? '').split(' ').some(id => document.getElementById(id)?.textContent?.includes('cannot exceed')))).toBe(true)
+        await editor.getByRole('button', { name: 'Cancel', exact: true }).click()
+        await editButtons.nth(index).click()
+        await amount.click()
+        await expect(amount).toHaveValue('0')
+      }
+      await amount.fill(allocations[index]!.allocationValue)
+      await editor.getByRole('button', { name: 'Update', exact: true }).click()
+      await expect(editor).not.toBeVisible()
+    }
+    await page.getByRole('switch', { name: 'Switch language', exact: true }).click()
+    await expectAllocationVersionUrl(page, owner.agreementId, versionId, 'allocation', 'fr')
+    await expect(page.getByRole('button', { name: /^Modifier la répartition:/ })).toHaveCount(allocations.length)
+    await page.getByRole('button', { name: /^Modifier la répartition:/ }).first().click()
+    const unsavedFrenchEditor = page.getByRole('dialog', { name: 'Modifier la répartition', exact: true })
+    await unsavedFrenchEditor.getByLabel(/^Montant/).click()
+    expect(toExactNumeric19Scale4Units(await unsavedFrenchEditor.getByLabel(/^Montant/).inputValue()))
+      .toBe(toExactNumeric19Scale4Units(allocations[0]!.allocationValue))
+    await unsavedFrenchEditor.getByRole('button', { name: 'Annuler', exact: true }).click()
+    await page.getByRole('switch', { name: 'Changer de langue', exact: true }).click()
+    await expectAllocationVersionUrl(page, owner.agreementId, versionId, 'allocation')
+    await expect(editButtons).toHaveCount(allocations.length)
+    await page.getByRole('tab', { name: 'Allocation completion', exact: true }).click()
+    await expect(page.getByText('Save your changes in Allocation before submitting for approval.', { exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Submit for approval', exact: true })).toHaveCount(0)
+    await page.getByRole('tab', { name: 'Allocation', exact: true }).click()
+    await expect(editButtons).toHaveCount(allocations.length)
+    await page.getByRole('button', { name: 'Save', exact: true }).click()
+    await expect(page.getByText('Allocation saved.', { exact: true })).toBeVisible()
+    const savedMatrix = await responseJson<{ allocations: Array<{ allocationValue: string }> }>(await page.request.get(allocationsUrl))
+    expect(savedMatrix.allocations.map(line => toExactNumeric19Scale4Units(line.allocationValue))).toEqual(allocations.map(line => toExactNumeric19Scale4Units(line.allocationValue)))
+    await page.setViewportSize({ width: 390, height: 844 })
+    await openAllocationVersion(page, owner.agreementId, versionId, 'allocation', 'fr')
+    await page.getByRole('button', { name: /^Modifier la répartition:/ }).first().click()
+    const frenchEditor = page.getByRole('dialog', { name: 'Modifier la répartition', exact: true })
+    await expect(frenchEditor.getByLabel(/^Montant/)).toBeVisible()
+    await expect(frenchEditor.getByLabel(/^Méthode/)).toHaveAttribute('aria-required', 'true')
+    expect(await frenchEditor.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true)
+    await testInfo.attach('matrix-mobile-editor', { body: await frenchEditor.screenshot(), contentType: 'image/png' })
+    await frenchEditor.getByRole('button', { name: 'Annuler', exact: true }).click()
+    await page.keyboard.press('Enter')
+    await expect(frenchEditor).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(frenchEditor).not.toBeVisible()
+    await page.setViewportSize({ width: 1280, height: 900 })
     await configureSingleApprovalSubmission(page, owner, ALLOCATION_VERSION_ENTITY_TYPE, draft, approved, denied)
-    await completeAndApprove(page, approver, ALLOCATION_VERSION_ENTITY_TYPE, versionId)
+    await completeAllocationThroughDetail(page, approver, owner.agreementId, versionId)
     const commitmentTotal = sumMoney(inputs.budgetYears.map(year => year.program_funding))
     await page.goto(`/en/agreements/${owner.agreementId}?section=commitments`)
     await page.getByRole('button', { name: 'Add Commitment', exact: true }).click()
     const modal = page.getByRole('dialog', { name: 'Add Commitment' })
     await expect(modal.getByLabel('Total amount')).toBeVisible()
     await expect(modal.getByLabel('Commitment type')).toBeVisible()
-    await modal.getByRole('button', { name: 'Cancel', exact: true }).click()
-    const commitmentResponse = await page.request.post(`/api/agreements/${owner.agreementId}/commitments`, { data: {
-      egcs_fc_type: commitmentType, egcs_fc_currency: 'cad', egcs_fc_totalamount: commitmentTotal
-    } })
-    await expectOk(commitmentResponse, 'Generate a Commitment from approved allocation weights')
+    await modal.getByLabel('Commitment type').click()
+    await page.getByRole('option', { name: 'Contribution Commitment', exact: true }).click()
+    if (await modal.getByLabel('Commitment type').getAttribute('aria-expanded') === 'true') await page.keyboard.press('Escape')
+    await expect(page.getByRole('listbox')).toHaveCount(0)
+    await expect(modal.getByLabel('Commitment type')).toHaveAttribute('aria-expanded', 'false')
+    await expect(modal.getByLabel('Commitment type')).toBeFocused()
+    await modal.getByLabel('Total amount').click()
+    await expect(modal.getByLabel('Total amount')).toBeFocused()
+    await expect(modal.getByLabel('Total amount')).toHaveValue(/^[0-9.]*$/)
+    await modal.getByLabel('Total amount').fill(commitmentTotal)
+    await expect(modal.getByLabel('Total amount')).toHaveValue(commitmentTotal)
+    await modal.getByLabel('Total amount').press('Tab')
+    await expect(modal.getByLabel('Total amount')).toHaveValue(/100/)
+    const commitmentCreated = page.waitForResponse(response => response.request().method() === 'POST'
+      && response.url().endsWith(`/api/agreements/${owner.agreementId}/commitments`))
+    await modal.getByRole('button', { name: 'Add', exact: true }).click()
+    const commitmentResponse = await commitmentCreated
+    await expectOk(commitmentResponse, 'Create a Commitment through the shared modal')
+    await expect(modal).not.toBeVisible()
     let commitmentId = String((await responseJson<{ id: string }>(commitmentResponse)).id)
     await configureSingleApprovalSubmission(page, owner, 'fundingcaseagreementcommitment', draft, approved, denied)
     await completeAndApprove(page, approver, 'fundingcaseagreementcommitment', commitmentId)
@@ -696,6 +935,8 @@ test('allocates unpaid funds and uses posted Corrections as shared Payment capac
     let commitmentUrl = `/api/agreements/${owner.agreementId}/commitments/${commitmentId}`
     let commitmentBefore = await responseJson<Commitment>(await page.request.get(commitmentUrl))
     expect(commitmentBefore.egcs_fc_active).toBe(true)
+    expect(commitmentBefore.lines.map(line => ({ coding: line.egcs_fc_transferpaymentstreamchartofaccount, amount: line.egcs_fc_amount })).sort((a, b) => a.coding.localeCompare(b.coding)))
+      .toEqual(allocations.map(line => ({ coding: line.streamCommitmentId, amount: line.allocationValue })).sort((a, b) => a.coding.localeCompare(b.coding)))
     const year = inputs.budgetYears.find(item => toCents(item.program_funding) > BigInt(0))!
     const createPayment = (amount: string) => page.request.post(`/api/agreements/${owner.agreementId}/payments`, { data: {
       egcs_fc_commitmenttype: commitmentType, egcs_fc_fiscalyear: year.id, egcs_fc_paymenttype: 'reimbursement',
@@ -706,14 +947,15 @@ test('allocates unpaid funds and uses posted Corrections as shared Payment capac
     const partialResponse = await createPayment(partialAmount)
     await expectOk(partialResponse, 'Pay part of the original allocation')
     const partialId = String((await responseJson<{ id: string }>(partialResponse)).id)
+    expect((await page.request.post(`/api/extensions/${EXTENSION_KEY}/agreements/${owner.agreementId}/allocation-versions`)).status()).toBe(400)
     const partialPayment = await responseJson<Payment>(await page.request.get(`/api/agreements/${owner.agreementId}/payments/${partialId}`))
     await configureSingleApprovalSubmission(page, owner, 'fundingcasepayment', draft, paid, denied)
     await completeAndApprove(page, approver, 'fundingcasepayment', partialId)
     const previousSnapshot = await responseJson<Inputs>(await page.request.get(allocationsUrl))
     const changedVersionId = await createAllocationVersion(page, owner.agreementId)
-    const changedAllocations = inputs.budgetYears.flatMap(budgetYear => {
+    const changedAllocations = previousSnapshot.budgetYears.flatMap(budgetYear => {
       const lines = mappings.filter(mapping => mapping.streamBudgetId === budgetYear.stream_budget_id)
-      const total = toCents(budgetYear.program_funding)
+      const total = toCents(budgetYear.remaining_funding)
       const first = lines.length > 1 ? total / BigInt(5) : total
       return lines.map((line, index) => ({ commitmentType, streamCommitmentId: line.streamCommitmentId,
         agreementBudgetFiscalYearId: budgetYear.id, outcomeId, allocationMethod: 'amount',
@@ -741,7 +983,7 @@ test('allocates unpaid funds and uses posted Corrections as shared Payment capac
       const weight = changedAllocations.filter(allocation => allocation.streamCommitmentId === code)
         .reduce((sum, allocation) => sum + toCents(allocation.allocationValue), BigInt(0))
       const actualUnpaid = toCents(line.egcs_fc_amount) - retainedPaid
-      const expectedUnpaid = unpaidCents * weight / toCents(commitmentTotal)
+      const expectedUnpaid = unpaidCents * weight / toCents(sumMoney(changedAllocations.map(allocation => allocation.allocationValue)))
       expect(actualUnpaid >= BigInt(0)).toBe(true)
       expect(actualUnpaid - expectedUnpaid >= BigInt(0) && actualUnpaid - expectedUnpaid <= BigInt(1)).toBe(true)
     }
@@ -776,8 +1018,13 @@ test('allocates unpaid funds and uses posted Corrections as shared Payment capac
     const frozenAllocations = await responseJson<Inputs>(await page.request.get(allocationsUrl))
     expect(frozenAllocations.versions.find(version => version.id === changedVersionId)?.status).toBe('active')
     const correction = await postNegativeCorrection(page, approver, owner, commitmentId, paymentId)
-    expect(await responseJson(await page.request.get(allocationsUrl))).toEqual(frozenAllocations)
-    expect(await responseJson(await page.request.get(commitmentUrl))).toEqual(commitmentBefore)
+    expect((await responseJson<Inputs>(await page.request.get(allocationsUrl))).allocations).toEqual(frozenAllocations.allocations)
+    const correctedCommitment = await responseJson<Commitment>(await page.request.get(commitmentUrl))
+    expect(correctedCommitment.egcs_fc_active).toBe(commitmentBefore.egcs_fc_active)
+    const authoredCoding = (commitment: Commitment) => commitment.lines.map(line => ({
+      id: line.id, coding: line.egcs_fc_transferpaymentstreamchartofaccount, amount: line.egcs_fc_amount
+    }))
+    expect(authoredCoding(correctedCommitment)).toEqual(authoredCoding(commitmentBefore))
     const overdraw = await createPayment('1.01')
     expect(overdraw.status(), await overdraw.text()).toBe(400)
     expect(await overdraw.text()).toContain('GCS_OUTCOME_COST_ALLOCATION_PAYMENT_EXCEEDS_REMAINING')
@@ -788,7 +1035,45 @@ test('allocates unpaid funds and uses posted Corrections as shared Payment capac
     expect(sumMoney(restoredDetail.lines.map(line => line.egcs_fc_amount))).toBe('1.00')
     const correctedLine = correction.egcs_fc_lines.find(line => line.egcs_fc_adjustment === '-1.00')!.egcs_fc_commitmentline
     expect(restoredDetail.lines.filter(line => toCents(line.egcs_fc_amount) > BigInt(0)).map(line => line.egcs_fc_fundingagreementcommitmentline)).toEqual([correctedLine])
-    expect(await responseJson(await page.request.get(allocationsUrl))).toEqual(frozenAllocations)
+    expect((await responseJson<Inputs>(await page.request.get(allocationsUrl))).allocations).toEqual(frozenAllocations.allocations)
+    await openAllocation(page, owner.agreementId)
+    const collection = page.getByRole('tabpanel', { name: 'Cost Allocation', exact: true })
+    const versionTable = collection.getByRole('table')
+    await expect(versionTable).toBeVisible()
+    const oldVersionNumber = frozenAllocations.versions.find(version => version.id === versionId)!.versionNumber
+    const currentVersionNumber = frozenAllocations.versions.find(version => version.id === changedVersionId)!.versionNumber
+    const previousLink = versionTable.getByRole('link', { name: `Version ${oldVersionNumber}`, exact: true })
+    const currentLink = versionTable.getByRole('link', { name: `Version ${currentVersionNumber}`, exact: true })
+    await expect(previousLink).toBeVisible()
+    await expect(currentLink).toBeVisible()
+    await previousLink.focus()
+    await expect(previousLink).toBeFocused()
+    await previousLink.press('Enter')
+    await expect(page.getByRole('heading', { name: 'Summary', exact: true })).toBeVisible()
+    await expectAllocationVersionUrl(page, owner.agreementId, versionId)
+    await page.getByRole('tab', { name: 'Allocation', exact: true }).click()
+    await expect(page.getByText('Only draft allocations can be edited.', { exact: true })).toBeVisible()
+    await page.getByRole('button', { name: /^Edit allocation:/ }).first().click()
+    await expect(page.getByRole('dialog', { name: 'Edit allocation', exact: true })).toHaveCount(0)
+    await expect(page.getByText('Only draft allocations can be edited.', { exact: true }).first()).toBeVisible()
+    await openAllocationVersion(page, owner.agreementId, versionId, 'workflows')
+    await expect(page.getByRole('heading', { name: 'Workflows', exact: true })).toBeVisible()
+    await page.reload()
+    await expect(page).toHaveURL(allocationDetailPath(owner.agreementId, versionId, 'workflows'))
+    await openAllocationVersion(page, owner.agreementId, changedVersionId, 'summary')
+    await expect(page.getByRole('table', { name: 'Current funding balances', exact: true })).toBeVisible()
+    await expect(page.getByRole('table', { name: 'Paid by coding line', exact: true })).toBeVisible()
+    await page.setViewportSize({ width: 390, height: 844 })
+    await openAllocation(page, owner.agreementId)
+    await expect(versionTable).toBeVisible()
+    const versionScroll = collection.getByRole('group', { name: 'Records', exact: true })
+    await expect(versionScroll).toHaveAttribute('tabindex', '0')
+    await versionScroll.focus()
+    await expect(versionScroll).toBeFocused()
+    await page.keyboard.press('ArrowRight')
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true)
+    await testInfo.attach('allocation-version-mobile-table', { body: await versionScroll.screenshot(), contentType: 'image/png' })
+    await page.setViewportSize({ width: 1280, height: 900 })
     await page.goto(`/en/agreements/${owner.agreementId}/corrections/${correction.id}?section=completion`)
     await expect(page.getByRole('heading', { name: 'Correction Completion', exact: true })).toBeVisible()
     await page.screenshot({ path: testInfo.outputPath('posted-correction-shared-allocation-capacity.png'), fullPage: true })
@@ -799,3 +1084,5 @@ test('allocates unpaid funds and uses posted Corrections as shared Payment capac
     await approver.close()
   }
 })
+
+registerAgencyCodingJourney({ login, createManagedAgreement, createAllocationVersion })

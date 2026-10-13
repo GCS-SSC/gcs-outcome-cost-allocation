@@ -6,6 +6,7 @@ const configMock = vi.fn()
 
 vi.mock('@gcs-ssc/extensions/server', () => ({
   defineGcsLifecycleEntityAdapter: (value: unknown) => value,
+  requireGcsExtensionAgreementFinancials: () => ({ getCostAllocationContext: async () => ({ agreementId: 'agreement-1', hasPendingEffects: false, codingPaidAmounts: [] }) }),
   createGcsExtensionUserError: (options: Record<string, unknown>) => Object.assign(new Error(String(options.code)), options)
 }))
 
@@ -84,9 +85,9 @@ describe('allocation version lifecycle adapter', () => {
     const adapter = (await import('../../server/allocation-version-adapter')).default
     const context = { transaction: makeDb() }
     await adapter.validateCompletion(context as never, { lockedEntity } as never)
-    expect(completeMock).toHaveBeenCalledWith(expect.anything(), 'agreement-1', 'stream-1', 'version-1', { mappings: [] }, {
+    expect(completeMock).toHaveBeenCalledWith(expect.anything(), 'agreement-1', 'stream-1', 'version-1', { mappings: [] }, expect.objectContaining({
       agencyId: 'agency-1', streamId: 'stream-1'
-    }, false)
+    }), false)
 
     completeMock.mockRejectedValueOnce(Object.assign(new Error('invalid'), {
       issues: [{ code: 'GCS_OUTCOME_COST_ALLOCATION_TOTAL_INVALID', path: 'allocations' }]
@@ -105,7 +106,7 @@ describe('allocation version lifecycle adapter', () => {
     const context = { transaction: makeDb() }
     await adapter.mutateStatus(context as never, { lockedEntity, nextStatusId: 'status-2' } as never)
     await adapter.onPositiveTerminus(context as never, { lockedEntity } as never)
-    expect(activateMock).toHaveBeenCalledWith(expect.anything(), 'agreement-1', 'version-1')
+    expect(activateMock).toHaveBeenCalledWith(expect.anything(), 'agreement-1', 'version-1', expect.objectContaining({ getCostAllocationContext: expect.any(Function) }))
   })
 
   it('returns null for missing lifecycle records and rejects unavailable configuration', async () => {

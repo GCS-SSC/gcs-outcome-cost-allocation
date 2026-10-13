@@ -29,13 +29,19 @@ export default defineGcsExtension({
     }
   ]),
   key: 'gcs-outcome-cost-allocation',
-  sdkVersion: '^0.3.10',
+  sdkVersion: '^0.3.17',
+  configurationAccess: 'manager',
   requiredHostCapabilities: [
     'agreement-payment-capacity',
+    'agency-config',
+    'agency-workspace',
     'audit-ownership',
     'stream-config-modal',
     'entity-tabs',
+    'entity-detail-pages',
     'coding-allocator',
+    'configuration-access',
+    'extension-kv',
     'server-handlers',
     'server-handler-rbac',
     'migrations',
@@ -65,6 +71,15 @@ export default defineGcsExtension({
     adapter: { path: './server/allocation-version-adapter.ts' }
   }],
   admin: {
+    agency: { path: './components/AgencyCodingConfig.vue' },
+    agencyWorkspace: {
+      label: { en: 'Cost allocation', fr: 'Répartition des coûts' },
+      icon: 'i-lucide-chart-no-axes-combined',
+      tabs: [
+        { id: 'receivables', label: { en: 'Accounts receivable', fr: 'Comptes débiteurs' }, icon: 'i-lucide-receipt' },
+        { id: 'credit-memos', label: { en: 'Credit memos', fr: 'Notes de crédit' }, icon: 'i-lucide-file-minus' }
+      ]
+    },
     streamConfig: {
       path: './components/StreamOutcomeCostAllocationConfig.vue'
     }
@@ -80,9 +95,10 @@ export default defineGcsExtension({
         },
         icon: 'i-lucide-chart-no-axes-combined',
         path: './components/AgreementOutcomeCostAllocationTab.vue',
+        detailPage: { path: './components/OutcomeAllocationDetail.vue' },
         rbac: {
           subject: 'agreement',
-          action: 'update'
+          action: 'read'
         }
       }
     ]

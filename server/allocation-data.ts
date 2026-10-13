@@ -29,6 +29,12 @@ import {
 import type { OutcomeCostAllocationDb } from './db.ts'
 import { createOutcomeCostAllocationUserError } from './errors.ts'
 import {
+  applyRemainingFunding,
+  assertNoPendingAllocationEffects,
+  getAllocationFinancialContext,
+  type AllocationFinancials
+} from './allocation-financials.ts'
+import {
   databaseAggregateMoneyValue,
   databaseMoneyValue,
   databaseNumericText,
@@ -49,12 +55,16 @@ export interface AgreementBudgetYear {
   fiscal_year_id: string
   fiscal_year_display: string
   program_funding: AllocationMoney
+  paid_amount?: AllocationMoney
+  remaining_funding?: AllocationMoney
   currency?: string
   stream_budget_id?: string | null
 }
 
 export interface StreamCommitmentLine {
   id: string
+  agency_chart_of_account_id?: string
+  fiscal_year_id?: string
   stream_budget_id: string
   fiscal_year_display: string
   label_en: string
@@ -107,6 +117,7 @@ interface AllocationVersionRow {
 export interface AgreementAllocationScope {
   agencyId: string
   streamId: string
+  financials?: AllocationFinancials
 }
 
 interface LockedAgreementAllocationContext extends AgreementAllocationScope {
@@ -761,6 +772,9 @@ export const createDraftAllocationVersion = async (
   await writeAuthorization?.lockAuthState(trx)
   await lockAgreementAllocationLifecycle(trx, agreementId, expectedScope)
   await writeAuthorization?.authorizeCurrentEntity(trx)
+  if (expectedScope.financials) {
+    assertNoPendingAllocationEffects(await getAllocationFinancialContext(expectedScope.financials, trx as unknown as Transaction<unknown>))
+  }
 
   const existingDraft = await trx
     .selectFrom('extensions.gcs_outcome_cost_allocation_versions')
@@ -1021,6 +1035,8 @@ export const getStreamCommitmentLines = async (
   .where('Agency_Fiscal_Year._deleted', '=', false)
   .select([
     'Transfer_Payment_Stream_Chart_of_Account.id as id',
+    'Agency_Chart_of_Account.id as agency_chart_of_account_id',
+    'Agency_Fiscal_Year.id as fiscal_year_id',
     'Transfer_Payment_Stream_Budget.id as stream_budget_id',
     'Agency_Chart_of_Account.egcs_ay_currency as currency',
     'Agency_Fiscal_Year.egcs_ay_fiscalyeardisplay as fiscal_year_display',
@@ -1098,11 +1114,16 @@ const saveAllocationsInTransaction = async (
   await writeAuthorization?.lockAuthState(db)
   await lockAgreementAllocationLifecycle(db, agreementId, expectedScope)
   await writeAuthorization?.authorizeCurrentEntity(db)
+  const financialContext = expectedScope.financials
+    ? await getAllocationFinancialContext(expectedScope.financials, db as unknown as Transaction<unknown>)
+    : null
+  if (financialContext) assertNoPendingAllocationEffects(financialContext)
   if (enforceYearLimits) {
-    const budgetYears = await getAgreementBudgetYears(db, agreementId, expectedScope.streamId)
+    const currentYears = await getAgreementBudgetYears(db, agreementId, expectedScope.streamId)
+    const budgetYears = financialContext ? applyRemainingFunding(currentYears, financialContext) : currentYears
     const yearLimitIssues = validateAllocationYearLimits(allocations, budgetYears.map(year => ({
       agreementBudgetFiscalYearId: String(year.id),
-      programFunding: year.program_funding
+      programFunding: year.remaining_funding ?? year.program_funding
     })))
     if (yearLimitIssues[0]) {
       throw createOutcomeCostAllocationUserError(yearLimitIssues[0].code, yearLimitIssues[0].path)
@@ -1150,7 +1171,7 @@ export const validateAgreementAllocations = async (
 
   const yearTotals = budgetYears.map(year => ({
     agreementBudgetFiscalYearId: String(year.id),
-    programFunding: year.program_funding
+    programFunding: year.remaining_funding ?? year.program_funding
   }))
   const activeOutcomeIds = new Set(outcomes.map(outcome => String(outcome.id)))
 
@@ -1224,7 +1245,7 @@ const validateAllocationCommitmentMappings = async (
   )
   const yearTotals: YearFundingTotal[] = budgetYears.map(year => ({
     agreementBudgetFiscalYearId: String(year.id),
-    programFunding: year.program_funding
+    programFunding: year.remaining_funding ?? year.program_funding
   }))
   const streamBudgetIdsByAgreementBudgetFiscalYearId = new Map(budgetYears.map(year => [
     String(year.id),
@@ -1255,7 +1276,7 @@ const snapshotAllocationEconomics = async (
 ): Promise<AllocationMoney> => {
   const yearTotals: YearFundingTotal[] = budgetYears.map(year => ({
     agreementBudgetFiscalYearId: String(year.id),
-    programFunding: year.program_funding
+    programFunding: year.remaining_funding ?? year.program_funding
   }))
   const fundingBasisByYearId = new Map(yearTotals.map(year => [
     year.agreementBudgetFiscalYearId,
@@ -1375,8 +1396,13 @@ export const completeAllocationVersionInTransaction = async (
     throw createOutcomeCostAllocationUserError('GCS_OUTCOME_COST_ALLOCATION_DRAFT_COMPLETE_REQUIRED', 'allocationVersionId')
   }
 
+  const financialContext = expectedScope.financials
+    ? await getAllocationFinancialContext(expectedScope.financials, db as unknown as Transaction<unknown>)
+    : null
+  if (financialContext) assertNoPendingAllocationEffects(financialContext)
   const allocations = await getSavedAllocations(db, agreementId, allocationVersionId)
-  const budgetYears = await lockAndGetAgreementBudgetYears(db, agreementId, lockedContext)
+  const currentYears = await lockAndGetAgreementBudgetYears(db, agreementId, lockedContext)
+  const budgetYears = financialContext ? applyRemainingFunding(currentYears, financialContext) : currentYears
   await lockAgreementOutcomeReferences(db, agreementId)
   const issues = await validateAgreementAllocations(
     db,
@@ -1468,9 +1494,13 @@ export const completeAllocationVersionInTransaction = async (
 export const activateAllocationVersionInTransaction = async (
   db: OutcomeCostAllocationDb,
   agreementId: string,
-  allocationVersionId: string
+  allocationVersionId: string,
+  financials?: AllocationFinancials
 ): Promise<void> => {
   await lockAgreementAllocationLifecycleContext(db, agreementId)
+  if (financials) {
+    assertNoPendingAllocationEffects(await getAllocationFinancialContext(financials, db as unknown as Transaction<unknown>))
+  }
   const target = await db
     .selectFrom('extensions.gcs_outcome_cost_allocation_versions')
     .where('id', '=', allocationVersionId)

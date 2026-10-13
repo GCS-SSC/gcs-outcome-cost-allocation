@@ -4,7 +4,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { computed, defineComponent, h, onUnmounted, ref, Suspense, watch } from 'vue'
 import type { PropType } from 'vue'
 import { installExtensionTestUiRuntime } from '@gcs-ssc/extensions/testing'
-import AgreementOutcomeCostAllocationTab from '../../components/AgreementOutcomeCostAllocationTab.vue'
+import OutcomeAllocationDetail from '../../components/OutcomeAllocationDetail.vue'
 
 const unmountedSupplementaryIds: string[] = []
 const SupplementaryInformation = defineComponent({
@@ -12,7 +12,9 @@ const SupplementaryInformation = defineComponent({
   inheritAttrs: false,
   props: {
     entityType: { type: String, required: true },
-    entityId: { type: String, required: true }
+    entityId: { type: String, required: true },
+    showHeader: { type: Boolean, default: true },
+    showDescription: { type: Boolean, default: true }
   },
   setup: (props, { attrs }) => {
     const initialEntityId = props.entityId
@@ -22,27 +24,25 @@ const SupplementaryInformation = defineComponent({
       'data-entity-type': props.entityType,
       'data-entity-id': props.entityId,
       'data-extra-props': JSON.stringify(attrs)
-    })
+    }, [props.showHeader ? h('h3', 'Supplementary') : null, props.showDescription ? h('p', 'Saved workflow answers') : null])
   }
 })
 
+const DetailPage = defineComponent({ setup: (_, { slots }) => () => h('div', slots.body?.()) })
 const Workspace = defineComponent({
-  setup: (_, { slots }) => () => h('div', [h('aside', slots.sidebar?.()), h('main', slots.default?.())])
-})
-
-const RouteTabs = defineComponent({
   props: {
     modelValue: { type: String, required: true },
-    orientation: { type: String, required: true },
     items: { type: Array as PropType<Array<{ value: string, label: string }>>, required: true }
   },
   emits: ['update:modelValue'],
-  setup: (props, { emit }) => () => h('nav', { 'data-orientation': props.orientation }, props.items.map(item => h('button', {
-    'type': 'button',
-    'data-view': item.value,
-    'aria-current': item.value === props.modelValue ? 'page' : undefined,
-    'onClick': () => emit('update:modelValue', item.value)
-  }, item.label)))
+  setup: (props, { slots, emit }) => () => h('div', [
+    h('aside', h('nav', { 'data-orientation': 'vertical' }, props.items.map(item => h('button', {
+      type: 'button', 'data-view': item.value,
+      'aria-current': item.value === props.modelValue ? 'page' : undefined,
+      onClick: () => emit('update:modelValue', item.value)
+    }, item.label)))),
+    h('main', [h('h2', props.items.find(item => item.value === props.modelValue)?.label), slots.actions?.(), slots.notices?.(), slots.default?.()])
+  ])
 })
 
 const response = {
@@ -66,13 +66,16 @@ const mountTab = async (hasVersions = true) => {
 
   const runtime = installExtensionTestUiRuntime()
   runtime.composables.useI18n = () => ({ locale, n: value => String(value) })
-  runtime.components.CommonEntityEditorWorkspace = Workspace
-  runtime.components.CommonRouteTabs = RouteTabs
+  runtime.components.CommonDetailWorkspace = Workspace
+  runtime.components.CommonDetailPage = DetailPage
   runtime.components.CommonWorkflowSupplementaryInformation = SupplementaryInformation
 
   const wrapper = mount(defineComponent({
-    setup: () => () => h(Suspense, null, {
-      default: () => h(AgreementOutcomeCostAllocationTab, {
+    props: { recordId: { type: String, default: 'allocation-111' } },
+    setup: props => () => h(Suspense, null, {
+      default: () => h(OutcomeAllocationDetail, {
+        recordId: props.recordId,
+        navigation: { collectionHref: '/en/agreements/agreement-9', recordHref: (id: string) => `/en/agreements/agreement-9/extension/gcs-outcome-cost-allocation/outcome-cost-allocation/${id}` },
         extensionKey: 'gcs-outcome-cost-allocation',
         context: {
           target: 'agreement', agencyId: 'agency-1', streamId: 'stream-1', agreementId: 'agreement-9',
@@ -94,7 +97,7 @@ afterEach(() => {
 })
 
 describe('Allocation-version Supplementary Information', () => {
-  it('uses package-owned bilingual navigation and preserves the allocation editor', async () => {
+  it('uses package-owned bilingual navigation and gives evidence its own selected section', async () => {
     const { wrapper, locale } = await mountTab()
     expect(wrapper.get('aside nav').attributes('data-orientation')).toBe('vertical')
     expect(wrapper.get('[data-view="workflows"]').text()).toBe('Workflows')
@@ -103,11 +106,15 @@ describe('Allocation-version Supplementary Information', () => {
 
     await wrapper.get('[data-view="supplementary-information"]').trigger('click')
     expect(wrapper.getComponent(SupplementaryInformation).props()).toEqual({
-      entityType: 'gcs-outcome-cost-allocation:allocation-version', entityId: 'allocation-111'
+      entityType: 'gcs-outcome-cost-allocation:allocation-version', entityId: 'allocation-111', showHeader: false, showDescription: true
     })
+    expect(wrapper.findAll('h2,h3').filter(heading => heading.text() === 'Supplementary')).toHaveLength(1)
+    expect(wrapper.text()).toContain('Saved workflow answers')
     expect(wrapper.get('[data-testid="supplementary-information"]').attributes('data-extra-props')).toBe('{}')
-    expect(wrapper.find('.outcome-cost-allocation-table').exists()).toBe(true)
-    expect(wrapper.findAll('tr[role="button"]')).toHaveLength(2)
+    expect(wrapper.find('.outcome-cost-allocation-table').exists()).toBe(false)
+    expect(wrapper.find('[data-view="summary"]').exists()).toBe(true)
+    expect(wrapper.find('[data-view="allocation"]').exists()).toBe(true)
+    expect(wrapper.find('[data-view="completion"]').exists()).toBe(true)
 
     locale.value = 'fr'
     await flushPromises()
@@ -121,14 +128,14 @@ describe('Allocation-version Supplementary Information', () => {
     const { wrapper } = await mountTab()
     await wrapper.get('[data-view="supplementary-information"]').trigger('click')
     const oldEvidence = wrapper.getComponent(SupplementaryInformation).element
-    await wrapper.findAll('tr[role="button"]')[1]!.trigger('click')
+    await wrapper.setProps({ recordId: 'allocation-222' })
     await flushPromises()
 
     const currentEvidence = wrapper.getComponent(SupplementaryInformation)
     expect(currentEvidence.element).not.toBe(oldEvidence)
     expect(unmountedSupplementaryIds).toEqual(['allocation-111'])
     expect(currentEvidence.props()).toEqual({
-      entityType: 'gcs-outcome-cost-allocation:allocation-version', entityId: 'allocation-222'
+      entityType: 'gcs-outcome-cost-allocation:allocation-version', entityId: 'allocation-222', showHeader: false, showDescription: true
     })
     expect(currentEvidence.props('entityId')).not.toBe('agreement-9')
     wrapper.unmount()

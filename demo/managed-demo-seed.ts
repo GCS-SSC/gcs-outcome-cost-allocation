@@ -186,3 +186,5 @@ export const seedManagedOutcomeCostAllocationDemo = async (
     versionNumber: created.version.versionNumber
   }
 }
+
+export { seedManagedAgencyCoding } from './agency-coding-seed'

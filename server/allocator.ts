@@ -1,5 +1,8 @@
 import type { GcsCodingAllocator } from '@gcs-ssc/extensions/server'
 import { sql } from 'kysely'
+import { createGcsExtensionUserError, getExtensionKvEntry, setExtensionKvEntry } from '@gcs-ssc/extensions/server'
+import { allocateCreditMemo } from './credit-memo-allocation'
+import { AgencyCodingSchema, RetainedAgencyCodingSchema, splitAgencyCoding } from '../shared/agency-coding'
 import { asOutcomeCostAllocationDb } from './db.ts'
 import { createOutcomeCostAllocationUserError } from './errors.ts'
 import { databaseNumericText, parseDatabaseMoney } from './numeric.ts'
@@ -10,9 +13,42 @@ import {
   toCents
 } from '../shared/allocation.ts'
 
-/** Splits only unpaid funds; existing paid coding remains a host-enforced floor. */
+/**
+ * Splits only unpaid funds; existing paid coding remains a host-enforced floor.
+ * @param context Authoritative host financial context.
+ * @returns Exact coding or null for unmanaged outputs.
+ */
 const allocator: GcsCodingAllocator = async context => {
-  if (context.output.kind !== 'commitment' && context.output.kind !== 'payment') return null
+  if (context.output.kind === 'credit-memo') return await allocateCreditMemo(context)
+  if (context.output.kind === 'receivable') {
+    const output = context.output
+    const invalid = () => createGcsExtensionUserError({ code: 'GCS_OUTCOME_COST_ALLOCATION_CODING_CONFIGURATION_INVALID', statusCode: 400,
+      message: { en: 'Configure a valid Agency coding set for this fiscal year and make its accounts available in this Stream.', fr: 'Configurez un ensemble valide de codes de l’agence pour cet exercice et rendez ses comptes disponibles dans ce volet.' } })
+    const fiscalYearId = output.fiscalYearId ?? ''
+    if (!fiscalYearId) throw invalid()
+    let policy
+    if (context.retainedPolicy) {
+      const retained = RetainedAgencyCodingSchema.safeParse(context.retainedPolicy)
+      if (!retained.success || retained.data.kind !== output.kind || retained.data.currency !== context.currency
+        || retained.data.fiscalYearId !== fiscalYearId) throw invalid()
+      policy = retained.data
+    } else {
+      const config = AgencyCodingSchema.safeParse(context.agencyConfig)
+      if (!config.success) throw invalid()
+      const sets = config.data.receivableSets.filter(set => set.fiscalYearId === fiscalYearId && set.currency === context.currency)
+      const set = sets[0]
+      if (sets.length !== 1 || !set) throw invalid()
+      policy = { version: 1 as const, kind: output.kind, currency: context.currency, lines: set.lines, fiscalYearId }
+    }
+    // Retained v1 policy IDs are Agency account identities; only returned coding uses Stream selection IDs.
+    const streamIds = new Map<string, string>()
+    for (const line of policy.lines) {
+      const matches = context.codingLines.filter(account => account.agencyChartOfAccountId === line.codingLineId)
+      if (matches.length !== 1 || matches[0]!.agencyFiscalYearId !== fiscalYearId) throw invalid()
+      streamIds.set(line.codingLineId, matches[0]!.codingLineId)
+    }
+    return { lines: splitAgencyCoding(policy.lines, context.amount).map(line => ({ ...line, codingLineId: streamIds.get(line.codingLineId)! })), policy }
+  }
   const { commitmentTypeId } = context.output
   if (!parseOutcomeCostAllocationConfig(context.config).enabledCommitmentTypes.includes(commitmentTypeId)) return null
 
@@ -29,9 +65,16 @@ const allocator: GcsCodingAllocator = async context => {
   }
 
   const db = asOutcomeCostAllocationDb(context.db)
-  const version = await db.selectFrom('extensions.gcs_outcome_cost_allocation_versions')
-    .select('id').where('agreement_id', '=', context.agreementId).where('status', '=', 'active')
-    .where('_deleted', '=', false).executeTakeFirst()
+  const commitmentId = context.output.commitmentId
+  if (!commitmentId) throw createOutcomeCostAllocationUserError('GCS_OUTCOME_COST_ALLOCATION_INVALID', 'commitmentId')
+  const kvDb = context.db as unknown as Parameters<typeof getExtensionKvEntry>[0]
+  const pinned = await getExtensionKvEntry(kvDb, 'gcs-outcome-cost-allocation', 'fundingcaseagreementcommitment', commitmentId, 'allocation-version')
+  const pinnedVersionId = pinned && typeof pinned === 'object' && !Array.isArray(pinned) ? pinned.versionId : null
+  if (pinned !== null && typeof pinnedVersionId !== 'string') throw createOutcomeCostAllocationUserError('GCS_OUTCOME_COST_ALLOCATION_INVALID', 'allocationVersion')
+  let versionQuery = db.selectFrom('extensions.gcs_outcome_cost_allocation_versions')
+    .select('id').where('agreement_id', '=', context.agreementId).where('_deleted', '=', false)
+  versionQuery = typeof pinnedVersionId === 'string' ? versionQuery.where('id', '=', pinnedVersionId) : versionQuery.where('status', '=', 'active')
+  const version = await versionQuery.executeTakeFirst()
   if (!version) throw createOutcomeCostAllocationUserError('GCS_OUTCOME_COST_ALLOCATION_ACTIVE_REQUIRED', 'allocationVersion')
 
   const rows = await db.selectFrom('extensions.gcs_outcome_cost_allocation_allocations')
@@ -49,7 +92,6 @@ const allocator: GcsCodingAllocator = async context => {
     }
     if (catalogIds.has(codingId)) weights.set(codingId, (weights.get(codingId) ?? BigInt(0)) + amount)
   }
-  if (!weights.size) throw createOutcomeCostAllocationUserError('GCS_OUTCOME_COST_ALLOCATION_COMMITMENT_LINES_MISSING', 'allocations')
 
   const paid = new Map<string, bigint>()
   for (const line of context.existingLines) {
@@ -73,6 +115,7 @@ const allocator: GcsCodingAllocator = async context => {
   for (const line of split) paid.set(line.commitmentLineId, (paid.get(line.commitmentLineId) ?? BigInt(0)) + toCents(line.paymentAmount))
   // Retain selected zero coding so a zero-total Commitment can still complete.
   for (const codingId of weights.keys()) if (!paid.has(codingId)) paid.set(codingId, BigInt(0))
+  if (pinned === null) await setExtensionKvEntry(kvDb, 'gcs-outcome-cost-allocation', 'fundingcaseagreementcommitment', commitmentId, 'allocation-version', { versionId: String(version.id) })
   return [...paid].map(([codingLineId, amount]) => ({ codingLineId, amount: fromCents(amount) }))
 }
 

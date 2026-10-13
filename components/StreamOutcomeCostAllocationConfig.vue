@@ -9,6 +9,7 @@ import {
   ExtensionIcon,
   ExtensionModal,
   ExtensionSelect,
+  ExtensionStreamWorkflowLinks,
   ExtensionTable,
   useHostApi,
   useExtensionI18n
@@ -63,7 +64,8 @@ interface AssociationDraft {
 
 const {
   streamId,
-  transferPaymentId
+  transferPaymentId,
+  agencyId
 } = defineProps<{
   extension: GcsResolvedExtension
   streamId: string
@@ -414,6 +416,23 @@ watch(config, value => {
       <div class="border-t border-zinc-200 px-4 py-3 text-xs font-bold tracking-widest text-zinc-400 uppercase dark:border-zinc-800">
         {{ localConfig.mappings.length }} {{ tLocal('records') }}
       </div>
+    </div>
+
+    <div v-if="transferPaymentId && agencyId" class="space-y-4">
+      <div>
+        <h2 class="text-lg font-semibold text-zinc-900 dark:text-white">
+          {{ tLocal('workflows') }}
+        </h2>
+        <p class="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+          {{ tLocal('workflowsDescription') }}
+        </p>
+      </div>
+      <ExtensionStreamWorkflowLinks
+        :transfer-payment-id="transferPaymentId"
+        :stream-id="streamId"
+        :agency-id="agencyId"
+        entity-type="gcs-outcome-cost-allocation:allocation-version"
+        :can-update="true" />
     </div>
 
     <ExtensionModal

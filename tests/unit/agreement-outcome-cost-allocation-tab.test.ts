@@ -7,35 +7,13 @@ import {
   getOutcomeAllocationVersionsEndpoint,
   getOutcomeAllocationResponseErrorMessage,
   getOutcomeAllocationToastText,
-  resolveCreatedDraftVersionId,
-  resolveDeletedDraftVersionId,
-  resolveSelectedOutcomeAllocationVersionId,
   saveOutcomeAllocationsRequest
 } from '../../shared/agreement-outcome-cost-allocation-tab'
 import type {
-  CostAllocationVersion,
   VersionedOutcomeAllocationInput
 } from '../../shared/allocation'
 
-const versions = [
-  { id: 'active-1', status: 'active' },
-  { id: 'draft-1', status: 'draft' },
-  { id: 'archived-1', status: 'archived' }
-] as unknown as CostAllocationVersion[]
-
 describe('agreement outcome cost allocation tab helpers', () => {
-  it('keeps the currently selected allocation version when available', () => {
-    expect(resolveSelectedOutcomeAllocationVersionId('active-1', versions)).toBe('active-1')
-  })
-
-  it('prefers draft, then active, then the first available version', () => {
-    expect(resolveSelectedOutcomeAllocationVersionId('', versions)).toBe('draft-1')
-    expect(resolveSelectedOutcomeAllocationVersionId('', versions.filter(version => version.status !== 'draft'))).toBe('active-1')
-    expect(resolveSelectedOutcomeAllocationVersionId('', [{ id: 'archived-1', status: 'archived' }] as unknown as CostAllocationVersion[]))
-      .toBe('archived-1')
-    expect(resolveSelectedOutcomeAllocationVersionId('', [])).toBe('')
-  })
-
   it('extracts the most specific API error message', async () => {
     await expect(getOutcomeAllocationResponseErrorMessage(new Response(JSON.stringify({
       data: {
@@ -148,15 +126,6 @@ describe('agreement outcome cost allocation tab helpers', () => {
       .toBe('/api/extensions/ext/agreements/1/allocation-versions')
     expect(getOutcomeAllocationVersionEndpoint('/api/extensions/ext/agreements/1/allocations', 'version-1'))
       .toBe('/api/extensions/ext/agreements/1/allocation-versions/version-1')
-  })
-
-  it('updates selected draft versions after create and delete responses', () => {
-    expect(resolveCreatedDraftVersionId('current', {
-      version: { id: 'draft-1', status: 'draft' } as CostAllocationVersion
-    })).toBe('draft-1')
-    expect(resolveCreatedDraftVersionId('current', {})).toBe('current')
-    expect(resolveDeletedDraftVersionId('draft-1', 'draft-1')).toBe('')
-    expect(resolveDeletedDraftVersionId('active-1', 'draft-1')).toBe('active-1')
   })
 
   it('builds save request bodies for active allocations', () => {

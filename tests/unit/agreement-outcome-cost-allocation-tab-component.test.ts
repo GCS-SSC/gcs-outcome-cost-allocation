@@ -11,7 +11,7 @@ import {
 } from 'vue'
 import type { GcsExtensionJsonConfig } from '@gcs-ssc/extensions'
 import { installExtensionTestUiRuntime } from '@gcs-ssc/extensions/testing'
-import AgreementOutcomeCostAllocationTab from '../../components/AgreementOutcomeCostAllocationTab.vue'
+import OutcomeAllocationDetail from '../../components/OutcomeAllocationDetail.vue'
 
 const ArraySelectMenu = defineComponent({
   name: 'ArraySelectMenu',
@@ -99,9 +99,11 @@ const AllocationTable = defineComponent({
 const ReactiveModal = defineComponent({
   name: 'ReactiveModal',
   inheritAttrs: false,
-  setup: (_, { attrs, slots }) => () => attrs.open === false
+  emits: ['update:open'],
+  setup: (_, { attrs, slots, emit }) => () => attrs.open === false
     ? null
-    : h('div', { 'data-control': 'generate-modal' }, [
+    : h('div', { 'data-control': attrs.title === 'Edit allocation' || attrs.title === 'Modifier la répartition' ? 'allocation-modal' : 'generate-modal' }, [
+        h('button', { 'data-control': 'dismiss-modal', onClick: () => emit('update:open', false) }, 'Dismiss'),
         slots.body?.(),
         slots.footer?.()
       ])
@@ -124,6 +126,30 @@ const WorkflowSection = defineComponent({
     'data-can-edit': String(props.canEdit),
     'data-refresh-key': String(props.refreshKey)
   })
+})
+
+const DetailPage = defineComponent({ setup: (_, { slots }) => () => h('div', slots.body?.()) })
+const DetailWorkspace = defineComponent({
+  props: ['items', 'modelValue', 'sectionDescription'],
+  emits: ['update:modelValue'],
+  setup: (props, { slots, emit }) => () => h('div', [
+    h('nav', (props.items ?? []).map((item: { value: string; label: string }) => h('button', {
+      'data-view': item.value,
+      onClick: () => emit('update:modelValue', item.value)
+    }, item.label))),
+    h('h2', props.items?.find((item: { value: string }) => item.value === props.modelValue)?.label),
+    props.sectionDescription ? h('p', props.sectionDescription) : null,
+    slots.actions?.(), slots.notices?.(), slots.default?.()
+  ])
+})
+const CompletionPanel = defineComponent({
+  props: ['entityType', 'entityId', 'canComplete', 'canWorkWorkflow', 'labels', 'refreshKey'],
+  emits: ['changed'],
+  setup: props => () => h('div', {
+    'data-control': 'approval-submission-workflow',
+    'data-entity-id': props.entityId,
+    'data-can-work': String(props.canWorkWorkflow)
+  }, props.labels?.description)
 })
 
 const jsonResponse = (value: unknown): Response => new Response(JSON.stringify(value), {
@@ -218,11 +244,16 @@ const findButton = (
 const mountTab = async (
   fetchMock: typeof fetch,
   componentConfig: GcsExtensionJsonConfig = config,
-  initialLocale = 'en'
+  initialLocale = 'en',
+  completionItem: unknown | null = null,
+  initialView = 'allocation',
+  permissions = { canUpdate: true, canDelete: true, canWork: true },
+  completionRequest?: () => Promise<Response>
 ) => {
   vi.stubGlobal('fetch', (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (String(input).includes('/api/completions/runtime')) {
-      return jsonResponse({ item: null })
+      if (completionRequest) return await completionRequest()
+      return jsonResponse({ item: completionItem })
     }
     return await fetchMock(input, init)
   }) as typeof fetch)
@@ -240,10 +271,19 @@ const mountTab = async (
   runtime.components.UTable = AllocationTable
   runtime.components.UModal = ReactiveModal
   runtime.components.CommonWorkflowSection = WorkflowSection
+  runtime.components.CommonCompletionPanel = CompletionPanel
+  runtime.components.CommonDetailPage = DetailPage
+  runtime.components.CommonDetailWorkspace = DetailWorkspace
+  const selectedTab = ref(initialView)
+  runtime.composables.useUrlTabState = options => ({ tabs: computed(() => options.tabs as never), selectedTab, selectedTabKey: selectedTab, defaultTab: ref(initialView) })
 
   const Host = defineComponent({
-    setup: () => () => h(Suspense, null, {
-      default: () => h(AgreementOutcomeCostAllocationTab, {
+    props: { recordId: { type: String, default: 'version-1' } },
+    setup: props => () => h(Suspense, null, {
+      default: () => h(OutcomeAllocationDetail, {
+        recordId: props.recordId,
+        ...permissions,
+        navigation: { collectionHref: '/en/agreements/agreement-1?section=extension:gcs-outcome-cost-allocation:agreement:outcome-cost-allocation', recordHref: (id: string) => `/en/agreements/agreement-1/extension/gcs-outcome-cost-allocation/outcome-cost-allocation/${id}` },
         extensionKey: 'gcs-outcome-cost-allocation',
         context: {
           target: 'agreement',
@@ -276,21 +316,75 @@ afterEach(() => {
 })
 
 describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
+  it('renders the approval submission workflow after the allocation has been submitted', async () => {
+    const wrapper = await mountTab(vi.fn(async () => jsonResponse(allocationResponse)) as typeof fetch, config, 'en', { id: 'completion-1' }, 'completion')
+    expect(wrapper.find('[data-control="approval-submission-workflow"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('waits for the Completion read before allowing a draft matrix edit', async () => {
+    let releaseCompletion = (_response: Response) => {}
+    const pendingCompletion = new Promise<Response>(resolve => { releaseCompletion = resolve })
+    const wrapper = await mountTab(vi.fn(async () => jsonResponse(allocationResponse)) as typeof fetch, config, 'en', null, 'allocation', undefined, () => pendingCompletion)
+    expect(findButton(wrapper, 'Generate rows').attributes()).toHaveProperty('disabled')
+    expect(findButton(wrapper, 'Save').attributes()).toHaveProperty('disabled')
+    expect(wrapper.text()).not.toContain('Only draft allocations can be edited.')
+    releaseCompletion(jsonResponse({ item: null }))
+    await flushPromises()
+    expect(findButton(wrapper, 'Generate rows').attributes('disabled')).toBeUndefined()
+    await findButton(wrapper, 'Generate rows').trigger('click')
+    expect(wrapper.find('[data-control="generate-modal"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('shows a recoverable Completion read failure and retries before enabling edits', async () => {
+    const completionRequest = vi.fn()
+      .mockRejectedValueOnce(new Error('Unavailable'))
+      .mockResolvedValue(jsonResponse({ item: null }))
+    const wrapper = await mountTab(vi.fn(async () => jsonResponse(allocationResponse)) as typeof fetch, config, 'en', null, 'allocation', undefined, completionRequest)
+    expect(wrapper.get('[role="alert"]').text()).toContain('Completion status could not be loaded.')
+    await findButton(wrapper, 'Generate rows').trigger('click')
+    expect(wrapper.find('[data-control="generate-modal"]').exists()).toBe(false)
+    await findButton(wrapper, 'Retry').trigger('click')
+    await flushPromises()
+    expect(completionRequest).toHaveBeenCalledTimes(2)
+    await findButton(wrapper, 'Generate rows').trigger('click')
+    expect(wrapper.find('[data-control="generate-modal"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('rejects an older Completion response after the detail record changes', async () => {
+    let releaseOldCompletion = (_response: Response) => {}
+    const pendingOldCompletion = new Promise<Response>(resolve => { releaseOldCompletion = resolve })
+    const completionRequest = vi.fn()
+      .mockImplementationOnce(() => pendingOldCompletion)
+      .mockResolvedValue(jsonResponse({ item: null }))
+    const response = { ...allocationResponse, versions: [
+      { ...allocationResponse.versions[0], status: 'inactive' },
+      { ...allocationResponse.versions[0], id: 'version-2', versionNumber: 2 }
+    ] }
+    const wrapper = await mountTab(vi.fn(async () => jsonResponse(response)) as typeof fetch, config, 'en', null, 'allocation', undefined, completionRequest)
+    await wrapper.setProps({ recordId: 'version-2' })
+    await flushPromises()
+    releaseOldCompletion(jsonResponse({ item: { id: 'old-completion' } }))
+    await flushPromises()
+    expect(findButton(wrapper, 'Generate rows').attributes('disabled')).toBeUndefined()
+    await findButton(wrapper, 'Generate rows').trigger('click')
+    expect(wrapper.find('[data-control="generate-modal"]').exists()).toBe(true)
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
   it.each([
-    ['en', 'Workflows', 'Start and complete a standard workflow for the selected allocation version.'],
-    ['fr', 'Processus', 'Démarrez et terminez un processus standard pour la version de répartition sélectionnée.']
+    ['en', 'Workflows', 'Start and complete a standard workflow for this cost allocation.'],
+    ['fr', 'Processus', 'Démarrez et terminez un processus standard pour cette répartition des coûts.']
   ])('mounts the standard host Workflow section for the selected qualified target in %s', async (
     locale,
     heading,
     description
   ) => {
     const fetchMock = vi.fn(async (): Promise<Response> => jsonResponse(allocationResponse))
-    const wrapper = await mountTab(fetchMock as typeof fetch, config, locale)
+    const wrapper = await mountTab(fetchMock as typeof fetch, config, locale, null, 'workflows')
 
-    const versionScroll = wrapper.get('[role="group"].overflow-x-auto')
-    expect(versionScroll.attributes('tabindex')).toBe('0')
-    expect(versionScroll.attributes('aria-label')).toBe(versionScroll.get('caption').text())
-    expect(versionScroll.get('table').attributes('role')).toBeUndefined()
     const workflow = wrapper.getComponent(WorkflowSection)
     expect(workflow.props()).toMatchObject({
       entityType: 'gcs-outcome-cost-allocation:allocation-version',
@@ -305,6 +399,27 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
     await flushPromises()
     expect(fetchMock).toHaveBeenCalled()
 
+    wrapper.unmount()
+  })
+
+  it.each(['en', 'fr'])('renders remaining funding and paid-only coding once in %s', async locale => {
+    const response = {
+      ...allocationResponse,
+      budgetYears: [{ ...allocationResponse.budgetYears[0], fiscal_year_id: '2026', program_funding: '1000.00', paid_amount: '200.00', remaining_funding: '800.00' }],
+      codingPaidAmounts: [{ agencyChartOfAccountId: 'retained-code', agencyFiscalYearId: '2026', paidAmount: '200.00' }],
+      hasPendingEffects: false
+    }
+    const wrapper = await mountTab(vi.fn(async () => jsonResponse(response)) as typeof fetch, config, locale, null, 'summary')
+    const tables = wrapper.findAll('table')
+    const paidTable = tables.find(table => table.find('caption').text() === (locale === 'fr' ? 'Paiements par ligne comptable' : 'Paid by coding line'))!
+    expect(paidTable.findAll('tbody tr')).toHaveLength(1)
+    expect(paidTable.text()).toContain('retained-code')
+    const balances = tables.find(table => table.find('caption').text() === (locale === 'fr' ? 'Soldes de financement actuels' : 'Current funding balances'))!
+    const cells = balances.findAll('tbody td').map(cell => cell.text())
+    expect(cells).toHaveLength(3)
+    expect(cells[0]).toMatch(/1[\s,]?000/)
+    expect(cells[1]).toContain('200')
+    expect(cells[2]).toContain('800')
     wrapper.unmount()
   })
 
@@ -327,20 +442,26 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
     await findButton(wrapper, 'Generate rows', 'last').trigger('click')
     await flushPromises()
 
-    const methodSelects = wrapper.findAllComponents(InteractiveSelect)
-      .filter(select => select.attributes('data-control') === 'allocation-method')
-    expect(methodSelects).toHaveLength(2)
-    const valueFields = wrapper.findAll('[data-cell="value"] [required]')
-    expect(valueFields).toHaveLength(2)
-    expect(valueFields[0]!.attributes('label')).toContain('Value — Outcome 1 (2026-2027)')
-    expect(wrapper.findAll('[required]').some(field => field.attributes('label') === 'Method — Outcome 1 (2026-2027)')).toBe(true)
+    expect(wrapper.findAll('[data-control="allocation-method"]')).toHaveLength(0)
+    expect(wrapper.findAll('[data-cell="value"] input')).toHaveLength(0)
+    await findButton(wrapper, 'Edit allocation').trigger('click')
+    await flushPromises()
 
-    expect(valueFields[0]!.get('input').attributes('data-currency')).toBe('cad')
-    await methodSelects[0]?.get('select').setValue('percentage')
-    expect(valueFields[0]!.get('input').attributes('data-currency')).toBeUndefined()
-    await valueFields[0]!.get('input').setValue('12.3456')
-    methodSelects[0]?.vm.$emit('update:modelValue', ['amount'])
+    const modal = wrapper.get('[data-control="allocation-modal"]')
+    const methodSelect = wrapper.findAllComponents(InteractiveSelect)
+      .find(select => select.attributes('data-control') === 'allocation-method')!
+    const valueField = modal.findAll('[required]').find(field => field.attributes('name') === 'allocationValue')!
+    expect(valueField.attributes('label')).toBe('Amount')
+    expect(modal.findAll('[required]').some(field => field.attributes('name') === 'allocationMethod')).toBe(true)
+    expect(valueField.get('input').attributes('data-currency')).toBe('cad')
+    await methodSelect.get('select').setValue('percentage')
+    expect(valueField.get('input').attributes('data-currency')).toBeUndefined()
+    await valueField.get('input').setValue('12.3456')
+    methodSelect.vm.$emit('update:modelValue', ['amount'])
     await wrapper.vm.$nextTick()
+    await modal.get('form').trigger('submit')
+    await flushPromises()
+    expect(wrapper.find('[data-control="allocation-modal"]').exists()).toBe(false)
 
     await findButton(wrapper, 'Save').trigger('click')
     await flushPromises()
@@ -370,6 +491,119 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
     wrapper.unmount()
   })
 
+  it.each(['cancel', 'dismiss'])('discards isolated edits on %s and restores the saved value when reopened', async action => {
+    const response = { ...allocationResponse, allocations: [{
+      allocationVersionId: 'version-1', commitmentType: '1', streamCommitmentId: 'stream-commitment-1',
+      agreementBudgetFiscalYearId: '1', outcomeId: 'outcome-1', allocationMethod: 'amount', allocationValue: '25.0000'
+    }] }
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse(response))
+    const wrapper = await mountTab(fetchMock as typeof fetch)
+    await findButton(wrapper, 'Edit allocation').trigger('click')
+    await flushPromises()
+    const modal = wrapper.get('[data-control="allocation-modal"]')
+    await modal.get('input').setValue('70.25')
+    if (action === 'cancel') await findButton(wrapper, 'Cancel').trigger('click')
+    else await modal.get('[data-control="dismiss-modal"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-control="allocation-modal"]').exists()).toBe(false)
+    expect(wrapper.get('[data-cell="amount"]').text()).toBe('CA$25.00')
+    await findButton(wrapper, 'Edit allocation').trigger('click')
+    await flushPromises()
+    expect((wrapper.get('[data-control="allocation-modal"] input').element as HTMLInputElement).value).toBe('25.0000')
+    expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'PUT')).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('keeps invalid or excessive drafts available for correction and applies a valid value only on Update', async () => {
+    const response = { ...allocationResponse, allocations: [{
+      allocationVersionId: 'version-1', commitmentType: '1', streamCommitmentId: 'stream-commitment-1',
+      agreementBudgetFiscalYearId: '1', outcomeId: 'outcome-1', allocationMethod: 'amount', allocationValue: '25.0000'
+    }] }
+    const wrapper = await mountTab(vi.fn(async () => jsonResponse(response)) as typeof fetch)
+    await findButton(wrapper, 'Edit allocation').trigger('click')
+    await flushPromises()
+    const modal = wrapper.get('[data-control="allocation-modal"]')
+    for (const invalidValue of ['', '1e3', '101.0000']) {
+      await modal.get('input').setValue(invalidValue)
+      await modal.get('form').trigger('submit')
+      await flushPromises()
+      expect(wrapper.find('[data-control="allocation-modal"]').exists()).toBe(true)
+      expect((modal.get('input').element as HTMLInputElement).value).toBe(invalidValue)
+      expect(wrapper.get('[data-cell="amount"]').text()).toBe('CA$25.00')
+      expect(modal.get('[name="allocationValue"]').attributes('error')).toBeTruthy()
+    }
+    await modal.get('input').setValue('75.1250')
+    await modal.get('form').trigger('submit')
+    await flushPromises()
+    expect(wrapper.find('[data-control="allocation-modal"]').exists()).toBe(false)
+    expect(wrapper.get('[data-cell="amount"]').text()).toBe('CA$75.13')
+    wrapper.unmount()
+  })
+
+  it('converts between money and percentage without changing the resolved allocation', async () => {
+    const response = { ...allocationResponse, allocations: [{
+      allocationVersionId: 'version-1', commitmentType: '1', streamCommitmentId: 'stream-commitment-1',
+      agreementBudgetFiscalYearId: '1', outcomeId: 'outcome-1', allocationMethod: 'amount', allocationValue: '25.0000'
+    }] }
+    const wrapper = await mountTab(vi.fn(async () => jsonResponse(response)) as typeof fetch)
+    await findButton(wrapper, 'Edit allocation').trigger('click')
+    await flushPromises()
+    const modal = wrapper.get('[data-control="allocation-modal"]')
+    await modal.get('select').setValue('percentage')
+    expect((modal.get('input').element as HTMLInputElement).value).toMatch(/^25(?:\.0+)?$/)
+    expect(modal.get('input').attributes('data-currency')).toBeUndefined()
+    await modal.get('select').setValue('amount')
+    expect((modal.get('input').element as HTMLInputElement).value).toMatch(/^25(?:\.0+)?$/)
+    expect(modal.get('input').attributes('data-currency')).toBe('cad')
+    await modal.get('form').trigger('submit')
+    await flushPromises()
+    expect(wrapper.get('[data-cell="amount"]').text()).toBe('CA$25.00')
+    wrapper.unmount()
+  })
+
+  it('keeps the edit action visible and warns instead of opening while effects are pending', async () => {
+    const response = { ...allocationResponse, hasPendingEffects: true, allocations: [{
+      allocationVersionId: 'version-1', commitmentType: '1', streamCommitmentId: 'stream-commitment-1',
+      agreementBudgetFiscalYearId: '1', outcomeId: 'outcome-1', allocationMethod: 'amount', allocationValue: '25.0000'
+    }] }
+    const wrapper = await mountTab(vi.fn(async () => jsonResponse(response)) as typeof fetch)
+    await findButton(wrapper, 'Edit allocation').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-control="allocation-modal"]').exists()).toBe(false)
+    expect(wrapper.get('[role="status"]').text()).toContain('pending payments')
+    wrapper.unmount()
+  })
+
+  it('keeps draft allocations read-only once Completion exists', async () => {
+    const response = { ...allocationResponse, allocations: [{
+      allocationVersionId: 'version-1', commitmentType: '1', streamCommitmentId: 'stream-commitment-1',
+      agreementBudgetFiscalYearId: '1', outcomeId: 'outcome-1', allocationMethod: 'amount', allocationValue: '25.0000'
+    }] }
+    const wrapper = await mountTab(vi.fn(async () => jsonResponse(response)) as typeof fetch, config, 'en', { id: 'completion-1' })
+    expect(wrapper.findAll('button').some(button => button.text() === 'Edit allocation')).toBe(true)
+    expect(wrapper.findAll('[data-cell="value"] input')).toHaveLength(0)
+    expect(wrapper.get('[data-cell="amount"]').text()).toBe('CA$25.00')
+    wrapper.unmount()
+  })
+
+  it('discards an open modal when switching allocation versions', async () => {
+    const response = { ...allocationResponse, versions: [allocationResponse.versions[0], {
+      ...allocationResponse.versions[0], id: 'version-2', versionNumber: 2, status: 'inactive'
+    }], allocations: [{
+      allocationVersionId: 'version-1', commitmentType: '1', streamCommitmentId: 'stream-commitment-1',
+      agreementBudgetFiscalYearId: '1', outcomeId: 'outcome-1', allocationMethod: 'amount', allocationValue: '25.0000'
+    }] }
+    const wrapper = await mountTab(vi.fn(async () => jsonResponse(response)) as typeof fetch)
+    await findButton(wrapper, 'Edit allocation').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-control="allocation-modal"] input').setValue('70.25')
+    await wrapper.setProps({ recordId: 'version-2' })
+    await flushPromises()
+    expect(wrapper.find('[data-control="allocation-modal"]').exists()).toBe(false)
+    expect(wrapper.findAll('[data-cell="value"] input')).toHaveLength(0)
+    wrapper.unmount()
+  })
+
   it('renders saved historical allocations after their current mapping is removed', async () => {
     const historicalResponse = {
       ...allocationResponse,
@@ -396,10 +630,12 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
 
     const methodSelects = wrapper.findAllComponents(InteractiveSelect)
       .filter(select => select.attributes('data-control') === 'allocation-method')
-    expect(methodSelects).toHaveLength(1)
+    expect(methodSelects).toHaveLength(0)
+    expect(wrapper.findAll('button').some(button => button.text() === 'Edit allocation')).toBe(true)
     expect(wrapper.text()).toContain('1 allocations')
     expect(wrapper.text()).not.toContain('Add agreement activities with outcomes')
-    expect(wrapper.findAll('button').some(button => button.text() === 'Remove allocation')).toBe(false)
+    await findButton(wrapper, 'Edit allocation').trigger('click')
+    expect(wrapper.find('[data-control="allocation-modal"]').exists()).toBe(false)
 
     wrapper.unmount()
   })
@@ -545,7 +781,9 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
     }] }
     const fetchMock = vi.fn(async (): Promise<Response> => jsonResponse(response))
     const wrapper = await mountTab(fetchMock as typeof fetch, config, language)
-    expect(wrapper.get('[data-cell="value"] input').attributes('data-currency')).toBe('usd')
+    await findButton(wrapper, language === 'fr' ? 'Modifier la répartition' : 'Edit allocation').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-control="allocation-modal"] input').attributes('data-currency')).toBe('usd')
     const formatter = wrapper.findComponent({ name: 'GcsCommonCurrencyInput' }).vm.$attrs['format-value'] as (value: string, locale: string, currency: string) => string | null
     expect(formatter('100.2350', language, 'usd')).toBe(language === 'fr' ? '100,24 $US' : '$100.24')
     expect(formatter('', language, 'usd')).toBeNull()
@@ -655,7 +893,7 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
     const fetchMock = vi.fn(async (): Promise<Response> => jsonResponse(splitResponse))
     const wrapper = await mountTab(fetchMock as typeof fetch, splitConfig)
     const associationRows = wrapper.findAll('[data-row-index]').filter(row =>
-      row.find('[data-control="allocation-method"]').exists()
+      row.findAll('button').some(button => button.text() === 'Edit allocation')
     )
 
     expect(associationRows).toHaveLength(2)
@@ -787,119 +1025,64 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
     wrapper.unmount()
   })
 
-  it('disables draft editing, selection, and deletion while a save is pending', async () => {
+  it('renders read-only matrix data for viewers and warns before unassigned Contributors edit', async () => {
+    const response = { ...allocationResponse, allocations: [{
+      allocationVersionId: 'version-1', commitmentType: '1', streamCommitmentId: 'stream-commitment-1',
+      agreementBudgetFiscalYearId: '1', outcomeId: 'outcome-1', allocationMethod: 'amount', allocationValue: '25.0000'
+    }] }
+    const fetchMock = vi.fn(async () => jsonResponse(response))
+    const viewer = await mountTab(fetchMock as typeof fetch, config, 'en', null, 'allocation', { canUpdate: false, canDelete: false, canWork: false })
+    expect(viewer.get('[data-cell="amount"]').text()).toBe('CA$25.00')
+    expect(viewer.findAll('button').some(button => ['Save', 'Edit allocation', 'Generate rows'].includes(button.text()))).toBe(false)
+    viewer.unmount()
+    const unassigned = await mountTab(fetchMock as typeof fetch, config, 'en', null, 'allocation', { canUpdate: true, canDelete: false, canWork: false })
+    await findButton(unassigned, 'Edit allocation').trigger('click')
+    expect(unassigned.get('[role="alert"]').text()).toContain('must be assigned')
+    expect(unassigned.find('[data-control="allocation-modal"]').exists()).toBe(false)
+    await findButton(unassigned, 'Save').trigger('click')
+    expect(fetchMock.mock.calls).toHaveLength(2)
+    unassigned.unmount()
+  })
+
+  it('disables draft controls while a save is pending and retains unsaved edits across section changes', async () => {
     let releaseSave = (_response: Response) => {}
-    const pendingSave = new Promise<Response>(resolve => {
-      releaseSave = resolve
-    })
-    const responseWithAllocation = {
-      ...allocationResponse,
-      allocations: [{
-        allocationVersionId: 'version-1',
-        commitmentType: '1',
-        streamCommitmentId: 'stream-commitment-1',
-        agreementBudgetFiscalYearId: '1',
-        outcomeId: 'outcome-1',
-        allocationMethod: 'amount',
-        allocationValue: 100
-      }, {
-        allocationVersionId: 'version-1',
-        commitmentType: '2',
-        streamCommitmentId: 'stream-commitment-1',
-        agreementBudgetFiscalYearId: '1',
-        outcomeId: 'outcome-1',
-        allocationMethod: 'amount',
-        allocationValue: 0
-      }]
-    }
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-      if (init?.method === 'PUT') {
-        return await pendingSave
-      }
-      return jsonResponse(responseWithAllocation)
-    })
+    const pendingSave = new Promise<Response>(resolve => { releaseSave = resolve })
+    const response = { ...allocationResponse, allocations: [{
+      allocationVersionId: 'version-1', commitmentType: '1', streamCommitmentId: 'stream-commitment-1',
+      agreementBudgetFiscalYearId: '1', outcomeId: 'outcome-1', allocationMethod: 'amount', allocationValue: '25.0000'
+    }] }
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => init?.method === 'PUT' ? pendingSave : jsonResponse(response))
     const wrapper = await mountTab(fetchMock as typeof fetch)
-
+    await findButton(wrapper, 'Edit allocation').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-control="allocation-modal"] input').setValue('70.00')
+    await wrapper.get('[data-control="allocation-modal"] form').trigger('submit')
+    await wrapper.get('[data-view="completion"]').trigger('click')
+    expect(wrapper.text()).toContain('Save your changes in Allocation')
+    expect(wrapper.getComponent(CompletionPanel).props('canComplete')).toBe(false)
+    await wrapper.get('[data-view="allocation"]').trigger('click')
+    expect(wrapper.get('[data-cell="amount"]').text()).toBe('CA$70.00')
     await findButton(wrapper, 'Save').trigger('click')
-    await wrapper.vm.$nextTick()
-
-    const methodSelect = wrapper.findAllComponents(InteractiveSelect)
-      .find(select => select.attributes('data-control') === 'allocation-method')
-    expect(methodSelect?.get('select').attributes()).toHaveProperty('disabled')
-    expect(findButton(wrapper, 'Delete').attributes()).toHaveProperty('disabled')
-    expect(findButton(wrapper, 'Remove allocation').attributes()).toHaveProperty('disabled')
-    expect(wrapper.get('tr[role="button"]').attributes()).toMatchObject({
-      'aria-disabled': 'true',
-      'tabindex': '-1'
-    })
-
+    expect(findButton(wrapper, 'Edit allocation').attributes()).toHaveProperty('disabled')
+    expect(findButton(wrapper, 'Generate rows').attributes()).toHaveProperty('disabled')
     releaseSave(jsonResponse({ ok: true }))
     await flushPromises()
     wrapper.unmount()
   })
 
-  it('blocks save, complete, and row generation while draft deletion is pending', async () => {
-    let releaseDelete = (_response: Response) => {}
-    const pendingDelete = new Promise<Response>(resolve => {
-      releaseDelete = resolve
-    })
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-      if (init?.method === 'DELETE') {
-        return await pendingDelete
-      }
-      return jsonResponse(allocationResponse)
-    })
-    const wrapper = await mountTab(fetchMock as typeof fetch)
-
-    await findButton(wrapper, 'Delete').trigger('click')
-    await wrapper.vm.$nextTick()
-
-    const generateButton = findButton(wrapper, 'Generate rows')
-    const saveButton = findButton(wrapper, 'Save')
-    const completeButton = findButton(wrapper, 'Submit for approval')
-    expect(generateButton.attributes()).toHaveProperty('disabled')
-    expect(saveButton.attributes()).toHaveProperty('disabled')
-    expect(completeButton.attributes()).toHaveProperty('disabled')
-    expect(wrapper.getComponent(WorkflowSection).props('canEdit')).toBe(false)
-
-    await generateButton.trigger('click')
-    await saveButton.trigger('click')
-    await completeButton.trigger('click')
-    expect(wrapper.find('[data-control="generate-modal"]').exists()).toBe(false)
-    expect(fetchMock.mock.calls.filter(([, init]) =>
-      init?.method === 'PUT' || init?.method === 'POST'
-    )).toHaveLength(0)
-
-    releaseDelete(jsonResponse({ ok: true }))
+  it('refreshes completion state after the approval workflow changes and leaves submitted workflow actions available', async () => {
+    const response = { ...allocationResponse, allocations: allocationResponse.budgetYears.map((year, index) => ({
+      allocationVersionId: 'version-1', commitmentType: '1', streamCommitmentId: `stream-commitment-${index + 1}`,
+      agreementBudgetFiscalYearId: String(year.id), outcomeId: 'outcome-1', allocationMethod: 'amount', allocationValue: '100.0000'
+    })) }
+    const fetchMock = vi.fn(async () => jsonResponse(response))
+    const wrapper = await mountTab(fetchMock as typeof fetch, config, 'en', { id: 'completion-1' }, 'completion')
+    const panel = wrapper.getComponent(CompletionPanel)
+    expect(panel.props()).toMatchObject({ entityType: 'gcs-outcome-cost-allocation:allocation-version', entityId: 'version-1', canComplete: false, canWorkWorkflow: true })
+    panel.vm.$emit('changed')
     await flushPromises()
-    wrapper.unmount()
-  })
-
-  it('refreshes the selected Workflow projection after submitting the allocation for approval', async () => {
-    const completeReadyResponse = {
-      ...allocationResponse,
-      allocations: allocationResponse.budgetYears.map((year, index) => ({
-        allocationVersionId: 'version-1',
-        commitmentType: '1',
-        streamCommitmentId: `stream-commitment-${index + 1}`,
-        agreementBudgetFiscalYearId: String(year.id),
-        outcomeId: 'outcome-1',
-        allocationMethod: 'amount',
-        allocationValue: 100
-      }))
-    }
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit): Promise<Response> =>
-      jsonResponse(completeReadyResponse))
-    const wrapper = await mountTab(fetchMock as typeof fetch)
-
-    await findButton(wrapper, 'Submit for approval').trigger('click')
-    await flushPromises()
-
-    expect(fetchMock.mock.calls.some(([input, init]) =>
-      String(input).includes('/api/completions/complete') && init?.method === 'POST'
-    )).toBe(true)
-    expect(wrapper.getComponent(WorkflowSection).props('refreshKey')).toBe(1)
-
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(panel.props('canWorkWorkflow')).toBe(true)
     wrapper.unmount()
   })
 })

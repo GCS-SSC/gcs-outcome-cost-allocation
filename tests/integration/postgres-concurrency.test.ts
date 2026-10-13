@@ -444,6 +444,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
       CASCADE
     `.execute(observerDb)
     await sql`CREATE SCHEMA extensions`.execute(observerDb)
+    await sql`CREATE TABLE extensions.kv_entry (id bigserial primary key, extension_key text, owner_type text, owner_id text, config_key text, value jsonb, _deleted boolean DEFAULT false)`.execute(observerDb)
     await sql`CREATE TABLE "Common_Entity_Type" (
       egcs_cn_type text PRIMARY KEY,
       egcs_cn_ownerkind text,
@@ -795,6 +796,8 @@ describe('outcome allocation PostgreSQL concurrency', () => {
       host_trigger_count: '0'
     })
     await applyMigrationsUp(observerDb)
+    // Fixed Agreement fixtures stay below this range; rolled-back extension inserts still consume sequence values.
+    await sql`SELECT setval(pg_get_serial_sequence('extensions.gcs_outcome_cost_allocation_versions', 'id'), 2000000, true)`.execute(observerDb)
 
     await sql`
       INSERT INTO "Transfer_Payment_Profile" (
@@ -1291,7 +1294,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
     ])
     await expect(allocator({
       db: observerDb as unknown as Transaction<unknown>, agreementId: '4', agencyId: '4000', streamId: '4', amount: '100.00', currency: 'cad',
-      output: { kind: 'commitment', commitmentTypeId: '4' },
+      output: { kind: 'commitment', commitmentId: '4', commitmentTypeId: '4' },
       codingLines: [{ codingLineId: '12', agencyChartOfAccountId: '12', agencyFiscalYearId: '50', accountingDimensions: [] }],
       commitmentCodingLines: [], existingLines: [], codingPaidFloors: [], codingAvailableAmounts: [],
       config: { enabledCommitmentTypes: ['4'], mappings: [] }, agencyConfig: {}
@@ -1445,6 +1448,50 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         WHERE id IN (25, 250)
       `.execute(observerDb)
     }
+  })
+
+  it.each([
+    { amount: '80.00', includeRow: true },
+    { amount: '0.00', includeRow: true },
+    { amount: '0.00', includeRow: false }
+  ])('activates internally balanced remaining snapshots ($amount, rows=$includeRow) beneath gross funding', async ({ amount, includeRow }) => {
+    await expect(managedMutation(observerDb, '5', async trx => {
+      const version = await trx.insertInto('extensions.gcs_outcome_cost_allocation_versions')
+        .values({ agreement_id: '5', version_number: 909, status: 'draft' }).returning('id').executeTakeFirstOrThrow()
+      if (includeRow) await trx.insertInto('extensions.gcs_outcome_cost_allocation_allocations').values({
+        allocation_version_id: String(version.id), agreement_id: '5', commitment_type: '5', stream_commitment_id: '13',
+        agreement_budget_fiscal_year_id: budgetYearStableId(26), outcome_id: '33', allocation_method: 'amount', allocation_value: amount,
+        outcome_label_en: 'Outcome 4', outcome_label_fr: 'Résultat 4', commitment_label_en: 'Coding 13', commitment_label_fr: 'Code 13',
+        fiscal_year_display: '2026-2027', resolved_amount: amount, funding_basis_amount: amount
+      }).execute()
+      const completed = await trx.updateTable('extensions.gcs_outcome_cost_allocation_versions')
+        .set({ status: 'active', completed_at: new Date('2026-10-12T00:00:00Z'), funding_basis_amount: amount })
+        .where('id', '=', String(version.id)).returning('status').executeTakeFirstOrThrow()
+      expect(completed.status).toBe('active')
+      throw new Error('snapshot test rollback')
+    })).rejects.toThrow('snapshot test rollback')
+  })
+
+  it.each([
+    { secondBasis: '80.00', valid: true },
+    { secondBasis: '81.00', valid: false }
+  ])('requires a consistent captured yearly pool across allocation rows ($secondBasis)', async ({ secondBasis, valid }) => {
+    const activation = managedMutation(observerDb, '5', async trx => {
+      const version = await trx.insertInto('extensions.gcs_outcome_cost_allocation_versions')
+        .values({ agreement_id: '5', version_number: 910, status: 'draft' }).returning('id').executeTakeFirstOrThrow()
+      await trx.insertInto('extensions.gcs_outcome_cost_allocation_allocations').values(['5', '6'].map((commitmentType, index) => ({
+        allocation_version_id: String(version.id), agreement_id: '5', commitment_type: commitmentType, stream_commitment_id: '13',
+        agreement_budget_fiscal_year_id: budgetYearStableId(26), outcome_id: '33', allocation_method: 'amount', allocation_value: '40.00',
+        outcome_label_en: 'Outcome 4', outcome_label_fr: 'Résultat 4', commitment_label_en: 'Coding 13', commitment_label_fr: 'Code 13',
+        fiscal_year_display: '2026-2027', resolved_amount: '40.00', funding_basis_amount: index === 0 ? '80.00' : secondBasis
+      }))).execute()
+      await trx.updateTable('extensions.gcs_outcome_cost_allocation_versions')
+        .set({ status: 'active', completed_at: new Date('2026-10-12T00:00:00Z'), funding_basis_amount: '80.00' })
+        .where('id', '=', String(version.id)).execute()
+      throw new Error('consistent pool test rollback')
+    })
+    if (valid) await expect(activation).rejects.toThrow('consistent pool test rollback')
+    else await expect(activation).rejects.toMatchObject({ code: '23514', constraint: 'gcs_outcome_cost_allocation_snapshot_economics_guard' })
   })
 
   it('enforces allocation lifecycle, coordinate, and provenance invariants in PostgreSQL', async () => {
@@ -2769,7 +2816,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
         config: { enabledCommitmentTypes: ['12'], mappings: [] }, agencyConfig: {}
       })
       expect(generated).toEqual([{ codingLineId: '20', amount: '50.00' }])
-      if (!generated) throw new Error('Expected managed payment allocation.')
+      if (!Array.isArray(generated)) throw new Error('Expected managed payment allocation.')
       await trx
         .insertInto('Funding_Case_Agreement_Payment')
         .values({
@@ -2803,7 +2850,9 @@ describe('outcome allocation PostgreSQL concurrency', () => {
       await waitForLatchOrTask(paymentCreated.promise, creatingPayment, 'Generated payment creation')
       resurrecting = waiterDb.transaction().execute(async trx => {
         await guard({
+          agencyConfigurations: {},
           agreementFinancials: {
+            getCostAllocationContext: vi.fn(async () => ({ agreementId: '1', hasPendingEffects: false, codingPaidAmounts: [] })),
             getPaymentCalculation: vi.fn(),
             getClaimRecoveryProjection: vi.fn(async () => ({ agreementId: '12', entries: [] })),
             getRecordedPaidToDate: vi.fn(), getPaidAccountingProjection: vi.fn(), getCommitmentPaymentCapacity: vi.fn(), getCommitmentLinePaymentCoverage: vi.fn(),
@@ -3900,7 +3949,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
     expect(generated).toEqual([{ codingLineId: '19', amount: '0.01' }])
 
     await observerDb.transaction().execute(async trx => {
-      if (!generated) throw new Error('Expected Outcome allocation payment coding.')
+      if (!Array.isArray(generated)) throw new Error('Expected Outcome allocation payment coding.')
       await lockAgreementAllocationLifecycle(trx, '920000')
       await trx.insertInto('Funding_Case_Agreement_Payment').values({
         id: '181', egcs_fc_fundingagreementcommitment: '180',

@@ -78,6 +78,8 @@ const createRouteContext = (
     allocationVersionId: '2'
   },
   config: {},
+  agencyConfig: {},
+  agreementFinancials: { getCostAllocationContext: async () => ({ agreementId: '1', codingPaidAmounts: [], hasPendingEffects: false }) } as never,
   writeAuthorization: {
     lockAuthState: vi.fn(async () => undefined),
     authorizeCurrentEntity: vi.fn(async () => undefined)
@@ -143,7 +145,7 @@ describe('outcome allocation routes', () => {
     expect(routeMocks.createDraftAllocationVersion).toHaveBeenCalledWith(
       { wrapped: { raw: true } },
       '1',
-      { agencyId: 'agency-1', streamId: 'stream-1' },
+      expect.objectContaining({ agencyId: 'agency-1', streamId: 'stream-1' }),
       expect.objectContaining({
         lockAuthState: expect.any(Function),
         authorizeCurrentEntity: expect.any(Function)
@@ -171,7 +173,7 @@ describe('outcome allocation routes', () => {
       { wrapped: { raw: true } },
       '1',
       '2',
-      { agencyId: 'agency-1', streamId: 'stream-1' },
+      expect.objectContaining({ agencyId: 'agency-1', streamId: 'stream-1' }),
       expect.objectContaining({
         lockAuthState: expect.any(Function),
         authorizeCurrentEntity: expect.any(Function)
@@ -187,14 +189,16 @@ describe('outcome allocation routes', () => {
     }]
     routeMocks.getAllocationVersions.mockResolvedValue(versions)
     routeMocks.getAgreementOutcomes.mockResolvedValue([{ id: 'outcome-1' }])
-    routeMocks.getAgreementBudgetYears.mockResolvedValue([{ id: 'year-1' }])
+    routeMocks.getAgreementBudgetYears.mockResolvedValue([{ id: 'year-1', fiscal_year_id: '2025', program_funding: '1000.00' }])
     routeMocks.getSavedAllocations.mockResolvedValue([{ outcomeId: 'outcome-1' }])
     routeMocks.getStreamCommitmentLines.mockResolvedValue([{ id: 'line-1' }])
 
     await expect(invokeRoute(route, createRouteContext())).resolves.toEqual({
       currency: 'cad',
       outcomes: [{ id: 'outcome-1' }],
-      budgetYears: [{ id: 'year-1' }],
+      budgetYears: [{ id: 'year-1', fiscal_year_id: '2025', program_funding: '1000.00', paid_amount: '0.00', remaining_funding: '1000.00' }],
+      codingPaidAmounts: [],
+      hasPendingEffects: false,
       commitmentTypes: [],
       versions,
       allocations: [{ outcomeId: 'outcome-1' }],
@@ -206,6 +210,25 @@ describe('outcome allocation routes', () => {
       '1',
       'stream-1'
     )
+  })
+
+  it('publishes the unpaid pool and effective paid coding without changing gross funding', async () => {
+    const route = (await import('../../server/api/allocations.get')).default
+    routeMocks.getAgreementBudgetYears.mockResolvedValue([{
+      id: '3', fiscal_year_id: '2025', fiscal_year_display: '2025–2026', program_funding: '1000.00'
+    }])
+    const financials = {
+      getCostAllocationContext: vi.fn(async () => ({
+        agreementId: '1', hasPendingEffects: false,
+        codingPaidAmounts: [{ agencyChartOfAccountId: '10', agencyFiscalYearId: '2025', paidAmount: '200.00' }]
+      }))
+    }
+    const result = await invokeRoute(route, createRouteContext({ agreementFinancials: financials as never }))
+    expect(result).toMatchObject({
+      budgetYears: [{ program_funding: '1000.00', paid_amount: '200.00', remaining_funding: '800.00' }],
+      codingPaidAmounts: [{ agencyChartOfAccountId: '10', agencyFiscalYearId: '2025', paidAmount: '200.00' }],
+      hasPendingEffects: false
+    })
   })
 
   it('keeps allocation reads side-effect free when an agreement has no versions', async () => {
@@ -246,7 +269,7 @@ describe('outcome allocation routes', () => {
         allocationMethod: 'percentage',
         allocationValue: '25.5000'
       }],
-      { agencyId: 'agency-1', streamId: 'stream-1' },
+      expect.objectContaining({ agencyId: 'agency-1', streamId: 'stream-1' }),
       expect.objectContaining({
         lockAuthState: expect.any(Function),
         authorizeCurrentEntity: expect.any(Function)
@@ -285,7 +308,7 @@ describe('outcome allocation routes', () => {
         allocationMethod: 'amount',
         allocationValue: '25.0000'
       }],
-      { agencyId: 'agency-1', streamId: 'stream-1' },
+      expect.objectContaining({ agencyId: 'agency-1', streamId: 'stream-1' }),
       expect.objectContaining({
         lockAuthState: expect.any(Function),
         authorizeCurrentEntity: expect.any(Function)

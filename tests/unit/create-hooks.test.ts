@@ -155,6 +155,7 @@ describe('outcome cost allocation lifecycle hooks', () => {
   it('registers lifecycle guards without superseded create handlers', async () => {
     const { names } = await loadHooks()
     expect(names).toEqual([
+      'gcs:extension:configuration-guard',
       'gcs:extension:disable-guard',
       'gcs:extension:agreement-lifecycle-lock',
       'gcs:extension:agreement-delete-guard',
@@ -287,6 +288,7 @@ describe('outcome cost allocation lifecycle hooks', () => {
     db.generatedPayment = true
 
     await expect(paymentMutation({
+      agencyConfigurations: {},
       operation: 'payment.update',
       event: {},
       db: db as unknown as Transaction<unknown>,
@@ -311,7 +313,9 @@ describe('outcome cost allocation lifecycle hooks', () => {
     allocationDataMocks.generatedPaymentStatusResurrectionExceedsCoverage.mockResolvedValueOnce(true)
 
     await expect(paymentMutation({
-      agreementFinancials: { getPaymentCalculation: vi.fn(), getClaimRecoveryProjection: vi.fn(async () => ({ agreementId: 'agreement-1', entries: [] })), getRecordedPaidToDate: vi.fn(), getPaidAccountingProjection: vi.fn(), getCommitmentPaymentCapacity: vi.fn(), getCommitmentLinePaymentCoverage: vi.fn(), validatePaymentAllocations: vi.fn() },
+      agencyConfigurations: {},
+      agreementFinancials: { getCostAllocationContext: vi.fn(async () => ({ agreementId: '1', hasPendingEffects: false, codingPaidAmounts: [] })),
+            getPaymentCalculation: vi.fn(), getClaimRecoveryProjection: vi.fn(async () => ({ agreementId: 'agreement-1', entries: [] })), getRecordedPaidToDate: vi.fn(), getPaidAccountingProjection: vi.fn(), getCommitmentPaymentCapacity: vi.fn(), getCommitmentLinePaymentCoverage: vi.fn(), validatePaymentAllocations: vi.fn() },
       operation: 'payment.status-change',
       event: {},
       db: db as unknown as Transaction<unknown>,
@@ -336,7 +340,9 @@ describe('outcome cost allocation lifecycle hooks', () => {
     allocationDataMocks.generatedPaymentStatusResurrectionExceedsCoverage.mockResolvedValueOnce(true)
 
     await expect(paymentMutation({
-      agreementFinancials: { getPaymentCalculation: vi.fn(), getClaimRecoveryProjection: vi.fn(async () => ({ agreementId: 'agreement-1', entries: [] })), getRecordedPaidToDate: vi.fn(), getPaidAccountingProjection: vi.fn(), getCommitmentPaymentCapacity: vi.fn(), getCommitmentLinePaymentCoverage: vi.fn(), validatePaymentAllocations: vi.fn() },
+      agencyConfigurations: {},
+      agreementFinancials: { getCostAllocationContext: vi.fn(async () => ({ agreementId: '1', hasPendingEffects: false, codingPaidAmounts: [] })),
+            getPaymentCalculation: vi.fn(), getClaimRecoveryProjection: vi.fn(async () => ({ agreementId: 'agreement-1', entries: [] })), getRecordedPaidToDate: vi.fn(), getPaidAccountingProjection: vi.fn(), getCommitmentPaymentCapacity: vi.fn(), getCommitmentLinePaymentCoverage: vi.fn(), validatePaymentAllocations: vi.fn() },
       operation: 'payment.status-change',
       event: {},
       db: db as unknown as Transaction<unknown>,
@@ -360,6 +366,7 @@ describe('outcome cost allocation lifecycle hooks', () => {
     const ordinaryDb = new WriteDb()
 
     await expect(paymentMutation({
+      agencyConfigurations: {},
       operation: 'payment.delete',
       event: {},
       db: ordinaryDb as unknown as Transaction<unknown>,
@@ -367,6 +374,7 @@ describe('outcome cost allocation lifecycle hooks', () => {
       paymentId: 'payment-1'
     })).resolves.toBeUndefined()
     await expect(paymentMutation({
+      agencyConfigurations: {},
       operation: 'payment.update',
       event: {},
       db: ordinaryDb as unknown as Transaction<unknown>,
@@ -375,6 +383,7 @@ describe('outcome cost allocation lifecycle hooks', () => {
       changes: { egcs_fc_comment: 'Ordinary note' }
     })).resolves.toBeUndefined()
     await expect(paymentMutation({
+      agencyConfigurations: {},
       operation: 'payment-line.create',
       event: {},
       db: ordinaryDb as unknown as Transaction<unknown>,
@@ -391,6 +400,7 @@ describe('outcome cost allocation lifecycle hooks', () => {
     const generatedDb = new WriteDb()
     generatedDb.generatedPayment = true
     await expect(paymentMutation({
+      agencyConfigurations: {},
       operation: 'payment.update',
       event: {},
       db: generatedDb as unknown as Transaction<unknown>,
@@ -399,7 +409,9 @@ describe('outcome cost allocation lifecycle hooks', () => {
       changes: { egcs_fc_comment: 'Allowed note' }
     })).resolves.toBeUndefined()
     await expect(paymentMutation({
-      agreementFinancials: { getPaymentCalculation: vi.fn(), getClaimRecoveryProjection: vi.fn(async () => ({ agreementId: 'agreement-1', entries: [] })), getRecordedPaidToDate: vi.fn(), getPaidAccountingProjection: vi.fn(), getCommitmentPaymentCapacity: vi.fn(), getCommitmentLinePaymentCoverage: vi.fn(), validatePaymentAllocations: vi.fn() },
+      agencyConfigurations: {},
+      agreementFinancials: { getCostAllocationContext: vi.fn(async () => ({ agreementId: '1', hasPendingEffects: false, codingPaidAmounts: [] })),
+            getPaymentCalculation: vi.fn(), getClaimRecoveryProjection: vi.fn(async () => ({ agreementId: 'agreement-1', entries: [] })), getRecordedPaidToDate: vi.fn(), getPaidAccountingProjection: vi.fn(), getCommitmentPaymentCapacity: vi.fn(), getCommitmentLinePaymentCoverage: vi.fn(), validatePaymentAllocations: vi.fn() },
       operation: 'payment.status-change',
       event: {},
       db: generatedDb as unknown as Transaction<unknown>,
@@ -421,6 +433,7 @@ describe('outcome cost allocation lifecycle hooks', () => {
     db.generatedPayment = true
 
     await expect(paymentMutation({
+      agencyConfigurations: {},
       operation: 'payment-line.delete',
       event: {},
       db: db as unknown as Transaction<unknown>,
@@ -438,6 +451,7 @@ describe('outcome cost allocation lifecycle hooks', () => {
     db.generatedCommitment = true
 
     await expect(paymentMutation({
+      agencyConfigurations: {},
       operation: 'payment.update',
       event: {},
       db: db as unknown as Transaction<unknown>,
@@ -457,6 +471,7 @@ describe('outcome cost allocation lifecycle hooks', () => {
     db.generatedPaymentIds.add('generated-payment')
 
     await expect(paymentMutation({
+      agencyConfigurations: {},
       operation: 'payment-line.update',
       event: {},
       db: db as unknown as Transaction<unknown>,
@@ -477,6 +492,7 @@ describe('outcome cost allocation lifecycle hooks', () => {
     db.generatedCommitmentLine = true
 
     await expect(paymentMutation({
+      agencyConfigurations: {},
       operation: 'payment-line.update',
       event: {},
       db: db as unknown as Transaction<unknown>,
@@ -562,6 +578,7 @@ describe('outcome cost allocation lifecycle hooks', () => {
     db.extensionTablesExist = false
 
     await paymentMutation({
+      agencyConfigurations: {},
       event: {},
       db: db as unknown as Transaction<unknown>,
       operation: 'payment.delete',

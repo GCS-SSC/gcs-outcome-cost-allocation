@@ -5,10 +5,10 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 describe('outcome cost allocation extension UI', () => {
-  it('renders stream configuration and agreement allocation editors as tables', async () => {
+  it('renders allocation summaries as tables and edits allocation values in a shared modal', async () => {
     const [streamConfig, agreementTab, manifest] = await Promise.all([
       readFile(join(process.cwd(), 'components/StreamOutcomeCostAllocationConfig.vue'), 'utf8'),
-      readFile(join(process.cwd(), 'components/AgreementOutcomeCostAllocationTab.vue'), 'utf8'),
+      readFile(join(process.cwd(), 'components/OutcomeAllocationDetail.vue'), 'utf8'),
       readFile(join(process.cwd(), 'extension.config.ts'), 'utf8')
     ])
 
@@ -25,12 +25,16 @@ describe('outcome cost allocation extension UI', () => {
     expect(streamConfig).toContain("expandedRows.value[groupId] === true")
     expect(agreementTab).toContain('<ExtensionTable')
     expect(agreementTab).toContain('allocationColumns')
+    expect(agreementTab).toContain('isAllocationModalOpen')
+    expect(agreementTab).toContain('openAllocationEditor')
+    expect(agreementTab).toContain('name="allocationMethod"')
+    expect(agreementTab).toContain('name="allocationValue"')
+    expect(agreementTab).toContain('novalidate')
     expect(agreementTab).toContain('ConfiguredAssociationRow')
     expect(agreementTab).toContain('getAllocationAmount')
     expect(agreementTab).toContain('selectedVersionId')
-    expect(agreementTab).toContain('completeSelectedVersion')
-    expect(agreementTab).toContain('createDraftVersion')
-    expect(agreementTab).toContain('hasDraftVersion')
+    expect(agreementTab).toContain('<ExtensionCompletionPanel')
+    expect(agreementTab).toContain(':can-work-workflow="!hasPendingDraftMutation"')
     expect(agreementTab).toContain('openGenerateRows')
     expect(agreementTab).toContain('applyGeneratedRows')
     expect(agreementTab).toContain('generateRows')
@@ -40,7 +44,6 @@ describe('outcome cost allocation extension UI', () => {
     expect(agreementTab).toContain('displayedAssociationRows')
     expect(agreementTab).toContain('generationYearIds')
     expect(agreementTab).toContain('useExtensionConfirmDialog')
-    expect(agreementTab).toContain("compareMoney(year.program_funding, ZERO_MONEY) <= 0")
     expect(agreementTab).toContain('multiple')
     expect(agreementTab).not.toContain('type="multiple"')
     expect(agreementTab).toContain("id: 'amount'")
@@ -59,7 +62,7 @@ describe('outcome cost allocation extension UI', () => {
     expect(agreementTab).toContain('<ExtensionSaveButton')
     expect(agreementTab).toContain('<ExtensionWorkflowSection')
     expect(agreementTab).toContain('entity-type="gcs-outcome-cost-allocation:allocation-version"')
-    expect(agreementTab).toContain(':entity-id="selectedVersion.id"')
+    expect(agreementTab).toContain(':entity-id="recordId"')
     expect(manifest).toContain("en: 'Cost Allocation'")
     expect(manifest).toContain("completion: 'supported'")
     expect(manifest).toContain("approvalSubmission: 'on_completion'")
@@ -73,7 +76,7 @@ describe('outcome cost allocation extension UI', () => {
 
   it('does not create draft allocation rows as a render side effect', async () => {
     const agreementTab = await readFile(
-      join(process.cwd(), 'components/AgreementOutcomeCostAllocationTab.vue'),
+      join(process.cwd(), 'components/OutcomeAllocationDetail.vue'),
       'utf8'
     )
 

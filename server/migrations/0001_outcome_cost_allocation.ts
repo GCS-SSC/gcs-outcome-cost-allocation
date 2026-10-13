@@ -361,21 +361,16 @@ export default defineGcsExtensionMigration({
 
           IF EXISTS (
             WITH expected_years AS (
-              SELECT
-                COALESCE(agreement_year.egcs_fc_originalbudgetfiscalyear, agreement_year.id) AS stable_year_id,
-                COALESCE(SUM(line_item.egcs_fc_programfunding), 0) AS funding_basis_amount
+              SELECT DISTINCT
+                COALESCE(agreement_year.egcs_fc_originalbudgetfiscalyear, agreement_year.id) AS stable_year_id
               FROM "Funding_Case_Agreement_Budget_Fiscal_Year" agreement_year
               INNER JOIN "Funding_Case_Agreement_Budget_Version" budget_version
                 ON budget_version.id = agreement_year.egcs_fc_budgetversion
                AND budget_version.egcs_fc_fundingagreement = agreement_year.egcs_fc_fundingagreement
                AND budget_version.egcs_fc_iscurrent = true
                AND budget_version._deleted = false
-              LEFT JOIN "Funding_Case_Agreement_Budget_Line_Item" line_item
-                ON line_item.egcs_fc_fundingagreementbudgetfiscalyear = agreement_year.id
-               AND line_item._deleted = false
               WHERE agreement_year.egcs_fc_fundingagreement = NEW.agreement_id
                 AND agreement_year._deleted = false
-              GROUP BY COALESCE(agreement_year.egcs_fc_originalbudgetfiscalyear, agreement_year.id)
             ), allocation_years AS (
               SELECT
                 allocation.agreement_budget_fiscal_year_id AS stable_year_id,
@@ -388,30 +383,23 @@ export default defineGcsExtensionMigration({
               GROUP BY allocation.agreement_budget_fiscal_year_id
             )
             SELECT 1
-            FROM expected_years expected
-            FULL JOIN allocation_years allocation
+            FROM allocation_years allocation
+            LEFT JOIN expected_years expected
               ON allocation.stable_year_id = expected.stable_year_id
-            WHERE COALESCE(allocation.resolved_amount, 0)
-                IS DISTINCT FROM COALESCE(expected.funding_basis_amount, 0)
+            WHERE expected.stable_year_id IS NULL
+              OR allocation.minimum_funding_basis_amount < 0
               OR allocation.minimum_funding_basis_amount
-                IS DISTINCT FROM expected.funding_basis_amount
-              OR allocation.maximum_funding_basis_amount
-                IS DISTINCT FROM expected.funding_basis_amount
-          ) OR NEW.funding_basis_amount IS DISTINCT FROM (
-            SELECT COALESCE(SUM(line_item.egcs_fc_programfunding), 0)
-            FROM "Funding_Case_Agreement_Budget_Fiscal_Year" agreement_year
-            INNER JOIN "Funding_Case_Agreement_Budget_Version" budget_version
-              ON budget_version.id = agreement_year.egcs_fc_budgetversion
-             AND budget_version.egcs_fc_fundingagreement = agreement_year.egcs_fc_fundingagreement
-             AND budget_version.egcs_fc_iscurrent = true
-             AND budget_version._deleted = false
-            LEFT JOIN "Funding_Case_Agreement_Budget_Line_Item" line_item
-              ON line_item.egcs_fc_fundingagreementbudgetfiscalyear = agreement_year.id
-             AND line_item._deleted = false
-            WHERE agreement_year.egcs_fc_fundingagreement = NEW.agreement_id
-              AND agreement_year._deleted = false
+                IS DISTINCT FROM allocation.maximum_funding_basis_amount
+              OR allocation.resolved_amount
+                IS DISTINCT FROM allocation.minimum_funding_basis_amount
+            UNION ALL
+            SELECT 1
+            WHERE NEW.funding_basis_amount IS DISTINCT FROM (
+              SELECT COALESCE(SUM(minimum_funding_basis_amount), 0)
+              FROM allocation_years
+            )
           ) THEN
-            RAISE EXCEPTION 'Outcome cost allocation snapshot economics do not match the current Agreement budget.'
+            RAISE EXCEPTION 'Outcome cost allocation snapshot economics are inconsistent with their captured remaining funding basis.'
               USING ERRCODE = '23514',
                 CONSTRAINT = 'gcs_outcome_cost_allocation_snapshot_economics_guard';
           END IF;

@@ -1046,6 +1046,18 @@ describe('outcome allocation version lifecycle', () => {
   // One embedded PGlite client serializes commands and cannot represent independent
   // PostgreSQL sessions waiting on row locks. This deterministic model tests service
   // sequencing only; the opt-in PostgreSQL integration suite proves database blocking.
+  it('rejects draft creation with unresolved funding effects without creating a version', async () => {
+    const db = new ScriptedDb()
+    const financials = { getCostAllocationContext: vi.fn(async () => ({
+      agreementId: 'agreement-1', codingPaidAmounts: [], hasPendingEffects: true
+    })) }
+    await expect(createDraftAllocationVersionWithExpectedScope(asAllocationDb(db), 'agreement-1', {
+      ...expectedAgreementScope, financials
+    })).rejects.toMatchObject({ code: 'GCS_OUTCOME_COST_ALLOCATION_PENDING_EFFECTS' })
+    expect(db.committedWrites).toEqual([])
+    expect(financials.getCostAllocationContext).toHaveBeenCalledWith({ transaction: expect.anything() })
+  })
+
   it('reuses existing drafts without inserting another version', async () => {
     const db = new ScriptedDb()
     db.enqueue('select', 'extensions.gcs_outcome_cost_allocation_versions', [versionRow])

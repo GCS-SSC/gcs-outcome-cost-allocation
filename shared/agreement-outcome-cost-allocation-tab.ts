@@ -1,11 +1,11 @@
 import { translateGcsExtensionMessage } from '@gcs-ssc/extensions'
 import { notifications } from '../i18n/notifications'
-import {
-  type CommitmentType,
-  type CostAllocationVersion,
-  type AllocationDecimalInput,
-  type AllocationMoney,
-  type VersionedOutcomeAllocationInput
+import type {
+  CommitmentType,
+  CostAllocationVersion,
+  AllocationDecimalInput,
+  AllocationMoney,
+  VersionedOutcomeAllocationInput
 } from './allocation'
 
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
@@ -50,23 +50,6 @@ interface ApiErrorResponse {
       message?: string
     }>
   }
-}
-
-/**
- * Preserves an available selection, otherwise preferring a draft, active, then first version.
- */
-export const resolveSelectedOutcomeAllocationVersionId = (
-  currentVersionId: string,
-  availableVersions: CostAllocationVersion[]
-) => {
-  if (currentVersionId && availableVersions.some((version: CostAllocationVersion) => version.id === currentVersionId)) {
-    return currentVersionId
-  }
-
-  return availableVersions.find((version: CostAllocationVersion) => version.status === 'draft')?.id
-    ?? availableVersions.find((version: CostAllocationVersion) => version.status === 'active')?.id
-    ?? availableVersions[0]?.id
-    ?? ''
 }
 
 /**
@@ -189,22 +172,6 @@ export const getOutcomeAllocationVersionEndpoint = (allocationsEndpoint: string,
   `${getOutcomeAllocationVersionsEndpoint(allocationsEndpoint)}/${versionId}`
 
 /**
- * Selects the created draft id when returned, otherwise preserving the current version id.
- */
-export const resolveCreatedDraftVersionId = (
-  currentVersionId: string,
-  response: { version?: CostAllocationVersion }
-) => response.version?.id ? response.version.id : currentVersionId
-
-/**
- * Clears the selected id only when the deleted draft was selected.
- */
-export const resolveDeletedDraftVersionId = (
-  currentVersionId: string,
-  deletedVersionId: string
-) => currentVersionId === deletedVersionId ? '' : currentVersionId
-
-/**
  * Builds the version-scoped allocation replacement request body.
  */
 export const buildSaveOutcomeAllocationsRequestBody = (
@@ -248,14 +215,63 @@ export const deleteOutcomeAllocationDraftVersionRequest = async (
 }
 
 /**
- * Returns the locale-selected title and description for allocation save, activation, deletion, or error feedback.
+ * Returns the locale-selected title and description for allocation save, deletion, or error feedback.
  */
 export const getOutcomeAllocationToastText = (
   locale: string,
-  key: 'saved' | 'submitted' | 'deleted' | 'error'
+  key: 'saved' | 'deleted' | 'error'
 ) => {
   return {
     title: translateGcsExtensionMessage(notifications, locale, key === 'error' ? 'error' : 'success'),
     description: key === 'error' ? '' : translateGcsExtensionMessage(notifications, locale, key)
   }
+}
+
+export interface AllocationResponse {
+  currency: string
+  outcomes: Array<{
+    id: string
+    label_en: string
+    label_fr: string
+  }>
+  budgetYears: Array<{
+    id: string
+    stream_budget_id?: string | null
+    fiscal_year_id: string
+    fiscal_year_display: string
+    program_funding: AllocationMoney
+    paid_amount: AllocationMoney
+    remaining_funding: AllocationMoney
+  }>
+  codingPaidAmounts: Array<{ agencyChartOfAccountId: string; agencyFiscalYearId: string; paidAmount: AllocationMoney; labelEn?: string; labelFr?: string; fiscalYearDisplay?: string }>
+  hasPendingEffects: boolean
+  versions: CostAllocationVersion[]
+  allocations: VersionedOutcomeAllocationInput[]
+  streamCommitments: Array<{
+    id: string
+    stream_budget_id: string
+    agency_chart_of_account_id: string
+    fiscal_year_id: string
+    fiscal_year_display: string
+    label_en?: string
+    label_fr?: string
+    gl?: number
+    gl_description?: string
+  }>
+  commitmentTypes: Array<{ id: string, label_en: string, label_fr: string }>
+}
+
+/**
+ * Formats exact allocated cents in the owning denomination.
+ * @param value - Canonical allocated money.
+ * @param language - Current interface locale.
+ * @param currency - Owning Agreement denomination.
+ * @returns Localized currency text without numeric coercion.
+ */
+export const formatCurrencyAmount = (value: AllocationMoney, language: string, currency: string) => {
+  const [integer = '0', fraction = '00'] = value.split('.')
+  const units = integer === '-0' ? -0 : BigInt(integer)
+  return new Intl.NumberFormat(language, {
+    style: 'currency', currency, minimumFractionDigits: 2, maximumFractionDigits: 2
+  }).formatToParts(units).map(part => part.type === 'fraction' ? fraction : part.value).join('')
 }

@@ -9,7 +9,7 @@ let db: Kysely<OutcomeCostAllocationHostDatabase>
 const coding = (id: string) => ({ codingLineId: id, agencyChartOfAccountId: id, agencyFiscalYearId: '2026', accountingDimensions: [] })
 const context = (overrides: Partial<GcsCodingAllocatorContext> = {}): GcsCodingAllocatorContext => ({
   db: db as unknown as Transaction<unknown>, agreementId: '1', agencyId: '1', streamId: '1', currency: 'cad', amount: '100.00',
-  output: { kind: 'commitment', commitmentTypeId: '1' }, codingLines: [coding('10'), coding('20')],
+  output: { kind: 'commitment', commitmentId: '1', commitmentTypeId: '1' }, codingLines: [coding('10'), coding('20')],
   commitmentCodingLines: [coding('10'), coding('20')], existingLines: [], codingPaidFloors: [], codingAvailableAmounts: [],
   config: { enabledCommitmentTypes: ['1'], mappings: [] }, agencyConfig: {}, ...overrides
 })
@@ -19,6 +19,7 @@ describe('host-interface outcome allocator', () => {
     const pg = await KyselyPGlite.create('memory://', { parsers: { 20: String } })
     db = new Kysely({ dialect: pg.dialect })
     await sql`CREATE SCHEMA extensions`.execute(db)
+    await sql`CREATE TABLE extensions.kv_entry (id bigserial primary key, extension_key text, owner_type text, owner_id text, config_key text, value jsonb, _deleted boolean DEFAULT false)`.execute(db)
     await sql`CREATE TABLE extensions.gcs_outcome_cost_allocation_versions (
       id bigint PRIMARY KEY, agreement_id bigint, status text, _deleted boolean DEFAULT false
     )`.execute(db)
@@ -28,7 +29,7 @@ describe('host-interface outcome allocator', () => {
     )`.execute(db)
   })
   beforeEach(async () => {
-    await sql`TRUNCATE extensions.gcs_outcome_cost_allocation_allocations, extensions.gcs_outcome_cost_allocation_versions`.execute(db)
+    await sql`TRUNCATE extensions.kv_entry, extensions.gcs_outcome_cost_allocation_allocations, extensions.gcs_outcome_cost_allocation_versions`.execute(db)
     await sql`INSERT INTO extensions.gcs_outcome_cost_allocation_versions (id, agreement_id, status) VALUES (1, 1, 'active'), (2, 1, 'inactive'), (3, 2, 'active')`.execute(db)
     await sql`INSERT INTO extensions.gcs_outcome_cost_allocation_allocations
       (allocation_version_id, agreement_id, commitment_type, stream_commitment_id, resolved_amount)
@@ -40,6 +41,13 @@ describe('host-interface outcome allocator', () => {
     expect(await allocator(context({ amount: '40.00' }))).toEqual([
       { codingLineId: '10', amount: '30.00' }, { codingLineId: '20', amount: '10.00' }
     ])
+  })
+
+  it('retains the creation-time matrix after a different version activates', async () => {
+    await allocator(context())
+    await sql`UPDATE extensions.gcs_outcome_cost_allocation_versions SET status = CASE WHEN id = 2 THEN 'active' ELSE 'inactive' END WHERE agreement_id = 1`.execute(db)
+    expect(await allocator(context({ amount: '40.00' }))).toEqual([{ codingLineId: '10', amount: '30.00' }, { codingLineId: '20', amount: '10.00' }])
+    expect(await allocator(context({ amount: '40.00', output: { kind: 'commitment', commitmentId: '2', commitmentTypeId: '1' } }))).toEqual([{ codingLineId: '10', amount: '40.00' }])
   })
 
   it('adds paid floors to a new split of unpaid funds rather than targeting cumulative percentages', async () => {
@@ -76,6 +84,12 @@ describe('host-interface outcome allocator', () => {
       .rejects.toMatchObject({ code: 'GCS_OUTCOME_COST_ALLOCATION_PAYMENT_EXCEEDS_GENERATED_LINE' })
   })
 
+  it('preserves fully paid coding when the remaining matrix has no allocation rows', async () => {
+    await sql`DELETE FROM extensions.gcs_outcome_cost_allocation_allocations WHERE allocation_version_id = 1`.execute(db)
+    expect(await allocator(context({ codingPaidFloors: [{ codingLineId: '10', paidAmount: '100.00' }] })))
+      .toEqual([{ codingLineId: '10', amount: '100.00' }])
+  })
+
   it('keeps selected zero coding when the declared total is zero', async () => {
     expect(await allocator(context({ amount: '0.00' }))).toEqual([
       { codingLineId: '10', amount: '0.00' }, { codingLineId: '20', amount: '0.00' }
@@ -93,11 +107,8 @@ describe('host-interface outcome allocator', () => {
     expect(await allocator(context())).toEqual([{ codingLineId: '10', amount: '75.00' }, { codingLineId: '20', amount: '25.00' }])
   })
 
-  it.each(['receivable', 'credit-memo'] as const)('defers %s to manual coding', async kind => {
-    expect(await allocator(context({ output: { kind } }))).toBeNull()
-  })
   it('defers unmanaged types without reading a snapshot', async () => {
-    expect(await allocator(context({ output: { kind: 'commitment', commitmentTypeId: '2' } }))).toBeNull()
+    expect(await allocator(context({ output: { kind: 'commitment', commitmentId: '1', commitmentTypeId: '2' } }))).toBeNull()
   })
   it('rejects a missing active snapshot and foreign or retired coding', async () => {
     await expect(allocator(context({ codingLines: [coding('10')] }))).rejects.toMatchObject({ code: 'GCS_OUTCOME_COST_ALLOCATION_STREAM_COMMITMENT_INACTIVE' })

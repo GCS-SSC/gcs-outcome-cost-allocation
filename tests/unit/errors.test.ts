@@ -106,15 +106,15 @@ describe('outcome cost allocation errors', () => {
     expect(localizeAllocationIssues(createRouteEvent('fr'), issues)).toEqual([{
       path: 'years.2026',
       code: 'GCS_OUTCOME_COST_ALLOCATION_YEAR_MISSING',
-      message: 'Le budget complet de l’entente doit être réparti.'
+      message: 'Le financement restant de l’entente doit être entièrement réparti.'
     }])
 
     expect(bilingualAllocationIssues(issues)).toEqual([{
       path: 'years.2026',
       code: 'GCS_OUTCOME_COST_ALLOCATION_YEAR_MISSING',
       message: {
-        en: 'The full agreement budget must be allocated.',
-        fr: 'Le budget complet de l’entente doit être réparti.'
+        en: 'The remaining agreement funding must be fully allocated.',
+        fr: 'Le financement restant de l’entente doit être entièrement réparti.'
       }
     }])
   })

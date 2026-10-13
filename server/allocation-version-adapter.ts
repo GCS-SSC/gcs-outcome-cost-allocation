@@ -1,4 +1,4 @@
-import { defineGcsLifecycleEntityAdapter } from '@gcs-ssc/extensions/server'
+import { defineGcsLifecycleEntityAdapter, requireGcsExtensionAgreementFinancials } from '@gcs-ssc/extensions/server'
 import type { Transaction } from 'kysely'
 import { asOutcomeCostAllocationDb } from './db.ts'
 import {
@@ -152,7 +152,7 @@ const adapter = defineGcsLifecycleEntityAdapter({
         record.streamId,
         record.id,
         config,
-        { agencyId: record.agencyId, streamId: record.streamId },
+        { agencyId: record.agencyId, streamId: record.streamId, financials: requireGcsExtensionAgreementFinancials(context) },
         false
       )
     } catch (error: unknown) {
@@ -180,7 +180,7 @@ const adapter = defineGcsLifecycleEntityAdapter({
   },
   onPositiveTerminus: async (context, terminus) => {
     const record = terminus.lockedEntity.record as LockedVersion
-    await activateAllocationVersionInTransaction(asOutcomeCostAllocationDb(context.transaction), record.agreementId, record.id)
+    await activateAllocationVersionInTransaction(asOutcomeCostAllocationDb(context.transaction), record.agreementId, record.id, requireGcsExtensionAgreementFinancials(context))
   }
 })
 

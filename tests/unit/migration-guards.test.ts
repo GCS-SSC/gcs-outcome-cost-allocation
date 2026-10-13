@@ -480,7 +480,9 @@ describe('outcome allocation generated-record database guards', () => {
     expect(managedGuardDefinition).toContain('compiled by emcc')
     expect(managedGuardDefinition).toContain('current_setting')
     expect(versionGuardDefinition).toContain('gcs_outcome_cost_allocation_snapshot_economics_guard')
-    expect(versionGuardDefinition).toContain('Funding_Case_Agreement_Budget_Line_Item')
+    expect(versionGuardDefinition).toContain('Funding_Case_Agreement_Budget_Fiscal_Year')
+    expect(versionGuardDefinition).toContain('captured remaining funding basis')
+    expect(versionGuardDefinition).not.toContain('Funding_Case_Agreement_Budget_Line_Item')
     expect(versionGuardDefinition).toContain('SUM(allocation.resolved_amount)')
   })
 
