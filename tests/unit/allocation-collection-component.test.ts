@@ -53,7 +53,7 @@ const mountCollection = async (fetcher: typeof fetch, permissions = { canUpdate:
   await flushPromises()
   return { wrapper, locale }
 }
-const button = (wrapper: ReturnType<typeof mount>, label: string) => wrapper.findAll('button').find(item => item.text() === label)!
+const button = (wrapper: ReturnType<typeof mount>, label: string) => wrapper.findAll('button').find(item => item.text() === label || item.attributes('aria-label')?.startsWith(`${label}: `))!
 
 afterEach(() => { vi.unstubAllGlobals(); installExtensionTestUiRuntime() })
 
@@ -61,6 +61,13 @@ describe('Agreement cost allocation collection', () => {
   it('lists exact draft and snapshot totals with drill-down links, search and pagination', async () => {
     const { wrapper, locale } = await mountCollection(vi.fn(async () => jsonResponse(response)) as typeof fetch)
     expect(wrapper.findAll('tr')).toHaveLength(2)
+    const draft = wrapper.get('[data-version-id="1"]')
+    expect(draft.get('a').classes()).toContain('font-bold')
+    expect(draft.get('a').classes()).toContain('normal-case')
+    expect(draft.get('a').classes()).toContain('cursor-pointer')
+    expect(draft.get('a').text()).toBe('Version 1')
+    expect(draft.get('p').text()).toContain('2026')
+    expect(draft.get('button[aria-label="Delete: Version 1"]').text()).toBe('')
     expect(wrapper.get('[data-version-id="1"]').text()).toContain('CA$800.00')
     expect(wrapper.get('[data-version-id="2"]').text()).toContain('CA$0.05')
     expect(wrapper.findAll('a').map(link => link.attributes('href'))).toContain('/en/agreements/agreement-1/extension/gcs-outcome-cost-allocation/outcome-cost-allocation/1')

@@ -153,10 +153,10 @@ const deleteDraftVersion = async (versionId: string) => {
       :button-label="t('newDraft')" :show-button="canUpdate" :button-disabled="hasPendingMutation || status !== 'success' || hasDraftVersion" :search-placeholder="t('search')"
       @add="createDraftVersion" @retry="refresh">
       <template #version-cell="{ row }">
-        <div>
-          <ExtensionButton v-if="navigation" :to="navigation.recordHref(row.original.id)" color="neutral" variant="link" :label="row.original.label" :disabled="hasPendingMutation" class="p-0 font-semibold" />
-          <span v-else class="font-semibold">{{ row.original.label }}</span>
-          <p class="text-xs text-muted">
+        <div class="flex flex-col gap-0.5">
+          <ExtensionButton v-if="navigation" :to="navigation.recordHref(row.original.id)" color="neutral" variant="link" :label="row.original.label" :disabled="hasPendingMutation" class="cursor-pointer justify-start p-0 text-sm leading-tight font-bold tracking-normal text-zinc-900 normal-case transition-colors hover:text-primary dark:text-white" />
+          <span v-else class="leading-tight font-bold text-zinc-900 dark:text-white">{{ row.original.label }}</span>
+          <p class="text-xs font-medium text-zinc-500 dark:text-zinc-400">
             {{ row.original.date }}
           </p>
         </div>
@@ -176,7 +176,7 @@ const deleteDraftVersion = async (versionId: string) => {
         <div class="flex justify-end gap-1">
           <ExtensionButton v-if="navigation" :to="navigation.recordHref(row.original.id)" icon="i-lucide-arrow-right" :aria-label="`${t('view')}: ${row.original.label}`" :disabled="hasPendingMutation" color="neutral" variant="ghost" size="sm" />
           <ExtensionButton
-            v-if="canDelete && row.original.status === 'draft'" icon="i-lucide-trash-2" :label="t('delete')" :aria-label="`${t('delete')}: ${row.original.label}`" color="error" variant="ghost" size="sm"
+            v-if="canDelete && row.original.status === 'draft'" icon="i-lucide-trash-2" :aria-label="`${t('delete')}: ${row.original.label}`" color="error" variant="ghost" size="sm"
             :loading="deletingVersionId === row.original.id" :disabled="hasPendingMutation" @click="deleteDraftVersion(row.original.id)" />
         </div>
       </template>
