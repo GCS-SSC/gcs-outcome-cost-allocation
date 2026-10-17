@@ -1000,9 +1000,7 @@ watch(() => recordId, () => {
                       class="cursor-default"
                       :aria-label="`${tLocal('editAllocation')}: ${row.original.commitmentLineLabel} — ${row.original.outcomeLabel} (${row.original.yearLabel})`"
                       :disabled="hasPendingDraftMutation"
-                      @click="openAllocationEditor(row.original.association)">
-                      <span class="sr-only">{{ tLocal('editAllocation') }}</span>
-                    </ExtensionButton>
+                      @click="openAllocationEditor(row.original.association)" />
                     <ExtensionButton
                       v-if="canUpdate && row.original.association && isHistoricalAssociation(row.original.association)"
                       color="error"
