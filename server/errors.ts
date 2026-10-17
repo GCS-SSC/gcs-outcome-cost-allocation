@@ -1,3 +1,5 @@
+import { translateGcsExtensionMessage } from '@gcs-ssc/extensions'
+import { allocationErrorMessages } from '../i18n/errors.ts'
 import {
   createGcsExtensionUserError,
   getGcsExtensionRequestHeader,
@@ -8,136 +10,6 @@ import {
 } from '@gcs-ssc/extensions/server'
 import type { AllocationValidationIssue } from '../shared/allocation.ts'
 
-const errorMessages: Record<string, GcsExtensionLocalizedMessage> = {
-  GCS_OUTCOME_COST_ALLOCATION_PENDING_EFFECTS: {
-    en: 'Resolve pending payments, journal vouchers, corrections and linked credit memos before allocating costs.',
-    fr: 'Réglez les paiements, pièces de journal, corrections et notes de crédit liées en attente avant de répartir les coûts.'
-  },
-  GCS_OUTCOME_COST_ALLOCATION_MIXED_CURRENCY_UNSUPPORTED: {
-    en: 'The Agreement budget must use its single fixed currency. Use separate Agreements for different currencies.',
-    fr: 'Le budget de l’entente doit utiliser sa seule devise fixe. Utilisez des ententes distinctes pour des devises différentes.'
-  },
-  GCS_OUTCOME_COST_ALLOCATION_CURRENCY_MISMATCH: {
-    en: 'The allocation, commitment, accounting lines and payment must use the same currency.',
-    fr: 'La répartition, l’engagement, les lignes comptables et le paiement doivent utiliser la même devise.'
-  },
-  GCS_OUTCOME_COST_ALLOCATION_INVALID: {
-    en: 'Outcome cost allocations are invalid.',
-    fr: 'Les répartitions des coûts par résultat sont invalides.'
-  },
-  GCS_OUTCOME_COST_ALLOCATION_STALE_OUTCOME: {
-    en: 'One saved allocation references an outcome that is no longer used by agreement activities.',
-    fr: 'Une répartition enregistrée référence un résultat qui n’est plus utilisé par les activités de l’entente.'
-  },
-  GCS_OUTCOME_COST_ALLOCATION_STALE_BUDGET_YEAR: {
-    en: 'One saved allocation references a budget year that is no longer active.',
-    fr: 'Une répartition enregistrée référence un exercice budgétaire qui n’est plus actif.'
-  },
-  GCS_OUTCOME_COST_ALLOCATION_YEAR_MISSING: {
-    en: 'The remaining agreement funding must be fully allocated.',
-    fr: 'Le financement restant de l’entente doit être entièrement réparti.'
-  },
-  GCS_OUTCOME_COST_ALLOCATION_MIXED_METHODS: {
-    en: 'The remaining agreement funding must be fully allocated.',
-    fr: 'Le financement restant de l’entente doit être entièrement réparti.'
-  },
-  GCS_OUTCOME_COST_ALLOCATION_PERCENTAGE_TOTAL_INVALID: {
-    en: 'The remaining agreement funding must be fully allocated.',
-    fr: 'Le financement restant de l’entente doit être entièrement réparti.'
-  },
-  GCS_OUTCOME_COST_ALLOCATION_AMOUNT_TOTAL_INVALID: {
-    en: 'The remaining agreement funding must be fully allocated.',
-    fr: 'Le financement restant de l’entente doit être entièrement réparti.'
-  },
-  GCS_OUTCOME_COST_ALLOCATION_TOTAL_INVALID: {
-    en: 'The remaining agreement funding must be fully allocated.',
-    fr: 'Le financement restant de l’entente doit être entièrement réparti.'
-  },
-  GCS_OUTCOME_COST_ALLOCATION_YEAR_TOTAL_INVALID: {
-    en: 'Each fiscal year must fully allocate its remaining funding.',
-    fr: 'Le financement restant de chaque exercice doit être entièrement réparti.'
-  },
-  GCS_OUTCOME_COST_ALLOCATION_YEAR_TOTAL_EXCEEDED: {
-    en: 'An allocation cannot exceed its fiscal-year remaining funding.',
-    fr: 'Une répartition ne peut pas dépasser le financement restant de son exercice.'
-  },
-  GCS_OUTCOME_COST_ALLOCATION_ACTIVE_REQUIRED: {
-    en: 'Complete and activate a cost allocation before creating this commitment.',
-    fr: 'Terminez et activez une répartition des coûts avant de créer cet engagement.'
-  },
-  GCS_OUTCOME_COST_ALLOCATION_PAYMENT_MATRIX_REQUIRED: {
-    en: 'The active commitment must retain a completed outcome allocation matrix before you can create this payment. Complete a matrix and approve a commitment using it.',
-    fr: 'L’engagement actif doit conserver une matrice de répartition par résultat terminée avant de créer ce paiement. Terminez une matrice et approuvez un engagement qui l’utilise.'
-  },
-  GCS_OUTCOME_COST_ALLOCATION_STREAM_BUDGET_MISSING: {
-    en: 'A budget year is missing its stream budget mapping.',
-    fr: 'Un exercice budgétaire n’a pas de correspondance avec un budget de volet.'
-  },
-  GCS_OUTCOME_COST_ALLOCATION_MAPPING_MISSING: {
-    en: 'Configure an outcome-to-commitment-line mapping for this commitment type before creating the commitment.',
-    fr: 'Configurez une correspondance entre résultat et ligne d’engagement pour ce type d’engagement avant de créer l’engagement.'
-  },
-  GCS_OUTCOME_COST_ALLOCATION_STREAM_COMMITMENT_INACTIVE: {
-    en: 'One configured stream commitment line is no longer active.',
-    fr: 'Une ligne d’engagement de volet configurée n’est plus active.'
-  },
-  GCS_OUTCOME_COST_ALLOCATION_STREAM_COMMITMENT_BUDGET_MISMATCH: {
-    en: 'One configured stream commitment line belongs to a different fiscal-year budget.',
-    fr: 'Une ligne d’engagement de volet configurée appartient au budget d’un autre exercice.'
-  },
-  GCS_OUTCOME_COST_ALLOCATION_COMMITMENT_TYPE_DISABLED: {
-    en: 'One saved allocation uses a commitment type that is no longer enabled.',
-    fr: 'Une répartition enregistrée utilise un type d’engagement qui n’est plus autorisé.'
-  },
-  GCS_OUTCOME_COST_ALLOCATION_COMMITMENT_LINES_MISSING: {
-    en: 'The active cost allocation has no positive allocations for this commitment type.',
-    fr: 'La répartition des coûts active ne contient aucune répartition positive pour ce type d’engagement.'
-  },
-  GCS_OUTCOME_COST_ALLOCATION_PAYMENT_EXCEEDS_GENERATED_LINE: {
-    en: 'This cost allocation would create a commitment line below the amount already paid.',
-    fr: 'Cette répartition des coûts créerait une ligne d’engagement inférieure au montant déjà payé.'
-  },
-  GCS_OUTCOME_COST_ALLOCATION_PAYMENT_LINES_MISSING: {
-    en: 'The active cost allocation does not define payment lines for this payment.',
-    fr: 'La répartition des coûts active ne définit pas de lignes de paiement pour ce paiement.'
-  },
-  GCS_OUTCOME_COST_ALLOCATION_PAYMENT_COMMITMENT_LINE_MISSING: {
-    en: 'The selected commitment is missing a commitment line required by the active cost allocation.',
-    fr: 'L’engagement sélectionné n’a pas une ligne d’engagement requise par la répartition des coûts active.'
-  },
-  GCS_OUTCOME_COST_ALLOCATION_PAYMENT_EXCEEDS_REMAINING: {
-    en: 'This payment exceeds the remaining balance of the cost allocation commitment lines.',
-    fr: 'Ce paiement dépasse le solde restant des lignes d’engagement de la répartition des coûts.'
-  },
-  GCS_OUTCOME_COST_ALLOCATION_GENERATED_PAYMENT_IMMUTABLE: {
-    en: 'This payment is managed by outcome cost allocation and its amount, allocation coordinates, and payment lines cannot be changed.',
-    fr: 'Ce paiement est géré par la répartition des coûts par résultat; son montant, ses coordonnées de répartition et ses lignes de paiement ne peuvent pas être modifiés.'
-  },
-  GCS_OUTCOME_COST_ALLOCATION_DRAFT_DELETE_REQUIRED: {
-    en: 'Only draft cost allocations can be deleted.',
-    fr: 'Seules les répartitions des coûts en ébauche peuvent être supprimées.'
-  },
-  GCS_OUTCOME_COST_ALLOCATION_DRAFT_EDIT_REQUIRED: {
-    en: 'Only draft cost allocations can be edited.',
-    fr: 'Seules les répartitions des coûts en ébauche peuvent être modifiées.'
-  },
-  GCS_OUTCOME_COST_ALLOCATION_DRAFT_COMPLETE_REQUIRED: {
-    en: 'Only draft cost allocations can be completed.',
-    fr: 'Seules les répartitions des coûts en ébauche peuvent être terminées.'
-  },
-  GCS_OUTCOME_COST_ALLOCATION_DRAFT_EXISTS: {
-    en: 'A draft cost allocation already exists for this agreement. Refresh and edit that draft.',
-    fr: 'Une répartition des coûts en ébauche existe déjà pour cette entente. Actualisez la page et modifiez cette ébauche.'
-  },
-  GCS_OUTCOME_COST_ALLOCATION_STALE_COORDINATE: {
-    en: 'One allocation reference is no longer available for this agreement. Refresh the allocation and try again.',
-    fr: 'Une référence de répartition n’est plus disponible pour cette entente. Actualisez la répartition et réessayez.'
-  },
-  GCS_OUTCOME_COST_ALLOCATION_DATABASE_CONFLICT: {
-    en: 'The cost allocation changed while this request was being processed. Refresh and try again.',
-    fr: 'La répartition des coûts a changé pendant le traitement de cette demande. Actualisez la page et réessayez.'
-  }
-}
 
 type OutcomeCostAllocationDatabaseError = {
   code?: unknown
@@ -267,13 +139,22 @@ export const getOutcomeCostAllocationErrorMessage = (
   return typeof message === 'string' ? message : message[getLocale(event)]
 }
 
+const isAllocationErrorCode = (code: string): code is keyof typeof allocationErrorMessages.en =>
+  Object.hasOwn(allocationErrorMessages.en, code)
+
 /**
  * Returns the bilingual message for a code, falling back to the generic allocation error.
  */
 export const getOutcomeCostAllocationErrorMessages = (
   code: string | undefined
-) => errorMessages[code ?? 'GCS_OUTCOME_COST_ALLOCATION_INVALID']
-  ?? errorMessages.GCS_OUTCOME_COST_ALLOCATION_INVALID
+) => {
+  const key = code && isAllocationErrorCode(code)
+    ? code : 'GCS_OUTCOME_COST_ALLOCATION_INVALID'
+  return {
+    en: translateGcsExtensionMessage(allocationErrorMessages, 'en', key),
+    fr: translateGcsExtensionMessage(allocationErrorMessages, 'fr', key)
+  }
+}
 
 /**
  * Creates a bilingual extension user error with optional field-level detail.

@@ -186,6 +186,19 @@ Define matching English/French keys and named placeholders with
 lookup or fallback. Keep extension-authored common labels and validation text in
 this package; treat bilingual domain values and already-localized errors as data.
 The package owns translation tests and includes catalogs in its coverage inventory.
+Server user errors use the same package-owned error catalog as matrix field errors;
+the SDK receives bilingual payloads with their stable codes and paths. Request-schema
+diagnostics stay internal: the request boundary returns the catalog-owned generic
+allocation error and the first failing path. Coding percentages retain their exact
+decimal text and display a comma and nonbreaking space before `%` in French.
+Retained toast titles and descriptions resolve their catalog text in the current
+locale, including after the originating component unmounts. Local warning toasts
+capture their semantic key rather than mutable form error state.
+Run `bunx vitest run --config vitest.toast.config.ts` from this package inside a host
+checkout to exercise retained feedback with the installed Nuxt UI Toaster and Toast.
+The test substitutes Nuxt configuration and leaf visuals, while rendering the real
+Toaster, Toast, and Reka components.
+
 
 ## Audit ownership
 

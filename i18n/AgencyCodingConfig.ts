@@ -2,6 +2,7 @@ import { defineGcsExtensionMessages } from '@gcs-ssc/extensions'
 
 export const AgencyCodingConfigMessages = defineGcsExtensionMessages({
   en: {
+    percentageValue: '{value}%',
     description: 'Configure yearly accounts receivable coding. Percentages in each set must total 100%.',
     creditMemoDescription: 'Credit memos use the latest active committed allocation matrix by default and link to its commitment coding. Add an exception only to remap a source commitment account for an inclusive date range. Target percentages must total 100%.',
     emptyExceptions: 'No remap exceptions. Credit memos follow the committed allocation matrix.',
@@ -19,6 +20,7 @@ export const AgencyCodingConfigMessages = defineGcsExtensionMessages({
     noContext: 'Agency context is unavailable.'
   },
   fr: {
+    percentageValue: '{value} %',
     description: 'Configurez la codification annuelle des comptes débiteurs. Les pourcentages de chaque ensemble doivent totaliser 100 %.',
     creditMemoDescription: 'Par défaut, les notes de crédit utilisent la dernière matrice de répartition engagée active et sont liées à ses codes d’engagement. Ajoutez une exception seulement pour rediriger un compte d’engagement source durant une plage de dates inclusive. Les pourcentages cibles doivent totaliser 100 %.',
     emptyExceptions: 'Aucune exception de redirection. Les notes de crédit suivent la matrice de répartition engagée.',

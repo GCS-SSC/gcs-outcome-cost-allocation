@@ -80,6 +80,7 @@ const options = (kind: Account['egcs_ay_kind'], currency: string, year?: string)
   value: account.id,
   label: `${account.fiscal_year_display} — ${account.egcs_ay_accountingdimensions.map(dimension => `${locale.value === 'fr' ? dimension.label_fr : dimension.label_en}: ${dimension.value}`).join(', ')}${kind === 'credit_memo' ? ` — ${t(account.egcs_ay_commitmentchartofaccount ? 'restore' : 'catchAll')}` : ''}`
 }))
+const formatPercentage = (value: string) => t('percentageValue', { value: locale.value === 'fr' ? value.replace('.', ',') : value })
 const codingLabel = (account: Account | undefined) => account?.egcs_ay_accountingdimensions.map(dimension => `${locale.value === 'fr' ? dimension.label_fr : dimension.label_en}: ${dimension.value}`).join(', ') || t('unavailable')
 const targetLabel = (codingLineId: string) => options('credit_memo', set.value?.currency ?? '').find(account => account.value === codingLineId)?.label ?? t('unavailable')
 watch(selectedCreditMemoAccounts, ids => {
@@ -208,7 +209,7 @@ watch(() => [agencyId, extensionKey], () => { saving.value = false; void refresh
       <template #source-cell="{ row }"><span class="font-medium">{{ row.original.source }}</span></template>
       <template #period-cell="{ row }"><span class="font-medium whitespace-nowrap">{{ row.original.label }}</span></template>
       <template #fiscalYear-cell="{ row }"><ul class="space-y-1"><li v-for="line in row.original.coding" :key="line.codingLineId">{{ line.fiscalYear }}</li></ul></template>
-      <template #percentage-cell="{ row }"><ul class="space-y-1"><li v-for="line in row.original.coding" :key="line.codingLineId">{{ line.percentage }}%</li></ul></template>
+      <template #percentage-cell="{ row }"><ul class="space-y-1"><li v-for="line in row.original.coding" :key="line.codingLineId">{{ formatPercentage(line.percentage) }}</li></ul></template>
       <template #coding-cell="{ row }">
         <ul class="space-y-1">
           <li v-for="line in row.original.coding" :key="line.codingLineId" class="whitespace-normal">{{ line.label }}</li>

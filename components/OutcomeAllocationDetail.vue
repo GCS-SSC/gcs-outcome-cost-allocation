@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { AgreementOutcomeCostAllocationTabErrorMessages, AgreementOutcomeCostAllocationTabStatusMessages, AgreementOutcomeCostAllocationTabMessages } from '../i18n/AgreementOutcomeCostAllocationTab'
 
-import { computed, ref, watch, type Ref } from 'vue'
+import { h, type VNode, computed, ref, watch, type Ref } from 'vue'
 import type {
   ExtensionEntityTabContext,
   GcsExtensionJsonConfig,
@@ -103,7 +103,8 @@ const views = computed(() => [
   { key: 'completion', value: 'completion', label: tLocal('allocationCompletion'), icon: 'i-lucide-circle-check' }
 ])
 const { selectedTab: selectedView } = useExtensionUrlTabState({ tabs: views, defaultTab: 'summary' })
-const saveError: Ref<string> = ref('')
+const saveFailure: Ref<{ kind: 'local'; key: 'pendingEffects' | 'readonly' | 'assignmentRequired' } | { kind: 'api'; message: string } | null> = ref(null)
+const saveError = computed(() => saveFailure.value?.kind === 'local' ? tLocal(saveFailure.value.key) : saveFailure.value?.message ?? '')
 const expandedRows: Ref<Record<string, boolean>> = ref({})
 const isGenerateModalOpen: Ref<boolean> = ref(false)
 const generationCommitmentType: Ref<CommitmentType> = ref('')
@@ -149,8 +150,9 @@ const streamCommitments = computed<AllocationStreamCommitment[]>(() => data.valu
 const hasPendingEffects = computed(() => data.value?.hasPendingEffects === true)
 const warnPendingEffects = () => {
   if (!hasPendingEffects.value) return false
-  saveError.value = tLocal('pendingEffects')
-  toast.add({ title: getOutcomeAllocationToastText(locale.value, 'error').title, description: saveError.value, color: 'warning' })
+  saveFailure.value = { kind: 'local', key: 'pendingEffects' }
+  const warningKey = saveFailure.value.key
+  toast.add({ title: getOutcomeAllocationToastText(() => locale.value, 'error').title, description: (): VNode => h('span', tLocal(warningKey)), color: 'warning' })
   return true
 }
 const paidCoding = computed(() => (data.value?.codingPaidAmounts ?? []).map(line => {
@@ -171,8 +173,9 @@ const warnEditingBlocked = () => {
   if (completionLoading.value) return true
   if (completionLoadFailed.value) return true
   if (canWork && canEditSelectedVersion.value) return false
-  saveError.value = tLocal(canWork ? 'readonly' : 'assignmentRequired')
-  toast.add({ title: getOutcomeAllocationToastText(locale.value, 'error').title, description: saveError.value, color: 'warning' })
+  saveFailure.value = { kind: 'local', key: canWork ? 'readonly' : 'assignmentRequired' }
+  const warningKey = saveFailure.value.key
+  toast.add({ title: getOutcomeAllocationToastText(() => locale.value, 'error').title, description: (): VNode => h('span', tLocal(warningKey)), color: 'warning' })
   return true
 }
 const isLoading = computed(() => status.value === 'pending')
@@ -466,19 +469,22 @@ const ensureAllocation = (association: ConfiguredAssociationRow) => {
 
 const allocationEditor: Ref<{ association: ConfiguredAssociationRow; allocation: VersionedOutcomeAllocationInput } | null> = ref(null)
 const isAllocationModalOpen = ref(false)
-const allocationEditorError = ref('')
+const allocationEditorFailure: Ref<'invalidValue' | 'yearTotalExceeded' | null> = ref(null)
+const allocationEditorError = computed(() => allocationEditorFailure.value === 'invalidValue'
+  ? tLocal('invalidValue')
+  : allocationEditorFailure.value === 'yearTotalExceeded' ? errorText('GCS_OUTCOME_COST_ALLOCATION_YEAR_TOTAL_EXCEEDED') : '')
 
 const closeAllocationEditor = () => {
   isAllocationModalOpen.value = false
   allocationEditor.value = null
-  allocationEditorError.value = ''
+  allocationEditorFailure.value = null
 }
 
 const openAllocationEditor = (association: ConfiguredAssociationRow) => {
   if (warnEditingBlocked()) return
   if (warnPendingEffects() || !canEditSelectedVersion.value || hasPendingDraftMutation.value) return
   allocationEditor.value = { association, allocation: { ...(getAllocation(association) ?? createAllocation(association)) } }
-  allocationEditorError.value = ''
+  allocationEditorFailure.value = null
   isAllocationModalOpen.value = true
 }
 
@@ -509,7 +515,7 @@ const updateEditorMethod = (value: string | number) => {
   editor.allocation.allocationValue = value === 'percentage'
     ? percentageForMoney(amount, editor.association.programFunding)
     : amount
-  allocationEditorError.value = ''
+  allocationEditorFailure.value = null
 }
 
 const applyAllocationEditor = () => {
@@ -518,11 +524,11 @@ const applyAllocationEditor = () => {
   if (!editor || warnPendingEffects() || !canEditSelectedVersion.value || hasPendingDraftMutation.value) return
   const parsed = parseExactNumeric19Scale4(editor.allocation.allocationValue)
   if (parsed === null || (editor.allocation.allocationMethod === 'percentage' && toExactNumeric19Scale4Units(parsed)! > BigInt(1_000_000))) {
-    allocationEditorError.value = tLocal('invalidValue')
+    allocationEditorFailure.value = 'invalidValue'
     return
   }
   if (compareMoney(editorUnallocated.value, ZERO_MONEY) < 0) {
-    allocationEditorError.value = errorText('GCS_OUTCOME_COST_ALLOCATION_YEAR_TOTAL_EXCEEDED')
+    allocationEditorFailure.value = 'yearTotalExceeded'
     return
   }
   Object.assign(ensureAllocation(editor.association), editor.allocation, { allocationValue: parsed })
@@ -749,17 +755,17 @@ const save = async () => {
 
   try {
     isSaving.value = true
-    saveError.value = ''
+    saveFailure.value = null
     await saveOutcomeAllocationsRequest(
       api.path(endpoint.value),
       selectedVersionId.value,
       activeAllocations.value
     )
     await refresh()
-    toast.add({ ...getOutcomeAllocationToastText(locale.value, 'saved'), color: 'success' })
+    toast.add({ ...getOutcomeAllocationToastText(() => locale.value, 'saved'), color: 'success' })
     return true
   } catch (error: unknown) {
-    saveError.value = error instanceof Error ? error.message : String(error)
+    saveFailure.value = { kind: 'api', message: error instanceof Error ? error.message : String(error) }
     return false
   } finally {
     isSaving.value = false
@@ -796,13 +802,13 @@ const breadcrumbItems = computed(() => [
 ])
 watch(() => context.agreementId, () => {
   data.value = null
-  saveError.value = ''
+  saveFailure.value = null
   expandedRows.value = {}
   isGenerateModalOpen.value = false
   refresh()
 })
 watch(() => recordId, () => {
-  saveError.value = ''
+  saveFailure.value = null
   expandedRows.value = {}
   isGenerateModalOpen.value = false
   syncAllocationResponse(data.value)
@@ -833,7 +839,7 @@ watch(() => recordId, () => {
               <p class="text-sm text-error">
                 {{ tLocal('completionLoadError') }}
               </p>
-              <ExtensionButton :label="tLocal('retry')" :disabled="completionLoading" @click="saveError = ''; refreshSelectedCompletion()" />
+              <ExtensionButton :label="tLocal('retry')" :disabled="completionLoading" @click="saveFailure = null; refreshSelectedCompletion()" />
             </div>
             <p v-if="saveError" role="alert" class="text-sm text-error">
               {{ saveError }}
@@ -1157,7 +1163,7 @@ watch(() => recordId, () => {
           <template #footer>
             <div class="flex w-full justify-end gap-2">
               <ExtensionButton
-                :label="locale === 'fr' ? 'Annuler' : 'Cancel'"
+                :label="tLocal('cancel')"
                 color="neutral"
                 variant="ghost"
                 class="cursor-default"

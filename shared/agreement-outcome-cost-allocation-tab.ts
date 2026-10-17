@@ -1,3 +1,4 @@
+import { h, type VNode } from 'vue'
 import { translateGcsExtensionMessage } from '@gcs-ssc/extensions'
 import { notifications } from '../i18n/notifications'
 import type {
@@ -215,15 +216,15 @@ export const deleteOutcomeAllocationDraftVersionRequest = async (
 }
 
 /**
- * Returns the locale-selected title and description for allocation save, deletion, or error feedback.
+ * Returns callbacks that resolve allocation feedback in the current locale.
  */
 export const getOutcomeAllocationToastText = (
-  locale: string,
+  locale: () => string,
   key: 'saved' | 'deleted' | 'error'
-) => {
+): { title: () => VNode; description: () => VNode } => {
   return {
-    title: translateGcsExtensionMessage(notifications, locale, key === 'error' ? 'error' : 'success'),
-    description: key === 'error' ? '' : translateGcsExtensionMessage(notifications, locale, key)
+    title: () => h('span', translateGcsExtensionMessage(notifications, locale(), key === 'error' ? 'error' : 'success')),
+    description: () => h('span', key === 'error' ? '' : translateGcsExtensionMessage(notifications, locale(), key))
   }
 }
 

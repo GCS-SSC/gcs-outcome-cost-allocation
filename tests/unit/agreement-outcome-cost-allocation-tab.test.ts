@@ -191,18 +191,15 @@ describe('agreement outcome cost allocation tab helpers', () => {
   })
 
   it('returns localized outcome allocation toast text', () => {
-    expect(getOutcomeAllocationToastText('en', 'saved')).toEqual({
-      title: 'Success',
-      description: 'Allocation saved.'
-    })
-    expect(getOutcomeAllocationToastText('fr', 'deleted')).toEqual({
-      title: 'Succès',
-      description: 'Ébauche supprimée.'
-    })
-    expect(getOutcomeAllocationToastText('en', 'error')).toEqual({
-      title: 'Error',
-      description: ''
-    })
+    const saved = getOutcomeAllocationToastText(() => 'en', 'saved')
+    expect(saved.title().children).toBe('Success')
+    expect(saved.description().children).toBe('Allocation saved.')
+    const deleted = getOutcomeAllocationToastText(() => 'fr', 'deleted')
+    expect(deleted.title().children).toBe('Succès')
+    expect(deleted.description().children).toBe('Ébauche supprimée.')
+    const error = getOutcomeAllocationToastText(() => 'en', 'error')
+    expect(error.title().children).toBe('Error')
+    expect(error.description().children).toBe('')
   })
 })
 

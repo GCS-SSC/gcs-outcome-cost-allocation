@@ -39,6 +39,8 @@ const mountCollection = async (fetcher: typeof fetch, permissions = { canUpdate:
   vi.stubGlobal('fetch', fetcher)
   const locale = ref('en')
   const runtime = installExtensionTestUiRuntime()
+  const toasts: Record<string, unknown>[] = []
+  runtime.composables.useToast = () => ({ add: notification => { toasts.push(notification) } })
   runtime.composables.useI18n = () => ({ locale, n: value => String(value) })
   runtime.components.CommonResourceLayoutCard = ResourceTable
   runtime.components.UButton = LinkButton
@@ -51,7 +53,7 @@ const mountCollection = async (fetcher: typeof fetch, permissions = { canUpdate:
     }) })
   }))
   await flushPromises()
-  return { wrapper, locale }
+  return { wrapper, locale, toasts }
 }
 const button = (wrapper: ReturnType<typeof mount>, label: string) => wrapper.findAll('button').find(item => item.text() === label || item.attributes('aria-label')?.startsWith(`${label}: `))!
 
@@ -104,7 +106,7 @@ describe('Agreement cost allocation collection', () => {
       }
       return jsonResponse({ ...response, versions: created ? [version] : [], allocations: [] })
     })
-    const { wrapper } = await mountCollection(fetcher as typeof fetch)
+    const { wrapper, locale, toasts } = await mountCollection(fetcher as typeof fetch)
     expect(wrapper.text()).toContain('No cost allocations have been created.')
     await button(wrapper, 'New draft').trigger('click')
     await flushPromises()
@@ -113,23 +115,45 @@ describe('Agreement cost allocation collection', () => {
     await button(wrapper, 'Delete').trigger('click')
     await flushPromises()
     expect(wrapper.get('[role="alert"]').text()).toBe('Please retry deletion.')
+    locale.value = 'fr'
+    await flushPromises()
+    expect(wrapper.get('[role="alert"]').text()).toBe('Please retry deletion.')
+    locale.value = 'en'
+    await flushPromises()
     expect(wrapper.findAll('tr')).toHaveLength(1)
     failDelete = false
     await button(wrapper, 'Delete').trigger('click')
     await flushPromises()
     expect(wrapper.findAll('tr')).toHaveLength(0)
     expect(fetcher.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1)
+    const success = toasts.at(-1)!
+    if (typeof success.title !== 'function' || typeof success.description !== 'function') throw new Error('Expected reactive toast text')
     wrapper.unmount()
+    locale.value = 'fr'
+    expect(success.title().children).toBe('Succès')
+    expect(success.description().children).toBe('Ébauche supprimée.')
   })
 
   it('keeps New draft visible and warns about pending effects without creating a version', async () => {
     const fetcher = vi.fn(async () => jsonResponse({ ...response, versions: [], allocations: [], hasPendingEffects: true }))
-    const { wrapper } = await mountCollection(fetcher as typeof fetch)
+    const { wrapper, locale, toasts } = await mountCollection(fetcher as typeof fetch)
     expect(button(wrapper, 'New draft').attributes('disabled')).toBeUndefined()
     await button(wrapper, 'New draft').trigger('click')
     expect(wrapper.get('[role="alert"]').text()).toContain('pending payments')
+    locale.value = 'fr'
+    await flushPromises()
+    expect(wrapper.get('[role="alert"]').text()).toContain('paiements')
+    expect(wrapper.get('[role="alert"]').text()).not.toContain('pending payments')
     expect(fetcher).toHaveBeenCalledTimes(1)
+    const warning = toasts[0]!
+    if (typeof warning.title !== 'function' || typeof warning.description !== 'function') throw new Error('Expected reactive toast text')
     wrapper.unmount()
+    locale.value = 'en'
+    expect(warning.title().children).toBe('Error')
+    expect(warning.description().children).toContain('pending payments')
+    locale.value = 'fr'
+    expect(warning.title().children).toBe('Erreur')
+    expect(warning.description().children).toContain('paiements')
   })
 
   it('returns to the previous page after deleting the final record on a page', async () => {
@@ -160,9 +184,13 @@ describe('Agreement cost allocation collection', () => {
     expect(button(viewer, 'New draft')).toBeUndefined()
     expect(button(viewer, 'Delete')).toBeUndefined()
     viewer.unmount()
-    const { wrapper: contributor } = await mountCollection(fetcher as typeof fetch, { canUpdate: true, canDelete: true, canWork: false })
+    const { wrapper: contributor, locale } = await mountCollection(fetcher as typeof fetch, { canUpdate: true, canDelete: true, canWork: false })
     await button(contributor, 'New draft').trigger('click')
     expect(contributor.get('[role="alert"]').text()).toContain('must be assigned')
+    locale.value = 'fr'
+    await flushPromises()
+    expect(contributor.get('[role="alert"]').text()).not.toContain('must be assigned')
+    expect(contributor.get('[role="alert"]').text()).toContain('affecté')
     expect(fetcher).toHaveBeenCalledTimes(2)
     contributor.unmount()
   })

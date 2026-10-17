@@ -225,7 +225,7 @@ const findButton = (
   label: string,
   position: 'first' | 'last' = 'first'
 ) => {
-  const buttons = wrapper.findAll('button').filter(button => button.text() === label)
+  const buttons = wrapper.findAll('button').filter(button => button.attributes('aria-label')?.split(':')[0] === label || button.text() === label)
   const button = position === 'last'
     ? buttons.at(-1)
     : buttons[0]
@@ -243,7 +243,9 @@ const mountTab = async (
   completionItem: unknown | null = null,
   initialView = 'allocation',
   permissions = { canUpdate: true, canDelete: true, canWork: true },
-  completionRequest?: () => Promise<Response>
+  completionRequest?: () => Promise<Response>,
+  localeOverride = ref(initialLocale),
+  toasts: Record<string, unknown>[] = []
 ) => {
   vi.stubGlobal('fetch', (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (String(input).includes('/api/completions/runtime')) {
@@ -256,10 +258,11 @@ const mountTab = async (
   vi.stubGlobal('ref', ref)
   vi.stubGlobal('watch', watch)
   const runtime = installExtensionTestUiRuntime()
+  runtime.composables.useToast = () => ({ add: notification => { toasts.push(notification) } })
   const i18n = runtime.composables.useI18n()
   runtime.composables.useI18n = () => ({
     ...i18n,
-    locale: ref(initialLocale)
+    locale: localeOverride
   })
   runtime.components.USelectMenu = ArraySelectMenu
   runtime.components.USelect = InteractiveSelect
@@ -515,7 +518,8 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
       allocationVersionId: 'version-1', commitmentType: '1', streamCommitmentId: 'stream-commitment-1',
       agreementBudgetFiscalYearId: '1', outcomeId: 'outcome-1', allocationMethod: 'amount', allocationValue: '25.0000'
     }] }
-    const wrapper = await mountTab(vi.fn(async () => jsonResponse(response)) as typeof fetch)
+    const locale = ref('en')
+    const wrapper = await mountTab(vi.fn(async () => jsonResponse(response)) as typeof fetch, config, 'en', null, 'allocation', undefined, undefined, locale)
     await findButton(wrapper, 'Edit allocation').trigger('click')
     await flushPromises()
     const modal = wrapper.get('[data-control="allocation-modal"]')
@@ -526,7 +530,14 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
       expect(wrapper.find('[data-control="allocation-modal"]').exists()).toBe(true)
       expect((modal.get('input').element as HTMLInputElement).value).toBe(invalidValue)
       expect(wrapper.get('[data-cell="amount"]').text()).toBe('CA$25.00')
-      expect(modal.get('[name="allocationValue"]').attributes('error')).toBeTruthy()
+      const englishError = modal.get('[name="allocationValue"]').attributes('error')
+      expect(englishError).toBeTruthy()
+      locale.value = 'fr'
+      await flushPromises()
+      expect(modal.get('[name="allocationValue"]').attributes('error')).not.toBe(englishError)
+      expect((modal.get('input').element as HTMLInputElement).value).toBe(invalidValue)
+      locale.value = 'en'
+      await flushPromises()
     }
     await modal.get('input').setValue('75.1250')
     await modal.get('form').trigger('submit')
@@ -562,12 +573,29 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
       allocationVersionId: 'version-1', commitmentType: '1', streamCommitmentId: 'stream-commitment-1',
       agreementBudgetFiscalYearId: '1', outcomeId: 'outcome-1', allocationMethod: 'amount', allocationValue: '25.0000'
     }] }
-    const wrapper = await mountTab(vi.fn(async () => jsonResponse(response)) as typeof fetch)
+    const locale = ref('en')
+    const toasts: Record<string, unknown>[] = []
+    const wrapper = await mountTab(vi.fn(async () => jsonResponse(response)) as typeof fetch, config, 'en', null, 'allocation', undefined, undefined, locale, toasts)
     await findButton(wrapper, 'Edit allocation').trigger('click')
     await flushPromises()
     expect(wrapper.find('[data-control="allocation-modal"]').exists()).toBe(false)
     expect(wrapper.get('[role="status"]').text()).toContain('pending payments')
+    expect(wrapper.get('[role="alert"]').text()).toContain('pending payments')
+    locale.value = 'fr'
+    await flushPromises()
+    expect(wrapper.get('[role="alert"]').text()).toContain('paiements')
+    expect(wrapper.get('[role="alert"]').text()).not.toContain('pending payments')
+    const warning = toasts[0]!
+    if (typeof warning.title !== 'function' || typeof warning.description !== 'function') throw new Error('Expected reactive toast text')
+    await wrapper.setProps({ recordId: 'another-version' })
+    await flushPromises()
     wrapper.unmount()
+    locale.value = 'en'
+    expect(warning.title().children).toBe('Error')
+    expect(warning.description().children).toContain('pending payments')
+    locale.value = 'fr'
+    expect(warning.title().children).toBe('Erreur')
+    expect(warning.description().children).toContain('paiements')
   })
 
   it('keeps draft allocations read-only once Completion exists', async () => {
@@ -576,7 +604,7 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
       agreementBudgetFiscalYearId: '1', outcomeId: 'outcome-1', allocationMethod: 'amount', allocationValue: '25.0000'
     }] }
     const wrapper = await mountTab(vi.fn(async () => jsonResponse(response)) as typeof fetch, config, 'en', { id: 'completion-1' })
-    expect(wrapper.findAll('button').some(button => button.text() === 'Edit allocation')).toBe(true)
+    expect(wrapper.findAll('button').some(button => button.attributes('aria-label')?.startsWith('Edit allocation:'))).toBe(true)
     expect(wrapper.findAll('[data-cell="value"] input')).toHaveLength(0)
     expect(wrapper.get('[data-cell="amount"]').text()).toBe('CA$25.00')
     wrapper.unmount()
@@ -627,7 +655,7 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
     const methodSelects = wrapper.findAllComponents(InteractiveSelect)
       .filter(select => select.attributes('data-control') === 'allocation-method')
     expect(methodSelects).toHaveLength(0)
-    expect(wrapper.findAll('button').some(button => button.text() === 'Edit allocation')).toBe(true)
+    expect(wrapper.findAll('button').some(button => button.attributes('aria-label')?.startsWith('Edit allocation:'))).toBe(true)
     expect(wrapper.text()).toContain('1 allocations')
     expect(wrapper.text()).not.toContain('Add agreement activities with outcomes')
     await findButton(wrapper, 'Edit allocation').trigger('click')
@@ -889,7 +917,7 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
     const fetchMock = vi.fn(async (): Promise<Response> => jsonResponse(splitResponse))
     const wrapper = await mountTab(fetchMock as typeof fetch, splitConfig)
     const associationRows = wrapper.findAll('[data-row-index]').filter(row =>
-      row.findAll('button').some(button => button.text() === 'Edit allocation')
+      row.findAll('button').some(button => button.attributes('aria-label')?.startsWith('Edit allocation:'))
     )
 
     expect(associationRows).toHaveLength(2)
@@ -1035,11 +1063,17 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
     const fetchMock = vi.fn(async () => jsonResponse(response))
     const viewer = await mountTab(fetchMock as typeof fetch, config, 'en', null, 'allocation', { canUpdate: false, canDelete: false, canWork: false })
     expect(viewer.get('[data-cell="amount"]').text()).toBe('CA$25.00')
-    expect(viewer.findAll('button').some(button => ['Save', 'Edit allocation', 'Generate rows'].includes(button.text()))).toBe(false)
+    expect(viewer.findAll('button').some(button => ['Save', 'Edit allocation', 'Generate rows'].includes(button.attributes('aria-label')?.split(':')[0] ?? button.text()))).toBe(false)
     viewer.unmount()
-    const unassigned = await mountTab(fetchMock as typeof fetch, config, 'en', null, 'allocation', { canUpdate: true, canDelete: false, canWork: false })
+    const locale = ref('en')
+    const unassigned = await mountTab(fetchMock as typeof fetch, config, 'en', null, 'allocation', { canUpdate: true, canDelete: false, canWork: false }, undefined, locale)
     await findButton(unassigned, 'Edit allocation').trigger('click')
     expect(unassigned.get('[role="alert"]').text()).toContain('must be assigned')
+    locale.value = 'fr'
+    await flushPromises()
+    expect(unassigned.get('[role="alert"]').text()).toContain('affecté')
+    locale.value = 'en'
+    await flushPromises()
     expect(unassigned.find('[data-control="allocation-modal"]').exists()).toBe(false)
     await findButton(unassigned, 'Save').trigger('click')
     expect(fetchMock.mock.calls).toHaveLength(2)

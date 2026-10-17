@@ -137,27 +137,4 @@ export const AgreementOutcomeCostAllocationTabStatusMessages = defineGcsExtensio
   }
 })
 
-export const AgreementOutcomeCostAllocationTabErrorMessages = defineGcsExtensionMessages({
-  "en": {
-    "GCS_OUTCOME_COST_ALLOCATION_YEAR_MISSING": "The remaining agreement funding must be fully allocated.",
-    "GCS_OUTCOME_COST_ALLOCATION_MIXED_METHODS": "The remaining agreement funding must be fully allocated.",
-    "GCS_OUTCOME_COST_ALLOCATION_PERCENTAGE_TOTAL_INVALID": "The remaining agreement funding must be fully allocated.",
-    "GCS_OUTCOME_COST_ALLOCATION_AMOUNT_TOTAL_INVALID": "The remaining agreement funding must be fully allocated.",
-    "GCS_OUTCOME_COST_ALLOCATION_TOTAL_INVALID": "The remaining agreement funding must be fully allocated.",
-    "GCS_OUTCOME_COST_ALLOCATION_YEAR_TOTAL_INVALID": "Each fiscal year must fully allocate its remaining funding.",
-    "GCS_OUTCOME_COST_ALLOCATION_YEAR_TOTAL_EXCEEDED": "An allocation cannot exceed its fiscal-year remaining funding.",
-    "GCS_OUTCOME_COST_ALLOCATION_STALE_OUTCOME": "One saved allocation references an outcome that is no longer used by agreement activities.",
-    "GCS_OUTCOME_COST_ALLOCATION_STALE_BUDGET_YEAR": "One saved allocation references a budget year that is no longer active."
-  },
-  "fr": {
-    "GCS_OUTCOME_COST_ALLOCATION_YEAR_MISSING": "Le financement restant de l’entente doit être entièrement réparti.",
-    "GCS_OUTCOME_COST_ALLOCATION_MIXED_METHODS": "Le financement restant de l’entente doit être entièrement réparti.",
-    "GCS_OUTCOME_COST_ALLOCATION_PERCENTAGE_TOTAL_INVALID": "Le financement restant de l’entente doit être entièrement réparti.",
-    "GCS_OUTCOME_COST_ALLOCATION_AMOUNT_TOTAL_INVALID": "Le financement restant de l’entente doit être entièrement réparti.",
-    "GCS_OUTCOME_COST_ALLOCATION_TOTAL_INVALID": "Le financement restant de l’entente doit être entièrement réparti.",
-    "GCS_OUTCOME_COST_ALLOCATION_YEAR_TOTAL_INVALID": "Le financement restant de chaque exercice doit être entièrement réparti.",
-    "GCS_OUTCOME_COST_ALLOCATION_YEAR_TOTAL_EXCEEDED": "Une répartition ne peut pas dépasser le financement restant de son exercice.",
-    "GCS_OUTCOME_COST_ALLOCATION_STALE_OUTCOME": "Une répartition enregistrée référence un résultat qui n’est plus utilisé par les activités de l’entente.",
-    "GCS_OUTCOME_COST_ALLOCATION_STALE_BUDGET_YEAR": "Une répartition enregistrée référence un exercice budgétaire qui n’est plus actif."
-  }
-})
+export { allocationErrorMessages as AgreementOutcomeCostAllocationTabErrorMessages } from './errors'

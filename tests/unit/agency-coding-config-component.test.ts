@@ -67,6 +67,25 @@ const savedBody = (fetchMock: ReturnType<typeof fixture>) => JSON.parse(String(f
 afterEach(() => { vi.unstubAllGlobals(); installExtensionTestUiRuntime() })
 
 describe('Agency coding workspace', () => {
+  it('updates exact percentage text, authored labels and action names when locale changes', async () => {
+    const runtime = installUi()
+    const base = runtime.composables.useI18n()
+    const locale = ref('en')
+    runtime.composables.useI18n = () => ({ ...base, locale })
+    const current = policy()
+    current.receivableSets[0]!.lines = [{ codingLineId: '10', percentage: '30.0001' }, { codingLineId: '11', percentage: '69.9999' }]
+    vi.stubGlobal('fetch', fixture(current))
+    const wrapper = mount(AgencyCodingConfig, { props: { agencyId: '1' } })
+    await flushPromises()
+    expect(wrapper.get('[data-cell="percentage"]').findAll('li').map(line => line.text())).toEqual(['30.0001%', '69.9999%'])
+    expect(wrapper.get('[data-cell="coding"]').text()).toContain('Fund: A')
+    locale.value = 'fr'
+    await flushPromises()
+    expect(wrapper.get('[data-cell="percentage"]').findAll('li').map(line => line.text())).toEqual(['30,0001 %', '69,9999 %'])
+    expect(wrapper.get('[data-cell="coding"]').text()).toContain('Fonds: A')
+    expect(wrapper.findAll('button').some(button => button.attributes('aria-label') === 'Modifier: 2026–2027')).toBe(true)
+  })
+
   it('closes Add after persisting on an HTTP origin without randomUUID', async () => {
     vi.stubGlobal('crypto', { getRandomValues: globalThis.crypto.getRandomValues.bind(globalThis.crypto) })
     const fetchMock = fixture({ version: 1, receivableSets: [], creditMemoRules: [] })
@@ -520,7 +539,7 @@ describe('Agency coding workspace', () => {
     expect(wrapper.findAll('[data-row]')).toHaveLength(1)
     expect(wrapper.get('[data-column="percentage"]').text()).toBe(percentageHeader)
     expect(wrapper.get('[data-cell="coding"]').text()).toBe(codingLabel)
-    expect(wrapper.get('[data-cell="percentage"]').text()).toBe('100%')
+    expect(wrapper.get('[data-cell="percentage"]').text()).toBe(locale === 'fr' ? '100 %' : '100%')
     const yearCell = section === 'credit-memos' ? 'fiscalYear' : 'period'
     expect(wrapper.get(`[data-cell="${yearCell}"]`).text()).toBe('2026–2027')
     expect(wrapper.get('[data-cell="coding"]').text()).not.toContain('2026')

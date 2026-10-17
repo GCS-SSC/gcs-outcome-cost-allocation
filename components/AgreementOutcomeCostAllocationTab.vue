@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch, type Ref } from 'vue'
+import { h, type VNode, computed, ref, watch, type Ref } from 'vue'
 import type { ExtensionEntityTabContext, GcsExtensionJsonConfig, GcsExtensionRbacRequirement } from '@gcs-ssc/extensions'
 import { ExtensionBadge, ExtensionButton, ExtensionResourceLayoutCard, useExtensionApi, useExtensionI18n, useExtensionToast } from '@gcs-ssc/extensions/ui'
 import { AgreementOutcomeCostAllocationTabMessages, AgreementOutcomeCostAllocationTabStatusMessages } from '../i18n/AgreementOutcomeCostAllocationTab'
@@ -33,7 +33,8 @@ const search = ref('')
 const pagination = ref({ pageIndex: 0, pageSize: 10 })
 const isCreatingDraft = ref(false)
 const deletingVersionId = ref('')
-const saveError = ref('')
+const error: Ref<{ kind: 'local'; key: 'assignmentRequired' | 'pendingEffects' } | { kind: 'api'; message: string } | null> = ref(null)
+const saveError = computed(() => error.value?.kind === 'local' ? t(error.value.key) : error.value?.message ?? '')
 const endpoint = computed(() => `/agreements/${context.agreementId}/allocations`)
 let requestGeneration = 0
 const refresh = async () => {
@@ -53,7 +54,7 @@ const refresh = async () => {
 await refresh()
 watch(() => context.agreementId, () => {
   data.value = null
-  saveError.value = ''
+  error.value = null
   search.value = ''
   pagination.value.pageIndex = 0
   refresh()
@@ -98,22 +99,23 @@ const statusColor = (version: CostAllocationVersion) => ({ draft: 'neutral', act
 const createDraftVersion = async () => {
   if (!canUpdate) return
   if (!canWork) {
-    saveError.value = t('assignmentRequired')
+    error.value = { kind: 'local', key: 'assignmentRequired' }
     return
   }
   if (hasPendingMutation.value || hasDraftVersion.value) return
   if (data.value?.hasPendingEffects) {
-    saveError.value = t('pendingEffects')
-    toast.add({ title: getOutcomeAllocationToastText(locale.value, 'error').title, description: saveError.value, color: 'warning' })
+    error.value = { kind: 'local', key: 'pendingEffects' }
+    const warningKey = 'pendingEffects'
+    toast.add({ title: getOutcomeAllocationToastText(() => locale.value, 'error').title, description: (): VNode => h('span', t(warningKey)), color: 'warning' })
     return
   }
   isCreatingDraft.value = true
-  saveError.value = ''
+  error.value = null
   try {
     await api.post<{ version?: CostAllocationVersion }>(getOutcomeAllocationVersionsEndpoint(endpoint.value))
     await refresh()
-  } catch (error) {
-    saveError.value = error instanceof Error ? error.message : String(error)
+  } catch (cause) {
+    error.value = { kind: 'api', message: cause instanceof Error ? cause.message : String(cause) }
   } finally {
     isCreatingDraft.value = false
   }
@@ -121,18 +123,18 @@ const createDraftVersion = async () => {
 const deleteDraftVersion = async (versionId: string) => {
   if (!canDelete) return
   if (!canWork) {
-    saveError.value = t('assignmentRequired')
+    error.value = { kind: 'local', key: 'assignmentRequired' }
     return
   }
   if (hasPendingMutation.value) return
   deletingVersionId.value = versionId
-  saveError.value = ''
+  error.value = null
   try {
     await deleteOutcomeAllocationDraftVersionRequest(api.path(getOutcomeAllocationVersionEndpoint(endpoint.value, encodeURIComponent(versionId))))
     await refresh()
-    toast.add({ ...getOutcomeAllocationToastText(locale.value, 'deleted'), color: 'success' })
-  } catch (error) {
-    saveError.value = error instanceof Error ? error.message : String(error)
+    toast.add({ ...getOutcomeAllocationToastText(() => locale.value, 'deleted'), color: 'success' })
+  } catch (cause) {
+    error.value = { kind: 'api', message: cause instanceof Error ? cause.message : String(cause) }
   } finally {
     deletingVersionId.value = ''
   }
