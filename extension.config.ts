@@ -29,12 +29,12 @@ export default defineGcsExtension({
     }
   ]),
   key: 'gcs-outcome-cost-allocation',
-  sdkVersion: '^0.3.17',
+  sdkVersion: '^0.3.19',
   configurationAccess: 'manager',
   requiredHostCapabilities: [
     'agreement-payment-capacity',
     'agency-config',
-    'agency-workspace',
+    'agency-workspace', 'agency-workspace-navigation',
     'audit-ownership',
     'stream-config-modal',
     'entity-tabs',
@@ -73,6 +73,7 @@ export default defineGcsExtension({
   admin: {
     agency: { path: './components/AgencyCodingConfig.vue' },
     agencyWorkspace: {
+      navigation: { category: 'management', order: 40 },
       label: { en: 'Cost allocation', fr: 'Répartition des coûts' },
       icon: 'i-lucide-chart-no-axes-combined',
       tabs: [
