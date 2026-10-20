@@ -93,11 +93,11 @@ export default defineGcsExtensionMigration({
     await db.schema
       .createTable('extensions.gcs_outcome_cost_allocation_allocations')
       .addColumn('id', 'bigserial', col => col.primaryKey())
-      .addColumn('allocation_version_id', 'bigint', col => col.notNull().references('extensions.gcs_outcome_cost_allocation_versions.id').onDelete('restrict'))
+      .addColumn('allocation_version_id', 'bigint', col => col.notNull())
       .addColumn('agreement_id', 'bigint', col => col.notNull().references('Funding_Case_Agreement_Profile.id').onDelete('restrict'))
       .addColumn('commitment_type', 'bigint', col => col.notNull().references('Transfer_Payment_Stream_Commitment_Type.id').onDelete('restrict'))
-      .addColumn('stream_commitment_id', 'bigint', col => col.notNull().references('Transfer_Payment_Stream_Chart_of_Account.id').onDelete('restrict'))
-      .addColumn('agreement_budget_fiscal_year_id', 'bigint', col => col.notNull().references('Funding_Case_Agreement_Budget_Fiscal_Year.id').onDelete('restrict'))
+      .addColumn('stream_commitment_id', 'bigint', col => col.notNull())
+      .addColumn('agreement_budget_fiscal_year_id', 'bigint', col => col.notNull())
       .addColumn('outcome_id', 'bigint', col => col.notNull().references('Transfer_Payment_Outcome.id').onDelete('restrict'))
       .addColumn('allocation_method', 'varchar(20)', col => col.notNull())
       .addColumn('allocation_value', 'numeric(19, 4)', col => col.notNull())
@@ -122,6 +122,9 @@ export default defineGcsExtensionMigration({
         sql`(resolved_amount IS NULL OR resolved_amount >= 0)
           AND (funding_basis_amount IS NULL OR funding_basis_amount >= 0)`
       )
+      .addForeignKeyConstraint('gcs_outcome_cost_allocation_ref_allocations_version', ['allocation_version_id'], 'extensions.gcs_outcome_cost_allocation_versions', ['id'], constraint => constraint.onDelete('restrict'))
+      .addForeignKeyConstraint('gcs_outcome_cost_allocation_ref_allocations_streamcommitment', ['stream_commitment_id'], 'Transfer_Payment_Stream_Chart_of_Account', ['id'], constraint => constraint.onDelete('restrict'))
+      .addForeignKeyConstraint('gcs_outcome_cost_allocation_ref_allocations_budgetyear', ['agreement_budget_fiscal_year_id'], 'Funding_Case_Agreement_Budget_Fiscal_Year', ['id'], constraint => constraint.onDelete('restrict'))
       .execute()
 
     await sql`
@@ -139,19 +142,24 @@ export default defineGcsExtensionMigration({
     await db.schema
       .createTable('extensions.gcs_outcome_cost_allocation_commitment_lines')
       .addColumn('id', 'bigserial', col => col.primaryKey())
-      .addColumn('allocation_version_id', 'bigint', col => col.notNull().references('extensions.gcs_outcome_cost_allocation_versions.id').onDelete('restrict'))
-      .addColumn('generated_commitment_id', 'bigint', col => col.notNull().references('Funding_Case_Agreement_Commitment.id').onDelete('restrict'))
-      .addColumn('commitment_line_id', 'bigint', col => col.notNull().references('Funding_Case_Agreement_Commitment_Line.id').onDelete('restrict'))
+      .addColumn('allocation_version_id', 'bigint', col => col.notNull())
+      .addColumn('generated_commitment_id', 'bigint', col => col.notNull())
+      .addColumn('commitment_line_id', 'bigint', col => col.notNull())
       .addColumn('agreement_id', 'bigint', col => col.notNull().references('Funding_Case_Agreement_Profile.id').onDelete('restrict'))
-      .addColumn('agreement_budget_fiscal_year_id', 'bigint', col => col.notNull().references('Funding_Case_Agreement_Budget_Fiscal_Year.id').onDelete('restrict'))
+      .addColumn('agreement_budget_fiscal_year_id', 'bigint', col => col.notNull())
       .addColumn('outcome_id', 'bigint', col => col.notNull().references('Transfer_Payment_Outcome.id').onDelete('restrict'))
-      .addColumn('stream_commitment_id', 'bigint', col => col.notNull().references('Transfer_Payment_Stream_Chart_of_Account.id').onDelete('restrict'))
+      .addColumn('stream_commitment_id', 'bigint', col => col.notNull())
       .addColumn('generated_amount', 'numeric(19, 2)', col => col.notNull())
       .addColumn('_deleted', 'boolean', col => col.defaultTo(false).notNull())
       .addCheckConstraint(
         'gcs_outcome_cost_allocation_generated_amount_nonnegative',
         sql`generated_amount >= 0`
       )
+      .addForeignKeyConstraint('gcs_outcome_cost_allocation_ref_lines_version', ['allocation_version_id'], 'extensions.gcs_outcome_cost_allocation_versions', ['id'], constraint => constraint.onDelete('restrict'))
+      .addForeignKeyConstraint('gcs_outcome_cost_allocation_ref_lines_commitment', ['generated_commitment_id'], 'Funding_Case_Agreement_Commitment', ['id'], constraint => constraint.onDelete('restrict'))
+      .addForeignKeyConstraint('gcs_outcome_cost_allocation_ref_lines_commitmentline', ['commitment_line_id'], 'Funding_Case_Agreement_Commitment_Line', ['id'], constraint => constraint.onDelete('restrict'))
+      .addForeignKeyConstraint('gcs_outcome_cost_allocation_ref_lines_streamcommitment', ['stream_commitment_id'], 'Transfer_Payment_Stream_Chart_of_Account', ['id'], constraint => constraint.onDelete('restrict'))
+      .addForeignKeyConstraint('gcs_outcome_cost_allocation_ref_lines_budgetyear', ['agreement_budget_fiscal_year_id'], 'Funding_Case_Agreement_Budget_Fiscal_Year', ['id'], constraint => constraint.onDelete('restrict'))
       .execute()
 
     await sql`

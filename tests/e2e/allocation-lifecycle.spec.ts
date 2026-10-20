@@ -405,7 +405,7 @@ const provisionQualifiedWorkflowTopology = async (
       const configuration = page.getByRole('dialog', { name: 'Outcome cost allocation', exact: true })
       await expect(configuration.getByRole('heading', { name: 'Workflows', exact: true })).toBeVisible()
       const lookup = page.waitForResponse(candidate => candidate.request().method() === 'GET'
-        && new URL(candidate.url()).pathname === `${agencyBase}/workflows`)
+        && new URL(candidate.url()).pathname === `${base}/lookups/workflows`)
       await configuration.getByRole('button', { name: 'Add', exact: true }).click()
       const workflow = page.getByRole('dialog', { name: 'Workflows', exact: true })
       await workflow.getByRole('combobox', { name: /Workflows/ }).click()
@@ -413,7 +413,14 @@ const provisionQualifiedWorkflowTopology = async (
       await expectOk(lookupResponse, 'Read published allocation Workflow catalog')
       const lookupUrl = new URL(lookupResponse.url())
       expect(lookupUrl.searchParams.get('entityType')).toBe(ALLOCATION_VERSION_ENTITY_TYPE)
-      expect(lookupUrl.searchParams.get('publicationState')).toBe('published')
+      const publishedWorkflows = await responseJson<{
+        items: Array<{ id: string; egcs_cn_name_en: string; egcs_cn_name_fr: string }>
+      }>(lookupResponse)
+      expect(publishedWorkflows.items).toContainEqual(expect.objectContaining({
+        id: workflowId,
+        egcs_cn_name_en: nameEn,
+        egcs_cn_name_fr: nameFr
+      }))
       await page.getByRole('listbox').getByRole('combobox', { name: 'Search...', exact: true }).fill(nameEn)
       await page.getByRole('option', { name: new RegExp(nameEn) }).click()
       const linked = page.waitForResponse(candidate => candidate.request().method() === 'POST'

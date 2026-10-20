@@ -39,11 +39,16 @@ describe('outcome allocation generated-record database guards', () => {
   let db: Kysely<GuardTestDatabase>
   let managedGuardDefinition = ''
   let versionGuardDefinition = ''
+  const migrationStatements: string[] = []
+  let recordingMigration = false
 
   beforeAll(async () => {
     const pglite = await KyselyPGlite.create(`memory://outcome-allocation-guards-${Date.now()}`)
     db = new Kysely<GuardTestDatabase>({
-      dialect: pglite.dialect
+      dialect: pglite.dialect,
+      log: event => {
+        if (recordingMigration && event.level === 'query') migrationStatements.push(event.query.sql)
+      }
     })
 
     await sql`CREATE SCHEMA extensions`.execute(db)
@@ -284,9 +289,11 @@ describe('outcome allocation generated-record database guards', () => {
       )
     `.execute(db)
 
+    recordingMigration = true
     await migration0001.up(db)
     await migration0002.up(db)
     await migration0003.up(db)
+    recordingMigration = false
     const guardFunction = await sql<{ definition: string }>`
       SELECT pg_get_functiondef(
         'extensions.gcs_outcome_cost_allocation_assert_managed_mutation(bigint)'::regprocedure
@@ -461,6 +468,41 @@ describe('outcome allocation generated-record database guards', () => {
 
   afterAll(async () => {
     await db.destroy()
+  })
+
+  it('keeps declared database identifiers within PostgreSQL limits before truncation', () => {
+    const identifiers = migrationStatements.flatMap(statement => [
+      ...Array.from(statement.matchAll(/"([^"]+)"/g), match => match[1] ?? ''),
+      ...Array.from(statement.matchAll(/\b(?:FUNCTION|TRIGGER|INDEX|CONSTRAINT)\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:extensions\.)?([a-z_][a-z_0-9]*)/gi), match => match[1] ?? '')
+    ])
+    expect(identifiers.length).toBeGreaterThan(50)
+    expect(identifiers.filter(identifier => Buffer.byteLength(identifier) > 63)).toEqual([])
+  })
+
+  it('gives foreign keys complete automatic names or explicit typed names without truncation', async () => {
+    const constraints = await sql<{ name: string; table_name: string; columns: string[] }>`
+      SELECT constraint_row.conname AS name, relation.relname AS table_name,
+        ARRAY(
+          SELECT attribute.attname
+          FROM unnest(constraint_row.conkey) WITH ORDINALITY AS key(attnum, position)
+          JOIN pg_attribute attribute
+            ON attribute.attrelid = relation.oid AND attribute.attnum = key.attnum
+          ORDER BY key.position
+        ) AS columns
+      FROM pg_constraint constraint_row
+      JOIN pg_class relation ON relation.oid = constraint_row.conrelid
+      JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
+      WHERE namespace.nspname = 'extensions' AND constraint_row.contype = 'f'
+        AND relation.relname LIKE 'gcs_outcome_cost_allocation_%'
+    `.execute(db)
+    expect(constraints.rows.length).toBeGreaterThanOrEqual(15)
+    for (const constraint of constraints.rows) {
+      expect(Buffer.byteLength(constraint.name)).toBeLessThanOrEqual(63)
+      if (constraint.name.startsWith('gcs_outcome_cost_allocation_ref_')) continue
+      if (/^gcs_fk_.*_[a-f0-9]{10}$/.test(constraint.name)) continue
+      expect(constraint.name).toBe(`${constraint.table_name}_${constraint.columns.join('_')}_fkey`)
+    }
+    expect(constraints.rows.filter(constraint => constraint.name.startsWith('gcs_outcome_cost_allocation_ref_'))).toHaveLength(8)
   })
 
   it('applies the full migration chain with one stable coordinate index and advisory lock guard', async () => {
