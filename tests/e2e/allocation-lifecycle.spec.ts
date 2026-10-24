@@ -421,7 +421,7 @@ const provisionQualifiedWorkflowTopology = async (
         egcs_cn_name_en: nameEn,
         egcs_cn_name_fr: nameFr
       }))
-      await page.getByRole('listbox').getByRole('combobox', { name: 'Search...', exact: true }).fill(nameEn)
+      await page.getByRole('combobox', { name: 'Search...', exact: true }).fill(nameEn)
       await page.getByRole('option', { name: new RegExp(nameEn) }).click()
       const linked = page.waitForResponse(candidate => candidate.request().method() === 'POST'
         && candidate.url().endsWith(`${base}/workflows`))
