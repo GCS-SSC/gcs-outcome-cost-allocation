@@ -817,13 +817,13 @@ watch(() => recordId, () => {
 </script>
 
 <template>
-  <ExtensionDetailPage id="outcome-cost-allocation-detail" v-model:collapsed="collapsed" :breadcrumb-items="breadcrumbItems">
+  <ExtensionDetailPage id="outcome-cost-allocation-detail" v-model:collapsed="collapsed" :breadcrumb-items="breadcrumbItems" data-field-scope="extension.gcs-outcome-cost-allocation.outcome-allocation-detail">
     <template #body>
       <div class="flex min-w-0 flex-1 flex-col">
         <ExtensionEntityHero
           :is-collapsed="collapsed" icon="i-lucide-chart-no-axes-combined" :title="versionTitle" :description="agreementTitle" :meta-items="[agreementContext?.agreementNumber, tLocal('title')]"
           :badges="selectedVersion ? [{ label: getStatusLabel(selectedVersion.status), uiVariant: 'subtle' }] : []" />
-        <ExtensionDetailWorkspace
+        <ExtensionDetailWorkspace data-field-container="Page navigation state, not a business input field."
           v-if="selectedVersion" v-model="selectedView" :items="views" :priority-values="['summary']" content-test-id="allocation-version-detail-content"
           :section-description="selectedView === 'workflows' ? tLocal('workflowsDescription') : undefined">
           <template #actions>
@@ -1085,6 +1085,7 @@ watch(() => recordId, () => {
                     @update:model-value="updateEditorMethod" />
                 </ExtensionFormField>
                 <ExtensionFormField
+                  data-field-label-en="Allocation amount or percentage" data-field-label-fr="Montant ou pourcentage de l’affectation"
                   :label="tLocal(allocationEditor.allocation.allocationMethod === 'percentage' ? 'percentage' : 'amount')"
                   name="allocationValue"
                   :error="allocationEditorError"
@@ -1137,7 +1138,7 @@ watch(() => recordId, () => {
         <ExtensionModal v-model:open="isGenerateModalOpen" :title="tLocal('generateRowsTitle')">
           <template #body>
             <div class="space-y-4">
-              <ExtensionFormField :label="tLocal('commitmentType')" required>
+              <ExtensionFormField :label="tLocal('commitmentType')" required data-ui-target="extension.gcs-outcome-cost-allocation.outcome-allocation-detail.generation-commitment-type">
                 <ExtensionSelect
                   v-model="generationCommitmentType"
                   value-key="value"
@@ -1146,7 +1147,7 @@ watch(() => recordId, () => {
                   class="w-full" />
               </ExtensionFormField>
 
-              <ExtensionFormField :label="tLocal('fiscalYears')" required>
+              <ExtensionFormField :label="tLocal('fiscalYears')" required data-ui-target="extension.gcs-outcome-cost-allocation.outcome-allocation-detail.fiscal-years">
                 <ExtensionSelectMenu
                   :model-value="generationYearIds"
                   multiple

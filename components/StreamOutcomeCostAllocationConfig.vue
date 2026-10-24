@@ -330,7 +330,7 @@ watch(config, value => {
 </script>
 
 <template>
-  <div class="space-y-6">
+  <div class="space-y-6" data-field-scope="extension.gcs-outcome-cost-allocation.stream-outcome-cost-allocation-config">
     <div class="flex flex-wrap items-center justify-between gap-3">
       <h2 class="text-lg font-semibold text-zinc-900 dark:text-white">
         {{ tLocal('title') }}
@@ -442,21 +442,21 @@ watch(config, value => {
       :description="tLocal('addAssociationDescription')">
       <template #body>
         <div class="space-y-4">
-          <ExtensionFormField :label="tLocal('commitmentLine')" required>
+          <ExtensionFormField :label="tLocal('commitmentLine')" required data-ui-target="extension.gcs-outcome-cost-allocation.stream-outcome-cost-allocation-config.selected-association.stream-commitment-id">
             <ExtensionSelect
               v-model="selectedAssociation.streamCommitmentId"
               value-key="value"
               :items="commitmentLineOptions"
               class="w-full" />
           </ExtensionFormField>
-          <ExtensionFormField :label="tLocal('commitmentType')" required>
+          <ExtensionFormField :label="tLocal('commitmentType')" required data-ui-target="extension.gcs-outcome-cost-allocation.stream-outcome-cost-allocation-config.selected-association.commitment-type">
             <ExtensionSelect
               v-model="selectedAssociation.commitmentType"
               value-key="value"
               :items="commitmentTypeOptions"
               class="w-full" />
           </ExtensionFormField>
-          <ExtensionFormField :label="tLocal('outcome')" required>
+          <ExtensionFormField :label="tLocal('outcome')" required data-ui-target="extension.gcs-outcome-cost-allocation.stream-outcome-cost-allocation-config.selected-association.outcome-id">
             <ExtensionSelect
               v-model="selectedAssociation.outcomeId"
               value-key="value"

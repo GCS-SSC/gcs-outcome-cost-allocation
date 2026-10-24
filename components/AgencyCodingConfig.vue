@@ -193,7 +193,7 @@ watch(() => [agencyId, extensionKey], () => { saving.value = false; void refresh
 </script>
 
 <template>
-  <div class="space-y-6">
+  <div class="space-y-6" data-field-scope="extension.gcs-outcome-cost-allocation.agency-coding-config">
     <h2 class="text-base font-semibold">{{ t(section === 'credit-memos' ? 'creditMemo' : 'receivable') }}</h2>
     <p>{{ t(kind === 'creditMemoRules' ? 'creditMemoDescription' : 'description') }}</p>
     <p v-if="loading" role="status">{{ t('loading') }}</p>
@@ -203,7 +203,8 @@ watch(() => [agencyId, extensionKey], () => { saving.value = false; void refresh
       <ExtensionButton :label="t('retry')" @click="refresh" />
     </div>
     <ExtensionAlert v-if="!result.success" color="error" :description="t('invalid')" />
-    <ExtensionResourceLayoutCard v-model:search="search" v-model:pagination="pagination"
+    <ExtensionResourceLayoutCard
+      v-model:search="search" v-model:pagination="pagination"
       :data="visibleRows" :columns="columns" :total-records="filteredRows.length" :loading="loading"
       :show-button="!readOnly" :button-disabled="locked" :button-label="t(kind === 'receivableSets' ? 'addSet' : 'addRule')" :search-placeholder="t('search')" @add="openEditor()">
       <template #source-cell="{ row }"><span class="font-medium">{{ row.original.source }}</span></template>
@@ -226,34 +227,34 @@ watch(() => [agencyId, extensionKey], () => { saving.value = false; void refresh
     <ExtensionModal :open="Boolean(editor)" :title="t(editor?.isNew ? (kind === 'receivableSets' ? 'addSet' : 'addRule') : 'edit')" :dismissible="!saving" @update:open="!$event && !saving && closeEditor()">
       <template #body>
         <form v-if="editor && set" class="space-y-4" novalidate @submit.prevent="applyEditor">
-        <ExtensionFormField v-if="'fiscalYearId' in set" :label="t('fiscalYear')" :name="`${kind}.${editor.index}.fiscalYearId`" :error="fieldError(`${kind}.${editor.index}.fiscalYearId`)" required>
-          <ExtensionSelectMenu class="w-full min-w-0" v-model="set.fiscalYearId" :items="years" value-key="value" :disabled="locked" aria-required="true" />
-        </ExtensionFormField>
-        <ExtensionFormField :label="t('currency')" :name="`${kind}.${editor.index}.currency`" :error="fieldError(`${kind}.${editor.index}.currency`)" required>
-          <ExtensionSelectMenu class="w-full min-w-0" v-model="set.currency" :items="currencies" value-key="value" :disabled="locked" aria-required="true" />
-        </ExtensionFormField>
-        <template v-if="'commitmentCodingLineId' in set">
-          <ExtensionFormField :label="t('sourceAccount')" :name="`${kind}.${editor.index}.commitmentCodingLineId`" :error="fieldError(`${kind}.${editor.index}.commitmentCodingLineId`)" required>
-            <ExtensionSelectMenu class="w-full min-w-0" v-model="set.commitmentCodingLineId" :items="options('commitment', set.currency)" value-key="value" :disabled="locked" aria-required="true" />
+          <ExtensionFormField v-if="'fiscalYearId' in set" :label="t('fiscalYear')" :name="`${kind}.${editor.index}.fiscalYearId`" :error="fieldError(`${kind}.${editor.index}.fiscalYearId`)" required data-ui-target="extension.gcs-outcome-cost-allocation.agency-coding-config.fiscal-year">
+            <ExtensionSelectMenu v-model="set.fiscalYearId" class="w-full min-w-0" :items="years" value-key="value" :disabled="locked" aria-required="true" />
           </ExtensionFormField>
-          <ExtensionFormField :label="t('startDate')" :name="`${kind}.${editor.index}.startDate`" :error="fieldError(`${kind}.${editor.index}.startDate`)" required>
-            <ExtensionInput v-model="set.startDate" type="date" :disabled="locked" required />
+          <ExtensionFormField :label="t('currency')" :name="`${kind}.${editor.index}.currency`" :error="fieldError(`${kind}.${editor.index}.currency`)" required data-ui-target="extension.gcs-outcome-cost-allocation.agency-coding-config.currency">
+            <ExtensionSelectMenu v-model="set.currency" class="w-full min-w-0" :items="currencies" value-key="value" :disabled="locked" aria-required="true" />
           </ExtensionFormField>
-          <ExtensionFormField :label="t('endDate')" :name="`${kind}.${editor.index}.endDate`" :error="fieldError(`${kind}.${editor.index}.endDate`)" required>
-            <ExtensionInput v-model="set.endDate" type="date" :disabled="locked" required />
+          <template v-if="'commitmentCodingLineId' in set">
+            <ExtensionFormField :label="t('sourceAccount')" :name="`${kind}.${editor.index}.commitmentCodingLineId`" :error="fieldError(`${kind}.${editor.index}.commitmentCodingLineId`)" required data-ui-target="extension.gcs-outcome-cost-allocation.agency-coding-config.source-account">
+              <ExtensionSelectMenu v-model="set.commitmentCodingLineId" class="w-full min-w-0" :items="options('commitment', set.currency)" value-key="value" :disabled="locked" aria-required="true" />
+            </ExtensionFormField>
+            <ExtensionFormField :label="t('startDate')" :name="`${kind}.${editor.index}.startDate`" :error="fieldError(`${kind}.${editor.index}.startDate`)" required data-ui-target="extension.gcs-outcome-cost-allocation.agency-coding-config.start-date">
+              <ExtensionInput v-model="set.startDate" type="date" :disabled="locked" required />
+            </ExtensionFormField>
+            <ExtensionFormField :label="t('endDate')" :name="`${kind}.${editor.index}.endDate`" :error="fieldError(`${kind}.${editor.index}.endDate`)" required data-ui-target="extension.gcs-outcome-cost-allocation.agency-coding-config.end-date">
+              <ExtensionInput v-model="set.endDate" type="date" :disabled="locked" required />
+            </ExtensionFormField>
+          </template>
+          <ExtensionFormField v-if="'commitmentCodingLineId' in set" :label="t('targetAccounts')" :name="`${kind}.${editor.index}.lines`" :error="fieldError(`${kind}.${editor.index}.lines`)" required data-ui-target="extension.gcs-outcome-cost-allocation.agency-coding-config.target-accounts">
+            <ExtensionSelectMenu v-model="selectedCreditMemoAccounts" class="w-full min-w-0" :items="options('credit_memo', set.currency)" multiple value-key="value" :disabled="locked" aria-required="true" />
           </ExtensionFormField>
-        </template>
-        <ExtensionFormField v-if="'commitmentCodingLineId' in set" :label="t('targetAccounts')" :name="`${kind}.${editor.index}.lines`" :error="fieldError(`${kind}.${editor.index}.lines`)" required>
-          <ExtensionSelectMenu class="w-full min-w-0" v-model="selectedCreditMemoAccounts" :items="options('credit_memo', set.currency)" multiple value-key="value" :disabled="locked" aria-required="true" />
-        </ExtensionFormField>
-        <div v-for="(line, lineIndex) in set.lines" :key="line.codingLineId || lineIndex" :class="'commitmentCodingLineId' in set ? 'space-y-3' : 'grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_8rem]'">
-          <ExtensionFormField v-if="'fiscalYearId' in set" class="min-w-0" :label="t('account')" :name="`${kind}.${editor.index}.lines.${lineIndex}.codingLineId`" :error="fieldError(`${kind}.${editor.index}.lines.${lineIndex}.codingLineId`)" required>
-            <ExtensionSelectMenu class="w-full min-w-0" v-model="line.codingLineId" :items="options('account_receivable', set.currency, set.fiscalYearId)" value-key="value" :disabled="locked" aria-required="true" />
-          </ExtensionFormField>
-          <ExtensionFormField :label="'commitmentCodingLineId' in set ? `${t('percentage')} — ${targetLabel(line.codingLineId)}` : t('percentage')" :name="`${kind}.${editor.index}.lines.${lineIndex}.percentage`" :error="fieldError(`${kind}.${editor.index}.lines.${lineIndex}.percentage`)" required>
-            <ExtensionInput v-model="line.percentage" inputmode="decimal" :disabled="locked" required />
-          </ExtensionFormField>
-        </div>
+          <div v-for="(line, lineIndex) in set.lines" :key="line.codingLineId || lineIndex" :class="'commitmentCodingLineId' in set ? 'space-y-3' : 'grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_8rem]'">
+            <ExtensionFormField v-if="'fiscalYearId' in set" class="min-w-0" :label="t('account')" :name="`${kind}.${editor.index}.lines.${lineIndex}.codingLineId`" :error="fieldError(`${kind}.${editor.index}.lines.${lineIndex}.codingLineId`)" required data-ui-target="extension.gcs-outcome-cost-allocation.agency-coding-config.account">
+              <ExtensionSelectMenu v-model="line.codingLineId" class="w-full min-w-0" :items="options('account_receivable', set.currency, set.fiscalYearId)" value-key="value" :disabled="locked" aria-required="true" />
+            </ExtensionFormField>
+            <ExtensionFormField :label="'commitmentCodingLineId' in set ? `${t('percentage')} — ${targetLabel(line.codingLineId)}` : t('percentage')" :name="`${kind}.${editor.index}.lines.${lineIndex}.percentage`" :error="fieldError(`${kind}.${editor.index}.lines.${lineIndex}.percentage`)" required data-ui-target="extension.gcs-outcome-cost-allocation.agency-coding-config.percentage">
+              <ExtensionInput v-model="line.percentage" inputmode="decimal" :disabled="locked" required />
+            </ExtensionFormField>
+          </div>
           <p v-if="attempted && !editorResult.success" role="alert" class="text-sm text-error">{{ editorError }}</p>
           <p v-if="saveError" role="alert" class="text-sm text-error">{{ saveError }}</p>
           <div class="flex justify-end gap-2">
