@@ -16,7 +16,7 @@ it('renders retained Nuxt UI warning and success toasts after the producing comp
   const runtime = installExtensionTestUiRuntime()
   runtime.composables.useI18n = () => ({ locale, n: value => String(value) })
   runtime.composables.useToast = useToast
-  runtime.components.CommonResourceLayoutCard = defineComponent({
+  runtime.components.CommonResourceLayout = defineComponent({
     emits: ['add'],
     setup: (_, { attrs, emit }) => () => h('button', { onClick: () => emit('add') }, String(attrs.buttonLabel ?? attrs['button-label']))
   })

@@ -42,7 +42,7 @@ const mountCollection = async (fetcher: typeof fetch, permissions = { canUpdate:
   const toasts: Record<string, unknown>[] = []
   runtime.composables.useToast = () => ({ add: notification => { toasts.push(notification) } })
   runtime.composables.useI18n = () => ({ locale, n: value => String(value) })
-  runtime.components.CommonResourceLayoutCard = ResourceTable
+  runtime.components.CommonResourceLayout = ResourceTable
   runtime.components.UButton = LinkButton
   const wrapper = mount(defineComponent({
     setup: () => () => h(Suspense, null, { default: () => h(AgreementOutcomeCostAllocationTab, {

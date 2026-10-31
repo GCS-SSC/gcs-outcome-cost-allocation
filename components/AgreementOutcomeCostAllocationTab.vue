@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { h, type VNode, computed, ref, watch, type Ref } from 'vue'
 import type { ExtensionEntityTabContext, GcsExtensionJsonConfig, GcsExtensionRbacRequirement } from '@gcs-ssc/extensions'
-import { ExtensionBadge, ExtensionButton, ExtensionResourceLayoutCard, useExtensionApi, useExtensionI18n, useExtensionToast } from '@gcs-ssc/extensions/ui'
+import { ExtensionBadge, ExtensionButton, ExtensionResourceLayout, useExtensionApi, useExtensionI18n, useExtensionToast } from '@gcs-ssc/extensions/ui'
 import { AgreementOutcomeCostAllocationTabMessages, AgreementOutcomeCostAllocationTabStatusMessages } from '../i18n/AgreementOutcomeCostAllocationTab'
 import { type AllocationMoney, type CostAllocationVersion, resolveAllocationAmounts, subtractMoney, sumMoney, toMoney } from '../shared/allocation'
 import {
@@ -149,7 +149,7 @@ const deleteDraftVersion = async (versionId: string) => {
     <p v-if="data?.hasPendingEffects" role="status" class="text-sm text-warning">
       {{ t('pendingEffects') }}
     </p>
-    <ExtensionResourceLayoutCard
+    <ExtensionResourceLayout
       v-model:search="search" v-model:pagination="pagination" :data="visibleRows" :columns="columns"
       :total-records="filteredRows.length" :loading="status === 'pending'" :request-status="status" :aria-label="t('allocationVersions')"
       :button-label="t('newDraft')" :show-button="canUpdate" :button-disabled="hasPendingMutation || status !== 'success' || hasDraftVersion" :search-placeholder="t('search')"
@@ -187,6 +187,6 @@ const deleteDraftVersion = async (versionId: string) => {
           {{ t(search ? 'noMatches' : 'noVersions') }}
         </p>
       </template>
-    </ExtensionResourceLayoutCard>
+    </ExtensionResourceLayout>
   </div>
 </template>

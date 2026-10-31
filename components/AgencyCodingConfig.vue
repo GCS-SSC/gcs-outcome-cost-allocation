@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch, type Ref } from 'vue'
 import type { GcsExtensionJsonConfig } from '@gcs-ssc/extensions'
-import { ExtensionAlert, ExtensionButton, ExtensionFormField, ExtensionInput, ExtensionSelectMenu, ExtensionSaveButton, ExtensionModal, ExtensionResourceLayoutCard, useExtensionI18n, useHostApi } from '@gcs-ssc/extensions/ui'
+import { ExtensionAlert, ExtensionButton, ExtensionFormField, ExtensionInput, ExtensionSelectMenu, ExtensionSaveButton, ExtensionModal, ExtensionResourceLayout, useExtensionI18n, useHostApi } from '@gcs-ssc/extensions/ui'
 import { AgencyCodingSchema, emptyAgencyCodingConfig, type AgencyCodingConfig } from '../shared/agency-coding'
 import { AgencyCodingConfigMessages } from '../i18n/AgencyCodingConfig'
 
@@ -203,7 +203,7 @@ watch(() => [agencyId, extensionKey], () => { saving.value = false; void refresh
       <ExtensionButton :label="t('retry')" @click="refresh" />
     </div>
     <ExtensionAlert v-if="!result.success" color="error" :description="t('invalid')" />
-    <ExtensionResourceLayoutCard
+    <ExtensionResourceLayout
       v-model:search="search" v-model:pagination="pagination"
       :data="visibleRows" :columns="columns" :total-records="filteredRows.length" :loading="loading"
       :show-button="!readOnly" :button-disabled="locked" :button-label="t(kind === 'receivableSets' ? 'addSet' : 'addRule')" :search-placeholder="t('search')" @add="openEditor()">
@@ -223,7 +223,7 @@ watch(() => [agencyId, extensionKey], () => { saving.value = false; void refresh
         </div>
       </template>
       <template #empty><p class="py-8 text-center text-muted">{{ t(search ? 'noMatch' : kind === 'creditMemoRules' ? 'emptyExceptions' : 'empty') }}</p></template>
-    </ExtensionResourceLayoutCard>
+    </ExtensionResourceLayout>
     <ExtensionModal :open="Boolean(editor)" :title="t(editor?.isNew ? (kind === 'receivableSets' ? 'addSet' : 'addRule') : 'edit')" :dismissible="!saving" @update:open="!$event && !saving && closeEditor()">
       <template #body>
         <form v-if="editor && set" class="space-y-4" novalidate @submit.prevent="applyEditor">

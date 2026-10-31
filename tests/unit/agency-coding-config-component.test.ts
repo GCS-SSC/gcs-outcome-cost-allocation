@@ -38,7 +38,7 @@ const InteractiveSelectMenu = defineComponent({
     } }, (Array.isArray(attrs.items) ? attrs.items : []).map(item => h('option', { value: item.value, selected: values.includes(item.value) }, String(item.label))))
   }
 })
-const installUi = () => installExtensionTestUiRuntime({ components: { ...createExtensionTestUiRuntime().components, CommonResourceLayoutCard: ResourceTable, UModal: ReactiveModal, USelectMenu: InteractiveSelectMenu } })
+const installUi = () => installExtensionTestUiRuntime({ components: { ...createExtensionTestUiRuntime().components, CommonResourceLayout: ResourceTable, UModal: ReactiveModal, USelectMenu: InteractiveSelectMenu } })
 beforeEach(() => { installUi() })
 
 const extensionKey = 'gcs-outcome-cost-allocation'

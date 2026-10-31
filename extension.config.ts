@@ -29,7 +29,7 @@ export default defineGcsExtension({
     }
   ]),
   key: 'gcs-outcome-cost-allocation',
-  sdkVersion: '^0.3.19',
+  sdkVersion: '^0.4.0',
   configurationAccess: 'manager',
   requiredHostCapabilities: [
     'agreement-payment-capacity',
