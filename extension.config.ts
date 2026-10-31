@@ -107,12 +107,6 @@ export default defineGcsExtension({
   migrations: [
     {
       path: './server/migrations/0001_outcome_cost_allocation.ts'
-    },
-    {
-      path: './server/migrations/0002_versioned_allocations.ts'
-    },
-    {
-      path: './server/migrations/0003_scoped_allocations.ts'
     }
   ],
   serverHandlers: [

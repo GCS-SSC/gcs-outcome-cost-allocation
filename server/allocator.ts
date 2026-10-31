@@ -1,16 +1,15 @@
 import type { GcsCodingAllocator } from '@gcs-ssc/extensions/server'
 import { sql } from 'kysely'
+import { addMoney, compareMoney, parseMoney, subtractMoney, sumMoney, zeroMoney, type Money } from '@gcs-ssc/extensions/money'
 import { createGcsExtensionUserError, getExtensionKvEntry, setExtensionKvEntry } from '@gcs-ssc/extensions/server'
 import { allocateCreditMemo } from './credit-memo-allocation.ts'
 import { AgencyCodingSchema, RetainedAgencyCodingSchema, splitAgencyCoding } from '../shared/agency-coding.ts'
 import { asOutcomeCostAllocationDb } from './db.ts'
 import { createOutcomeCostAllocationUserError } from './errors.ts'
-import { databaseNumericText, parseDatabaseMoney } from './numeric.ts'
+import { databaseMinorUnitsText, parseDatabaseMoney } from './numeric.ts'
 import {
   allocatePaymentAmountToCommitmentLines,
-  fromCents,
-  parseOutcomeCostAllocationConfig,
-  toCents
+  parseOutcomeCostAllocationConfig
 } from '../shared/allocation.ts'
 
 /**
@@ -19,6 +18,10 @@ import {
  * @returns Exact coding or null for unmanaged outputs.
  */
 const allocator: GcsCodingAllocator = async context => {
+  const currency = context.currency
+  const zero = zeroMoney(currency)
+  const amount = parseMoney(context.amount)
+  if (amount.currency !== zero.currency) throw createOutcomeCostAllocationUserError('GCS_OUTCOME_COST_ALLOCATION_INVALID', 'amount')
   if (context.output.kind === 'credit-memo') return await allocateCreditMemo(context)
   if (context.output.kind === 'receivable') {
     const output = context.output
@@ -47,7 +50,7 @@ const allocator: GcsCodingAllocator = async context => {
       if (matches.length !== 1 || matches[0]!.agencyFiscalYearId !== fiscalYearId) throw invalid()
       streamIds.set(line.codingLineId, matches[0]!.codingLineId)
     }
-    return { lines: splitAgencyCoding(policy.lines, context.amount).map(line => ({ ...line, codingLineId: streamIds.get(line.codingLineId)! })), policy }
+    return { lines: splitAgencyCoding(policy.lines, amount).map(line => ({ ...line, codingLineId: streamIds.get(line.codingLineId)! })), policy }
   }
   const { commitmentTypeId } = context.output
   if (!parseOutcomeCostAllocationConfig(context.config).enabledCommitmentTypes.includes(commitmentTypeId)) return null
@@ -75,59 +78,60 @@ const allocator: GcsCodingAllocator = async context => {
   if (!version) throw createOutcomeCostAllocationUserError('GCS_OUTCOME_COST_ALLOCATION_ACTIVE_REQUIRED', 'allocationVersion')
 
   let allocationQuery = db.selectFrom('extensions.gcs_outcome_cost_allocation_allocations')
-    .select(['stream_commitment_id', databaseNumericText(sql.ref('resolved_amount')).as('amount')])
+    .select(['stream_commitment_id', databaseMinorUnitsText(sql.ref('resolved_amount')).as('amount')])
     .where('allocation_version_id', '=', String(version.id)).where('agreement_id', '=', context.agreementId)
     .where('commitment_type', '=', commitmentTypeId).where('_deleted', '=', false)
     .orderBy('stream_commitment_id')
   if (isPayment) allocationQuery = allocationQuery.where('agreement_budget_fiscal_year_id', '=', paymentYearId!)
   const rows = await allocationQuery.execute()
   if (isPayment && rows.length === 0) throw missingPaymentMatrix()
-  const weights = new Map<string, bigint>()
+  const weights = new Map<string, Money>()
   for (const row of rows) {
     if (row.amount === null) throw createOutcomeCostAllocationUserError('GCS_OUTCOME_COST_ALLOCATION_INVALID', 'allocations')
-    const amount = toCents(parseDatabaseMoney(row.amount))
+    const weight = parseDatabaseMoney(row.amount, currency)
     const codingId = String(row.stream_commitment_id)
-    if (amount > BigInt(0) && !catalogIds.has(codingId)) {
+    if (compareMoney(weight, zero) > 0 && !catalogIds.has(codingId)) {
       throw createOutcomeCostAllocationUserError('GCS_OUTCOME_COST_ALLOCATION_STREAM_COMMITMENT_INACTIVE', 'allocations')
     }
-    if (catalogIds.has(codingId)) weights.set(codingId, (weights.get(codingId) ?? BigInt(0)) + amount)
+    if (catalogIds.has(codingId)) weights.set(codingId, addMoney(weights.get(codingId) ?? zero, weight))
   }
 
   if (isPayment) {
     const available = new Map(context.codingAvailableAmounts.map(line => [line.codingLineId, line.amount]))
     const split = allocatePaymentAmountToCommitmentLines([...weights].map(([codingId, weight]) => ({
-      commitmentLineId: codingId, weightAmount: fromCents(weight), remainingAmount: available.get(codingId) ?? '0.00'
-    })), context.amount)
-    if (split.reduce((sum, line) => sum + toCents(line.paymentAmount), BigInt(0)) !== toCents(context.amount)) {
+      commitmentLineId: codingId, weightAmount: weight, remainingAmount: available.get(codingId) ?? zero
+    })), amount, currency)
+    if (compareMoney(sumMoney(split.map(line => line.paymentAmount), currency), amount) !== 0) {
       throw createOutcomeCostAllocationUserError('GCS_OUTCOME_COST_ALLOCATION_PAYMENT_EXCEEDS_REMAINING', 'paymentAmount')
     }
     return split.map(line => ({ codingLineId: line.commitmentLineId, amount: line.paymentAmount }))
   }
 
-  const paid = new Map<string, bigint>()
+  const paid = new Map<string, Money>()
   for (const line of context.existingLines) {
-    const amount = toCents(line.paidAmount)
-    if (amount > BigInt(0)) paid.set(line.codingLineId, (paid.get(line.codingLineId) ?? BigInt(0)) + amount)
+    const paidAmount = parseMoney(line.paidAmount)
+    if (compareMoney(paidAmount, zero) > 0) paid.set(line.codingLineId, addMoney(paid.get(line.codingLineId) ?? zero, paidAmount))
   }
   for (const floor of context.codingPaidFloors) {
-    const amount = toCents(floor.paidAmount)
-    if (amount > (paid.get(floor.codingLineId) ?? BigInt(0))) paid.set(floor.codingLineId, amount)
+    const paidAmount = parseMoney(floor.paidAmount)
+    if (compareMoney(paidAmount, paid.get(floor.codingLineId) ?? zero) > 0) paid.set(floor.codingLineId, paidAmount)
   }
-  const unpaid = toCents(context.amount) - [...paid.values()].reduce((sum, amount) => sum + amount, BigInt(0))
-  if (unpaid < BigInt(0)) {
+  const unpaid = subtractMoney(amount, sumMoney(paid.values(), currency))
+  if (compareMoney(unpaid, zero) < 0) {
     throw createOutcomeCostAllocationUserError('GCS_OUTCOME_COST_ALLOCATION_PAYMENT_EXCEEDS_GENERATED_LINE', 'amount')
   }
   const split = allocatePaymentAmountToCommitmentLines([...weights].map(([codingId, weight]) => ({
-    commitmentLineId: codingId, weightAmount: fromCents(weight), remainingAmount: fromCents(unpaid)
-  })), fromCents(unpaid))
-  if (split.reduce((sum, line) => sum + toCents(line.paymentAmount), BigInt(0)) !== unpaid) {
+    commitmentLineId: codingId, weightAmount: weight, remainingAmount: unpaid
+  })), unpaid, currency)
+  if (compareMoney(sumMoney(split.map(line => line.paymentAmount), currency), unpaid) !== 0) {
     throw createOutcomeCostAllocationUserError('GCS_OUTCOME_COST_ALLOCATION_COMMITMENT_LINES_MISSING', 'allocations')
   }
-  for (const line of split) paid.set(line.commitmentLineId, (paid.get(line.commitmentLineId) ?? BigInt(0)) + toCents(line.paymentAmount))
+  for (const line of split) paid.set(line.commitmentLineId, addMoney(paid.get(line.commitmentLineId) ?? zero, line.paymentAmount))
   // Retain selected zero coding so a zero-total Commitment can still complete.
-  for (const codingId of weights.keys()) if (!paid.has(codingId)) paid.set(codingId, BigInt(0))
+  for (const codingId of weights.keys()) if (!paid.has(codingId)) paid.set(codingId, zero)
   if (pinned === null) await setExtensionKvEntry(kvDb, 'gcs-outcome-cost-allocation', 'fundingcaseagreementcommitment', commitmentId, 'allocation-version', { versionId: String(version.id) })
-  return [...paid].map(([codingLineId, amount]) => ({ codingLineId, amount: fromCents(amount) }))
+  return [...paid].map(([codingLineId, allocatedAmount]) => ({ codingLineId, amount: allocatedAmount }))
+
 }
 
 export default allocator

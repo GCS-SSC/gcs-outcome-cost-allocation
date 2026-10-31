@@ -1,6 +1,6 @@
+import { compareMoney, zeroMoney } from '@gcs-ssc/extensions/money'
 import {
   EXTENSION_KEY,
-  compareMoney,
   parseOutcomeCostAllocationConfig,
   type AllocationMoney
 } from '../shared/allocation.ts'
@@ -111,7 +111,7 @@ export const seedManagedOutcomeCostAllocationDemo = async (
   const activeOutcomeIds = new Set(baseline.outcomes.map(outcome => String(outcome.id)))
   const activeCommitmentIds = new Set(baseline.streamCommitments.map(commitment => String(commitment.id)))
   const allocations = baseline.budgetYears
-    .filter(year => compareMoney(year.program_funding, '0') > 0)
+    .filter(year => compareMoney(year.program_funding, zeroMoney(year.program_funding.currency)) > 0)
     .map(year => {
       const streamBudgetId = String(year.stream_budget_id ?? '')
       const mapping = config.mappings.find(candidate =>

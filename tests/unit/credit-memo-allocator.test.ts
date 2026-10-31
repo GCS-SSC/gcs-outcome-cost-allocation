@@ -1,3 +1,4 @@
+import { parseCurrencyMoney } from '@gcs-ssc/extensions/money'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { Kysely, sql, type Transaction } from 'kysely'
 import { KyselyPGlite } from 'kysely-pglite'
@@ -5,12 +6,14 @@ import type { GcsCodingAllocatorContext } from '@gcs-ssc/extensions/server'
 import allocator from '../../server/allocator'
 import type { OutcomeCostAllocationHostDatabase } from '../../server/db'
 
+const money = (amount: string, currency = 'CAD') => parseCurrencyMoney(amount, currency)
+
 let db: Kysely<OutcomeCostAllocationHostDatabase>
 const account = (codingLineId: string, agencyChartOfAccountId = codingLineId, commitmentChartOfAccountId: string | null = null) => ({
   codingLineId, agencyChartOfAccountId, agencyFiscalYearId: '41', accountingDimensions: [], commitmentChartOfAccountId
 })
 const context = (overrides: Partial<GcsCodingAllocatorContext> = {}): GcsCodingAllocatorContext => ({
-  db: db as unknown as Transaction<unknown>, agreementId: '1', agencyId: '1', streamId: '1', currency: 'cad', amount: '100.00',
+  db: db as unknown as Transaction<unknown>, agreementId: '1', agencyId: '1', streamId: '1', currency: 'cad', amount: money('100.00'),
   output: { kind: 'credit-memo', effectiveDate: '2026-07-01', activeCommitments: [
     { commitmentId: '300', commitmentTypeId: '99' }, { commitmentId: '200', commitmentTypeId: '1' }, { commitmentId: '100', commitmentTypeId: '1' }
   ] },
@@ -32,13 +35,13 @@ describe('credit memo allocation from the latest committed matrix', () => {
     await sql`CREATE TABLE extensions.kv_entry (id bigserial primary key, extension_key text, owner_type text, owner_id text, config_key text, value jsonb, _deleted boolean DEFAULT false)`.execute(db)
     await sql`CREATE TABLE extensions.gcs_outcome_cost_allocation_versions (id bigint PRIMARY KEY, agreement_id bigint, status text, _deleted boolean DEFAULT false)`.execute(db)
     await sql`CREATE TABLE extensions.gcs_outcome_cost_allocation_allocations (id bigserial PRIMARY KEY, allocation_version_id bigint,
-      agreement_id bigint, commitment_type bigint, stream_commitment_id bigint, resolved_amount numeric(19,2), _deleted boolean DEFAULT false)`.execute(db)
+      agreement_id bigint, commitment_type bigint, stream_commitment_id bigint, resolved_amount numeric, _deleted boolean DEFAULT false)`.execute(db)
   })
   beforeEach(async () => {
     await sql`TRUNCATE extensions.kv_entry, extensions.gcs_outcome_cost_allocation_allocations, extensions.gcs_outcome_cost_allocation_versions`.execute(db)
     await sql`INSERT INTO extensions.gcs_outcome_cost_allocation_versions (id,agreement_id,status) VALUES (1,1,'active'),(2,1,'inactive'),(3,2,'active'),(4,1,'draft')`.execute(db)
     await sql`INSERT INTO extensions.gcs_outcome_cost_allocation_allocations (allocation_version_id,agreement_id,commitment_type,stream_commitment_id,resolved_amount)
-      VALUES (1,1,1,10,10),(1,1,1,20,90),(2,1,1,10,75),(2,1,1,20,25),(2,1,99,10,500),(3,2,1,10,500)`.execute(db)
+      VALUES (1,1,1,10,1000),(1,1,1,20,9000),(2,1,1,10,7500),(2,1,1,20,2500),(2,1,99,10,50000),(3,2,1,10,50000)`.execute(db)
     await sql`INSERT INTO extensions.kv_entry (extension_key,owner_type,owner_id,config_key,value)
       VALUES ('gcs-outcome-cost-allocation','fundingcaseagreementcommitment','200','allocation-version','{"versionId":"2"}'),
         ('gcs-outcome-cost-allocation','fundingcaseagreementcommitment','100','allocation-version','{"versionId":"1"}')`.execute(db)
@@ -46,59 +49,59 @@ describe('credit memo allocation from the latest committed matrix', () => {
   afterAll(async () => db.destroy())
 
   it('uses the newest managed committed pin even when its matrix is inactive and another matrix is active', async () => {
-    expect(await allocator(context())).toEqual({ lines: [{ codingLineId: '11', amount: '75.00' }, { codingLineId: '22', amount: '25.00' }], policy })
+    expect(await allocator(context())).toEqual({ lines: [{ codingLineId: '11', amount: money('75.00') }, { codingLineId: '22', amount: money('25.00') }], policy })
     await sql`UPDATE extensions.gcs_outcome_cost_allocation_versions SET status='inactive' WHERE id=1`.execute(db)
     expect(await allocator(context())).toMatchObject({ policy: { commitmentId: '200', allocationVersionId: '2' } })
   })
 
   it('uses resolved whole-dollar amounts and groups duplicate outcome rows before deriving proportions', async () => {
     await sql`INSERT INTO extensions.gcs_outcome_cost_allocation_allocations (allocation_version_id,agreement_id,commitment_type,stream_commitment_id,resolved_amount)
-      VALUES (2,1,1,10,25),(2,1,1,20,0)`.execute(db)
-    expect(await allocator(context({ amount: '1.25' }))).toMatchObject({ lines: [{ codingLineId: '11', amount: '1.00' }, { codingLineId: '22', amount: '0.25' }] })
+      VALUES (2,1,1,10,2500),(2,1,1,20,0)`.execute(db)
+    expect(await allocator(context({ amount: money('1.25') }))).toMatchObject({ lines: [{ codingLineId: '11', amount: money('1.00') }, { codingLineId: '22', amount: money('0.25') }] })
   })
 
   it('applies 30/70 overrides to only the source account’s share without a target link or matching coding year', async () => {
     const input = context({ agencyConfig: overrides() })
     input.codingLines = input.codingLines.map(line => line.codingLineId === '98' ? { ...line, agencyFiscalYearId: '99' } : line)
-    expect(await allocator(input)).toMatchObject({ lines: [{ codingLineId: '22', amount: '25.00' }, { codingLineId: '98', amount: '22.50' }, { codingLineId: '99', amount: '52.50' }] })
+    expect(await allocator(input)).toMatchObject({ lines: [{ codingLineId: '22', amount: money('25.00') }, { codingLineId: '98', amount: money('22.50') }, { codingLineId: '99', amount: money('52.50') }] })
   })
 
   it.each(['2026-07-01', '2026-12-31'])('includes both override date boundaries: %s', async effectiveDate => {
     expect(await allocator(context({ output: { kind: 'credit-memo', effectiveDate, activeCommitments: [{ commitmentId: '200', commitmentTypeId: '1' }] }, agencyConfig: overrides() })))
-      .toMatchObject({ lines: [{ codingLineId: '22', amount: '25.00' }, { codingLineId: '98', amount: '22.50' }, { codingLineId: '99', amount: '52.50' }] })
+      .toMatchObject({ lines: [{ codingLineId: '22', amount: money('25.00') }, { codingLineId: '98', amount: money('22.50') }, { codingLineId: '99', amount: money('52.50') }] })
   })
 
   it('falls back to linked accounts outside an override range, including gaps', async () => {
     expect(await allocator(context({ output: { kind: 'credit-memo', effectiveDate: '2027-01-01', activeCommitments: [{ commitmentId: '200', commitmentTypeId: '1' }] }, agencyConfig: overrides() })))
-      .toMatchObject({ lines: [{ codingLineId: '11', amount: '75.00' }, { codingLineId: '22', amount: '25.00' }] })
+      .toMatchObject({ lines: [{ codingLineId: '11', amount: money('75.00') }, { codingLineId: '22', amount: money('25.00') }] })
   })
 
   it('aggregates targets shared by default and override coding', async () => {
     expect(await allocator(context({ agencyConfig: overrides([{ codingLineId: '22', percentage: '100' }]) })))
-      .toMatchObject({ lines: [{ codingLineId: '22', amount: '100.00' }] })
+      .toMatchObject({ lines: [{ codingLineId: '22', amount: money('100.00') }] })
   })
 
   it('balances the complete weighted vector once, avoiding nested rounding', async () => {
-    await sql`UPDATE extensions.gcs_outcome_cost_allocation_allocations SET resolved_amount=50 WHERE allocation_version_id=2 AND commitment_type=1`.execute(db)
-    expect(await allocator(context({ amount: '0.01', agencyConfig: overrides([{ codingLineId: '98', percentage: '50' }, { codingLineId: '99', percentage: '50' }]) })))
-      .toMatchObject({ lines: [{ codingLineId: '22', amount: '0.01' }, { codingLineId: '98', amount: '0.00' }, { codingLineId: '99', amount: '0.00' }] })
-    expect(await allocator(context({ amount: '0.00' }))).toMatchObject({ lines: [{ codingLineId: '11', amount: '0.00' }, { codingLineId: '22', amount: '0.00' }] })
+    await sql`UPDATE extensions.gcs_outcome_cost_allocation_allocations SET resolved_amount=5000 WHERE allocation_version_id=2 AND commitment_type=1`.execute(db)
+    expect(await allocator(context({ amount: money('0.01'), agencyConfig: overrides([{ codingLineId: '98', percentage: '50' }, { codingLineId: '99', percentage: '50' }]) })))
+      .toMatchObject({ lines: [{ codingLineId: '22', amount: money('0.01') }, { codingLineId: '98', amount: money('0.00') }, { codingLineId: '99', amount: money('0.00') }] })
+    expect(await allocator(context({ amount: money('0.00') }))).toMatchObject({ lines: [{ codingLineId: '11', amount: money('0.00') }, { codingLineId: '22', amount: money('0.00') }] })
   })
 
   it('keeps maximum supported monetary amounts exact', async () => {
-    expect(await allocator(context({ amount: '99999999999999999.99' })))
-      .toMatchObject({ lines: [{ codingLineId: '11', amount: '74999999999999999.99' }, { codingLineId: '22', amount: '25000000000000000.00' }] })
+    expect(await allocator(context({ amount: money('99999999999999999.99') })))
+      .toMatchObject({ lines: [{ codingLineId: '11', amount: money('74999999999999999.99') }, { codingLineId: '22', amount: money('25000000000000000.00') }] })
   })
 
   it('retains captured proportions after matrix/configuration changes without querying live matrix storage', async () => {
-    expect(await allocator(context({ db: {} as never, agencyConfig: { invalid: true }, retainedPolicy: policy, amount: '0.03' })))
-      .toEqual({ lines: [{ codingLineId: '11', amount: '0.02' }, { codingLineId: '22', amount: '0.01' }], policy })
+    expect(await allocator(context({ db: {} as never, agencyConfig: { invalid: true }, retainedPolicy: policy, amount: money('0.03') })))
+      .toEqual({ lines: [{ codingLineId: '11', amount: money('0.02') }, { codingLineId: '22', amount: money('0.01') }], policy })
   })
 
-  it('preserves legacy captured CM percentage policy for amount-only edits', async () => {
+  it('rejects the superseded percentage-only Credit Memo evidence contract', async () => {
     const legacy = { version: 1, kind: 'credit-memo', currency: 'cad', effectiveDate: '2026-07-01', lines: [{ codingLineId: '11', percentage: '50' }, { codingLineId: '22', percentage: '50' }] }
-    expect(await allocator(context({ db: {} as never, retainedPolicy: legacy, amount: '0.03' })))
-      .toEqual({ lines: [{ codingLineId: '11', amount: '0.02' }, { codingLineId: '22', amount: '0.01' }], policy: legacy })
+    await expect(allocator(context({ db: {} as never, retainedPolicy: legacy, amount: money('0.03') })))
+      .rejects.toMatchObject({ code: 'GCS_OUTCOME_COST_ALLOCATION_CODING_CONFIGURATION_INVALID' })
   })
 
   it.each([
@@ -152,14 +155,12 @@ describe('credit memo allocation from the latest committed matrix', () => {
   it('maps default and remap targets to Stream IDs while retaining exact Agency-keyed weights', async () => {
     const streamIds: Record<string, string> = { '11': '22', '22': '11', '98': '99', '99': '98' }
     const codingLines = context().codingLines.map(account => ({ ...account, codingLineId: streamIds[account.agencyChartOfAccountId]! }))
-    expect(await allocator(context({ codingLines }))).toEqual({ lines: [{ codingLineId: '22', amount: '75.00' }, { codingLineId: '11', amount: '25.00' }], policy })
+    expect(await allocator(context({ codingLines }))).toEqual({ lines: [{ codingLineId: '22', amount: money('75.00') }, { codingLineId: '11', amount: money('25.00') }], policy })
     expect(await allocator(context({ codingLines, agencyConfig: overrides() })))
-      .toMatchObject({ lines: [{ codingLineId: '11', amount: '25.00' }, { codingLineId: '99', amount: '22.50' }, { codingLineId: '98', amount: '52.50' }], policy: { lines: [{ codingLineId: '22', weight: '2500000000' }, { codingLineId: '98', weight: '2250000000' }, { codingLineId: '99', weight: '5250000000' }] } })
-    expect(await allocator(context({ db: {} as never, codingLines, retainedPolicy: policy, amount: '0.03' })))
-      .toEqual({ lines: [{ codingLineId: '22', amount: '0.02' }, { codingLineId: '11', amount: '0.01' }], policy })
-    const legacy = { version: 1, kind: 'credit-memo', currency: 'cad', effectiveDate: '2026-07-01', lines: [{ codingLineId: '11', percentage: '50' }, { codingLineId: '22', percentage: '50' }] }
-    expect(await allocator(context({ db: {} as never, codingLines, retainedPolicy: legacy, amount: '0.03' })))
-      .toEqual({ lines: [{ codingLineId: '22', amount: '0.02' }, { codingLineId: '11', amount: '0.01' }], policy: legacy })
+      .toMatchObject({ lines: [{ codingLineId: '11', amount: money('25.00') }, { codingLineId: '99', amount: money('22.50') }, { codingLineId: '98', amount: money('52.50') }], policy: { lines: [{ codingLineId: '22', weight: '2500000000' }, { codingLineId: '98', weight: '2250000000' }, { codingLineId: '99', weight: '5250000000' }] } })
+    expect(await allocator(context({ db: {} as never, codingLines, retainedPolicy: policy, amount: money('0.03') })))
+      .toEqual({ lines: [{ codingLineId: '22', amount: money('0.02') }, { codingLineId: '11', amount: money('0.01') }], policy })
+
   })
 
   it('rejects unavailable fresh and retained Agency targets even if their IDs match unrelated Stream selections', async () => {
@@ -176,6 +177,18 @@ describe('credit memo allocation from the latest committed matrix', () => {
     await expect(allocator(context({ codingLines, agencyConfig: overrides() }))).rejects.toMatchObject({ code: 'GCS_OUTCOME_COST_ALLOCATION_CODING_CONFIGURATION_INVALID' })
     await expect(allocator(context({ codingLines, retainedPolicy: { ...policy, lines: [{ codingLineId: '98', weight: '1' }] } })))
       .rejects.toMatchObject({ code: 'GCS_OUTCOME_COST_ALLOCATION_CODING_CONFIGURATION_INVALID' })
+  })
+
+  it.each([
+    ['jpy', '3', '2', '1'],
+    ['kwd', '0.003', '0.002', '0.001'],
+    ['clf', '0.0003', '0.0002', '0.0001'],
+    ['mga', '0.6', '0.4', '0.2']
+  ])('derives and retains exact %s Credit Memo weight ratios', async (currency, total, first, second) => {
+    expect(await allocator(context({ currency, amount: money(total, currency) }))).toMatchObject({
+      lines: [{ codingLineId: '11', amount: money(first, currency) }, { codingLineId: '22', amount: money(second, currency) }],
+      policy: { currency, lines: [{ codingLineId: '11', weight: '7500000000' }, { codingLineId: '22', weight: '2500000000' }] }
+    })
   })
 
 })

@@ -1,9 +1,10 @@
+import { compareMoney, parseCurrencyMoney, sumMoney, type Money } from '@gcs-ssc/extensions/money'
 import { expect, type APIResponse, type Page } from '@playwright/test'
 
 type Owner = { agencyId: string; agreementId: string; programId: string; streamId: string }
 type Id = { id: string }
 type Correction = { id: string; egcs_fc_status: string; egcs_fc_outcome: string; egcs_fc_lines: Array<{
-  egcs_fc_commitmentline: string; egcs_fc_adjustment: string; egcs_fc_originalpaid: string; egcs_fc_jveffect: string; egcs_fc_priorcorrections: string
+  egcs_fc_commitmentline: string; egcs_fc_adjustment: Money; egcs_fc_originalpaid: Money; egcs_fc_jveffect: Money; egcs_fc_priorcorrections: Money
 }> }
 const ok = async (response: APIResponse, label: string) => {
   if (!response.ok()) throw new Error(`${label}: ${response.status()} ${await response.text()}`)
@@ -107,14 +108,13 @@ export const postNegativeCorrection = async (
   const id = (await json<Id>(create)).id
   const correctionUrl = `/api/corrections/${id}`
   const original = await json<Correction>(await page.request.get(correctionUrl))
-  const cents = (value: string) => BigInt(value.replace('.', ''))
-  const line = original.egcs_fc_lines.find(item => cents(item.egcs_fc_originalpaid) + cents(item.egcs_fc_jveffect) + cents(item.egcs_fc_priorcorrections) >= BigInt(100))!
+  const line = original.egcs_fc_lines.find(item => compareMoney(sumMoney([item.egcs_fc_originalpaid, item.egcs_fc_jveffect, item.egcs_fc_priorcorrections], 'CAD'), parseCurrencyMoney('1', 'CAD')) >= 0)!
   expect(line).toBeTruthy()
   const signedEdit = { egcs_fc_requesteddate: '2026-10-01',
     egcs_fc_narrative_en: 'The external payment was correct. Remove one dollar of duplicated internal paid attribution.',
     egcs_fc_narrative_fr: 'Le paiement externe était exact. Retirer un dollar d’attribution interne dupliquée.',
     egcs_fc_lines: original.egcs_fc_lines.map(retained => ({ egcs_fc_commitmentline: retained.egcs_fc_commitmentline,
-      egcs_fc_adjustment: retained === line ? '-1.00' : '0.00' })) }
+      egcs_fc_adjustment: parseCurrencyMoney(retained === line ? '-1.00' : '0.00', 'CAD') })) }
   await ok(await page.request.patch(correctionUrl, { data: signedEdit }), 'Save exact signed adjustment')
   const agencyBase = `/api/agency/${owner.agencyId}`
   const terminal = async (name: string, color: string) => {

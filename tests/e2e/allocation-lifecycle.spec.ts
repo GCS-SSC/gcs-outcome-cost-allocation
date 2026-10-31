@@ -1,6 +1,9 @@
+import { parseCurrencyMoney, type Money } from '@gcs-ssc/extensions/money'
 import { expect, test, type APIResponse, type Page, type Response } from '@playwright/test'
 import { registerAgencyCodingJourney } from './agency-coding-journey'
-import { fromCents, sumMoney, toCents, toExactNumeric19Scale4Units } from '../../shared/allocation'
+import { majorMoneyText, moneyFromMinorUnits, moneyToMinorUnits, sumMoney } from '@gcs-ssc/extensions/money'
+
+const cadFromMinorUnits = (value: bigint): Money => moneyFromMinorUnits(value, 'CAD')
 import { completeAndApprove, configureSingleApprovalSubmission, deleteUnsubmittedCommitmentDrafts, postNegativeCorrection } from './correction-fixture'
 
 const EXTENSION_KEY = 'gcs-outcome-cost-allocation'
@@ -155,7 +158,7 @@ const createManagedAgreement = async (page: Page, proponentId = '171', financial
   await expectOk(await page.request.post(`/api/agreements/${agreementId}/budget-line-items`, { data: {
     egcs_fc_fundingagreementbudgetfiscalyear: budgetYearId, egcs_fc_organizationcostcategory: '89',
     egcs_fc_costsubsection: 'Unpaid allocation', egcs_fc_description: 'Independent allocation funding basis.',
-    egcs_fc_totalamount: '100.00', egcs_fc_programfunding: '100.00', egcs_fc_currency: 'cad'
+    egcs_fc_totalamount: parseCurrencyMoney('100.00', 'CAD'), egcs_fc_programfunding: parseCurrencyMoney('100.00', 'CAD'), egcs_fc_currency: 'cad'
   } }), 'Fund the allocation with exactly one hundred dollars')
   const chartResponse = await page.request.post(`/api/agency/${owner.agencyId}/chart-of-accounts`, { data: {
     egcs_ay_kind: 'commitment', egcs_ay_fiscalyear: '41', egcs_ay_currency: 'cad',
@@ -821,7 +824,7 @@ test('allocates unpaid funds and uses posted Corrections as shared Payment capac
       extensionKey: 'gcs-automated-payments', enabled: true, config: { enabledPaymentTypes: ['advance'] }
     } }), 'Select manual reimbursement amounts')
     type Inputs = { outcomes: Array<{ id: string }>; commitmentTypes: Array<{ id: string }>;
-      budgetYears: Array<{ id: string; fiscal_year_id: string; stream_budget_id: string; program_funding: string; remaining_funding: string }>;
+      budgetYears: Array<{ id: string; fiscal_year_id: string; stream_budget_id: string; program_funding: Money; remaining_funding: Money }>;
       streamCommitments: Array<{ id: string; stream_budget_id: string }>;
       allocations: Array<{ allocationVersionId: string }>; versions: Array<{ id: string; status: string; versionNumber: number }> }
     const allocationsUrl = `/api/extensions/${EXTENSION_KEY}/agreements/${owner.agreementId}/allocations`
@@ -836,11 +839,11 @@ test('allocates unpaid funds and uses posted Corrections as shared Payment capac
     const versionId = await createAllocationVersion(page, owner.agreementId)
     const allocations = inputs.budgetYears.flatMap(year => {
       const lines = mappings.filter(mapping => mapping.streamBudgetId === year.stream_budget_id)
-      const total = toCents(year.program_funding)
+      const total = moneyToMinorUnits(year.program_funding)
       const first = lines.length > 1 ? total * BigInt(4) / BigInt(5) : total
       return lines.map((line, index) => ({ commitmentType, streamCommitmentId: line.streamCommitmentId,
         agreementBudgetFiscalYearId: year.id, outcomeId, allocationMethod: 'amount',
-        allocationValue: fromCents(index === 0 ? first : index === 1 ? total - first : BigInt(0)) }))
+        allocationValue: cadFromMinorUnits(index === 0 ? first : index === 1 ? total - first : BigInt(0)) }))
     })
     await openAllocationVersion(page, owner.agreementId, versionId, 'allocation')
     await page.getByRole('button', { name: 'Generate rows', exact: true }).click()
@@ -867,7 +870,7 @@ test('allocates unpaid funds and uses posted Corrections as shared Payment capac
         await amount.click()
         await expect(amount).toHaveValue('0')
       }
-      await amount.fill(allocations[index]!.allocationValue)
+      await amount.fill(majorMoneyText(allocations[index]!.allocationValue))
       await editor.getByRole('button', { name: 'Update', exact: true }).click()
       await expect(editor).not.toBeVisible()
     }
@@ -877,8 +880,8 @@ test('allocates unpaid funds and uses posted Corrections as shared Payment capac
     await page.getByRole('button', { name: /^Modifier la répartition:/ }).first().click()
     const unsavedFrenchEditor = page.getByRole('dialog', { name: 'Modifier la répartition', exact: true })
     await unsavedFrenchEditor.getByLabel(/^Montant/).click()
-    expect(toExactNumeric19Scale4Units(await unsavedFrenchEditor.getByLabel(/^Montant/).inputValue()))
-      .toBe(toExactNumeric19Scale4Units(allocations[0]!.allocationValue))
+    expect(parseCurrencyMoney(await unsavedFrenchEditor.getByLabel(/^Montant/).inputValue(), 'CAD'))
+      .toEqual(allocations[0]!.allocationValue)
     await unsavedFrenchEditor.getByRole('button', { name: 'Annuler', exact: true }).click()
     await page.getByRole('switch', { name: 'Changer de langue', exact: true }).click()
     await expectAllocationVersionUrl(page, owner.agreementId, versionId, 'allocation')
@@ -890,8 +893,8 @@ test('allocates unpaid funds and uses posted Corrections as shared Payment capac
     await expect(editButtons).toHaveCount(allocations.length)
     await page.getByRole('button', { name: 'Save', exact: true }).click()
     await expect(page.getByText('Allocation saved.', { exact: true })).toBeVisible()
-    const savedMatrix = await responseJson<{ allocations: Array<{ allocationValue: string }> }>(await page.request.get(allocationsUrl))
-    expect(savedMatrix.allocations.map(line => toExactNumeric19Scale4Units(line.allocationValue))).toEqual(allocations.map(line => toExactNumeric19Scale4Units(line.allocationValue)))
+    const savedMatrix = await responseJson<{ allocations: Array<{ allocationValue: Money }> }>(await page.request.get(allocationsUrl))
+    expect(savedMatrix.allocations.map(line => line.allocationValue)).toEqual(allocations.map(line => line.allocationValue))
     await page.setViewportSize({ width: 390, height: 844 })
     await openAllocationVersion(page, owner.agreementId, versionId, 'allocation', 'fr')
     await page.getByRole('button', { name: /^Modifier la répartition:/ }).first().click()
@@ -908,7 +911,7 @@ test('allocates unpaid funds and uses posted Corrections as shared Payment capac
     await page.setViewportSize({ width: 1280, height: 900 })
     await configureSingleApprovalSubmission(page, owner, ALLOCATION_VERSION_ENTITY_TYPE, draft, approved, denied)
     await completeAllocationThroughDetail(page, approver, owner.agreementId, versionId)
-    const commitmentTotal = sumMoney(inputs.budgetYears.map(year => year.program_funding))
+    const commitmentTotal = sumMoney(inputs.budgetYears.map(year => year.program_funding), 'CAD')
     await page.goto(`/en/agreements/${owner.agreementId}?section=commitments`)
     await page.getByRole('button', { name: 'Add Commitment', exact: true }).click()
     const modal = page.getByRole('dialog', { name: 'Add Commitment' })
@@ -923,8 +926,8 @@ test('allocates unpaid funds and uses posted Corrections as shared Payment capac
     await modal.getByLabel('Total amount').click()
     await expect(modal.getByLabel('Total amount')).toBeFocused()
     await expect(modal.getByLabel('Total amount')).toHaveValue(/^[0-9.]*$/)
-    await modal.getByLabel('Total amount').fill(commitmentTotal)
-    await expect(modal.getByLabel('Total amount')).toHaveValue(commitmentTotal)
+    await modal.getByLabel('Total amount').fill(majorMoneyText(commitmentTotal))
+    await expect(modal.getByLabel('Total amount')).toHaveValue(majorMoneyText(commitmentTotal))
     await modal.getByLabel('Total amount').press('Tab')
     await expect(modal.getByLabel('Total amount')).toHaveValue(/100/)
     const commitmentCreated = page.waitForResponse(response => response.request().method() === 'POST'
@@ -937,20 +940,20 @@ test('allocates unpaid funds and uses posted Corrections as shared Payment capac
     await configureSingleApprovalSubmission(page, owner, 'fundingcaseagreementcommitment', draft, approved, denied)
     await completeAndApprove(page, approver, 'fundingcaseagreementcommitment', commitmentId)
     type Commitment = { egcs_fc_active: boolean; lines: Array<{
-      id: string; egcs_fc_transferpaymentstreamchartofaccount: string; egcs_fc_amount: string
+      id: string; egcs_fc_transferpaymentstreamchartofaccount: string; egcs_fc_amount: Money
     }> }
     let commitmentUrl = `/api/agreements/${owner.agreementId}/commitments/${commitmentId}`
     let commitmentBefore = await responseJson<Commitment>(await page.request.get(commitmentUrl))
     expect(commitmentBefore.egcs_fc_active).toBe(true)
     expect(commitmentBefore.lines.map(line => ({ coding: line.egcs_fc_transferpaymentstreamchartofaccount, amount: line.egcs_fc_amount })).sort((a, b) => a.coding.localeCompare(b.coding)))
       .toEqual(allocations.map(line => ({ coding: line.streamCommitmentId, amount: line.allocationValue })).sort((a, b) => a.coding.localeCompare(b.coding)))
-    const year = inputs.budgetYears.find(item => toCents(item.program_funding) > BigInt(0))!
-    const createPayment = (amount: string) => page.request.post(`/api/agreements/${owner.agreementId}/payments`, { data: {
+    const year = inputs.budgetYears.find(item => moneyToMinorUnits(item.program_funding) > BigInt(0))!
+    const createPayment = (amount: Money) => page.request.post(`/api/agreements/${owner.agreementId}/payments`, { data: {
       egcs_fc_commitmenttype: commitmentType, egcs_fc_fiscalyear: year.id, egcs_fc_paymenttype: 'reimbursement',
       egcs_fc_periodstart: 0, egcs_fc_periodend: 2, egcs_fc_paymentamount: amount, egcs_fc_currency: 'cad', egcs_fc_applicantrecipient: '171'
     } })
-    type Payment = { lines: Array<{ egcs_fc_fundingagreementcommitmentline: string; egcs_fc_amount: string }> }
-    const partialAmount = fromCents(toCents(year.program_funding) / BigInt(2))
+    type Payment = { lines: Array<{ egcs_fc_fundingagreementcommitmentline: string; egcs_fc_amount: Money }> }
+    const partialAmount = cadFromMinorUnits(moneyToMinorUnits(year.program_funding) / BigInt(2))
     const partialResponse = await createPayment(partialAmount)
     await expectOk(partialResponse, 'Pay part of the original allocation')
     const partialId = String((await responseJson<{ id: string }>(partialResponse)).id)
@@ -962,11 +965,11 @@ test('allocates unpaid funds and uses posted Corrections as shared Payment capac
     const changedVersionId = await createAllocationVersion(page, owner.agreementId)
     const changedAllocations = previousSnapshot.budgetYears.flatMap(budgetYear => {
       const lines = mappings.filter(mapping => mapping.streamBudgetId === budgetYear.stream_budget_id)
-      const total = toCents(budgetYear.remaining_funding)
+      const total = moneyToMinorUnits(budgetYear.remaining_funding)
       const first = lines.length > 1 ? total / BigInt(5) : total
       return lines.map((line, index) => ({ commitmentType, streamCommitmentId: line.streamCommitmentId,
         agreementBudgetFiscalYearId: budgetYear.id, outcomeId, allocationMethod: 'amount',
-        allocationValue: fromCents(index === 0 ? first : index === 1 ? total - first : BigInt(0)) }))
+        allocationValue: cadFromMinorUnits(index === 0 ? first : index === 1 ? total - first : BigInt(0)) }))
     })
     await expectOk(await page.request.put(allocationsUrl, { data: {
       allocationVersionId: changedVersionId, allocations: changedAllocations
@@ -979,22 +982,22 @@ test('allocates unpaid funds and uses posted Corrections as shared Payment capac
     commitmentId = String((await responseJson<{ id: string }>(replacementResponse)).id)
     commitmentUrl = `/api/agreements/${owner.agreementId}/commitments/${commitmentId}`
     const replacement = await responseJson<Commitment>(await page.request.get(commitmentUrl))
-    const unpaidCents = toCents(commitmentTotal) - toCents(partialAmount)
+    const unpaidCents = moneyToMinorUnits(commitmentTotal) - moneyToMinorUnits(partialAmount)
     const paidByCode = new Map<string, bigint>()
     for (const line of replacement.lines) {
       const code = String(line.egcs_fc_transferpaymentstreamchartofaccount)
       const priorIds = commitmentBefore.lines.filter(prior => String(prior.egcs_fc_transferpaymentstreamchartofaccount) === code).map(prior => String(prior.id))
       const retainedPaid = partialPayment.lines.filter(paymentLine => priorIds.includes(String(paymentLine.egcs_fc_fundingagreementcommitmentline)))
-        .reduce((sum, paymentLine) => sum + toCents(paymentLine.egcs_fc_amount), BigInt(0))
+        .reduce((sum, paymentLine) => sum + moneyToMinorUnits(paymentLine.egcs_fc_amount), BigInt(0))
       paidByCode.set(code, retainedPaid)
       const weight = changedAllocations.filter(allocation => allocation.streamCommitmentId === code)
-        .reduce((sum, allocation) => sum + toCents(allocation.allocationValue), BigInt(0))
-      const actualUnpaid = toCents(line.egcs_fc_amount) - retainedPaid
-      const expectedUnpaid = unpaidCents * weight / toCents(sumMoney(changedAllocations.map(allocation => allocation.allocationValue)))
+        .reduce((sum, allocation) => sum + moneyToMinorUnits(allocation.allocationValue), BigInt(0))
+      const actualUnpaid = moneyToMinorUnits(line.egcs_fc_amount) - retainedPaid
+      const expectedUnpaid = unpaidCents * weight / moneyToMinorUnits(sumMoney(changedAllocations.map(allocation => allocation.allocationValue), 'CAD'))
       expect(actualUnpaid >= BigInt(0)).toBe(true)
       expect(actualUnpaid - expectedUnpaid >= BigInt(0) && actualUnpaid - expectedUnpaid <= BigInt(1)).toBe(true)
     }
-    expect(sumMoney(replacement.lines.map(line => line.egcs_fc_amount))).toBe(commitmentTotal)
+    expect(sumMoney(replacement.lines.map(line => line.egcs_fc_amount), 'CAD')).toEqual(commitmentTotal)
     await completeAndApprove(page, approver, 'fundingcaseagreementcommitment', commitmentId)
     commitmentBefore = await responseJson<Commitment>(await page.request.get(commitmentUrl))
     const changedSnapshot = await responseJson<Inputs>(await page.request.get(allocationsUrl))
@@ -1002,22 +1005,22 @@ test('allocates unpaid funds and uses posted Corrections as shared Payment capac
     expect(changedSnapshot.allocations.filter(allocation => allocation.allocationVersionId === versionId))
       .toEqual(previousSnapshot.allocations.filter(allocation => allocation.allocationVersionId === versionId))
     const yearCodes = new Set(mappings.filter(mapping => mapping.streamBudgetId === year.stream_budget_id).map(mapping => mapping.streamCommitmentId))
-    const remainingYearAmount = fromCents(commitmentBefore.lines.filter(line => yearCodes.has(String(line.egcs_fc_transferpaymentstreamchartofaccount)))
-      .reduce((sum, line) => sum + toCents(line.egcs_fc_amount), BigInt(0)) - toCents(partialAmount))
+    const remainingYearAmount = cadFromMinorUnits(commitmentBefore.lines.filter(line => yearCodes.has(String(line.egcs_fc_transferpaymentstreamchartofaccount)))
+      .reduce((sum, line) => sum + moneyToMinorUnits(line.egcs_fc_amount), BigInt(0)) - moneyToMinorUnits(partialAmount))
     const paymentResponse = await createPayment(remainingYearAmount)
     await expectOk(paymentResponse, 'Consume the remaining fiscal-year capacity using the new unpaid split')
     const paymentId = String((await responseJson<{ id: string }>(paymentResponse)).id)
     const paymentUrl = `/api/agreements/${owner.agreementId}/payments/${paymentId}`
     const generated = await responseJson<Payment>(await page.request.get(paymentUrl))
-    expect(generated.lines.filter(line => toCents(line.egcs_fc_amount) > BigInt(0)).length).toBeGreaterThan(1)
-    expect(sumMoney(generated.lines.map(line => line.egcs_fc_amount))).toBe(remainingYearAmount)
+    expect(generated.lines.filter(line => moneyToMinorUnits(line.egcs_fc_amount) > BigInt(0)).length).toBeGreaterThan(1)
+    expect(sumMoney(generated.lines.map(line => line.egcs_fc_amount), 'CAD')).toEqual(remainingYearAmount)
     for (const code of yearCodes) {
       const replacementLines = commitmentBefore.lines.filter(line => String(line.egcs_fc_transferpaymentstreamchartofaccount) === code)
       const replacementIds = replacementLines.map(line => String(line.id))
-      const expectedUnpaid = replacementLines.reduce((sum, line) => sum + toCents(line.egcs_fc_amount), BigInt(0))
+      const expectedUnpaid = replacementLines.reduce((sum, line) => sum + moneyToMinorUnits(line.egcs_fc_amount), BigInt(0))
         - (paidByCode.get(code) ?? BigInt(0))
       const allocated = generated.lines.filter(line => replacementIds.includes(String(line.egcs_fc_fundingagreementcommitmentline)))
-        .reduce((sum, line) => sum + toCents(line.egcs_fc_amount), BigInt(0))
+        .reduce((sum, line) => sum + moneyToMinorUnits(line.egcs_fc_amount), BigInt(0))
       expect(allocated, `Payment must consume unpaid capacity on coding ${code}`).toBe(expectedUnpaid)
     }
     await configureSingleApprovalSubmission(page, owner, 'fundingcasepayment', draft, paid, denied)
@@ -1032,16 +1035,16 @@ test('allocates unpaid funds and uses posted Corrections as shared Payment capac
       id: line.id, coding: line.egcs_fc_transferpaymentstreamchartofaccount, amount: line.egcs_fc_amount
     }))
     expect(authoredCoding(correctedCommitment)).toEqual(authoredCoding(commitmentBefore))
-    const overdraw = await createPayment('1.01')
+    const overdraw = await createPayment(parseCurrencyMoney('1.01', 'CAD'))
     expect(overdraw.status(), await overdraw.text()).toBe(400)
     expect(await overdraw.text()).toContain('GCS_OUTCOME_COST_ALLOCATION_PAYMENT_EXCEEDS_REMAINING')
-    const restored = await createPayment('1.00')
+    const restored = await createPayment(parseCurrencyMoney('1.00', 'CAD'))
     await expectOk(restored, 'Generate another Payment using corrected shared capacity')
     const restoredId = String((await responseJson<{ id: string }>(restored)).id)
     const restoredDetail = await responseJson<Payment>(await page.request.get(`/api/agreements/${owner.agreementId}/payments/${restoredId}`))
-    expect(sumMoney(restoredDetail.lines.map(line => line.egcs_fc_amount))).toBe('1.00')
-    const correctedLine = correction.egcs_fc_lines.find(line => line.egcs_fc_adjustment === '-1.00')!.egcs_fc_commitmentline
-    expect(restoredDetail.lines.filter(line => toCents(line.egcs_fc_amount) > BigInt(0)).map(line => line.egcs_fc_fundingagreementcommitmentline)).toEqual([correctedLine])
+    expect(sumMoney(restoredDetail.lines.map(line => line.egcs_fc_amount), 'CAD')).toEqual(parseCurrencyMoney('1.00', 'CAD'))
+    const correctedLine = correction.egcs_fc_lines.find(line => line.egcs_fc_adjustment.amount === '-100')!.egcs_fc_commitmentline
+    expect(restoredDetail.lines.filter(line => moneyToMinorUnits(line.egcs_fc_amount) > BigInt(0)).map(line => line.egcs_fc_fundingagreementcommitmentline)).toEqual([correctedLine])
     expect((await responseJson<Inputs>(await page.request.get(allocationsUrl))).allocations).toEqual(frozenAllocations.allocations)
     await openAllocation(page, owner.agreementId)
     const collection = page.getByRole('tabpanel', { name: 'Cost Allocation', exact: true })
@@ -1093,3 +1096,85 @@ test('allocates unpaid funds and uses posted Corrections as shared Payment capac
 })
 
 registerAgencyCodingJourney({ login, createManagedAgreement, createAllocationVersion })
+
+test('pairs same-year mapping budgets by currency and rejects foreign-currency Agreement coding', async ({ page }) => {
+  test.setTimeout(120_000)
+  await login(page, 'root@example.com')
+  const owner = await createManagedAgreement(page)
+  const programBudgetsUrl = `/api/transfer-payments/${owner.programId}/budgets`
+  const streamBudgetsUrl = `/api/transfer-payments/${owner.programId}/streams/${owner.streamId}/budgets`
+  const existing = await responseJson<{ items: Array<{ id: string; egcs_tp_fiscalyear: string; egcs_tp_currency: string }> }>(await page.request.get(`${programBudgetsUrl}?limit=100`))
+  const cadBudget = existing.items.find(item => String(item.egcs_tp_fiscalyear) === '41' && item.egcs_tp_currency === 'cad')
+  expect(cadBudget, 'CAD budget exists before the JPY budget for this same fiscal year').toBeTruthy()
+  let jpyProgramId = existing.items.find(item => String(item.egcs_tp_fiscalyear) === '41' && item.egcs_tp_currency === 'jpy')?.id
+  if (!jpyProgramId) {
+    const created = await page.request.post(programBudgetsUrl, { data: { egcs_tp_fiscalyear: '41', egcs_tp_currency: 'jpy', egcs_tp_totalbudget: parseCurrencyMoney('1000', 'JPY'), egcs_tp_overcommitthreshold: 0 } })
+    await expectOk(created, 'Create a distinct same-year JPY Program budget')
+    jpyProgramId = String((await responseJson<{ id: string }>(created)).id)
+  }
+  let streamBudgets = await responseJson<{ items: Array<{ id: string; egcs_tp_fiscalyear: string; egcs_tp_currency: string }> }>(await page.request.get(`${streamBudgetsUrl}?limit=100`))
+  let jpyStreamId = streamBudgets.items.find(item => String(item.egcs_tp_fiscalyear) === '41' && item.egcs_tp_currency === 'jpy')?.id
+  if (!jpyStreamId) {
+    const created = await page.request.post(streamBudgetsUrl, { data: { egcs_tp_transferpaymentbudget: jpyProgramId, egcs_tp_totalbudget: parseCurrencyMoney('1000', 'JPY'), egcs_tp_overcommitthreshold: 0 } })
+    await expectOk(created, 'Allocate the same-year JPY budget to the Stream')
+    jpyStreamId = String((await responseJson<{ id: string }>(created)).id)
+  }
+  streamBudgets = await responseJson(await page.request.get(`${streamBudgetsUrl}?limit=100`))
+  const cadStreamId = String(streamBudgets.items.find(item => String(item.egcs_tp_fiscalyear) === '41' && item.egcs_tp_currency === 'cad')!.id)
+  const marker = `Shared-native-code-${Date.now()}`
+  const cadChartResponse = await page.request.post(`/api/agency/${owner.agencyId}/chart-of-accounts`, { data: {
+    egcs_ay_kind: 'commitment', egcs_ay_fiscalyear: '41', egcs_ay_currency: 'cad',
+    egcs_ay_accountingdimensions: [{ label_en: 'Native currency', label_fr: 'Devise native', value: marker }]
+  } })
+  await expectOk(cadChartResponse, 'Create CAD coding with the same dimensions as JPY coding')
+  const cadChartId = String((await responseJson<{ id: string }>(cadChartResponse)).id)
+  await expectOk(await page.request.post(`/api/transfer-payments/${owner.programId}/streams/${owner.streamId}/chart-of-accounts`, { data: { egcs_tp_agencychartofaccount: cadChartId } }), 'Select the same-dimension CAD coding')
+  const chartResponse = await page.request.post(`/api/agency/${owner.agencyId}/chart-of-accounts`, { data: {
+    egcs_ay_kind: 'commitment', egcs_ay_fiscalyear: '41', egcs_ay_currency: 'jpy',
+    egcs_ay_accountingdimensions: [{ label_en: 'Native currency', label_fr: 'Devise native', value: marker }]
+  } })
+  await expectOk(chartResponse, 'Create JPY coding in the same fiscal year')
+  const chartId = String((await responseJson<{ id: string }>(chartResponse)).id)
+  const selection = await page.request.post(`/api/transfer-payments/${owner.programId}/streams/${owner.streamId}/chart-of-accounts`, { data: { egcs_tp_agencychartofaccount: chartId } })
+  await expectOk(selection, 'Select JPY coding under its eligible JPY Stream budget')
+  const selectedId = String((await responseJson<{ id: string }>(selection)).id)
+  const allocationsUrl = `/api/extensions/${EXTENSION_KEY}/agreements/${owner.agreementId}/allocations`
+  const inputs = await responseJson<{ commitmentTypes: Array<{ id: string }>; outcomes: Array<{ id: string }>; budgetYears: Array<{ id: string; fiscal_year_id: string }> }>(await page.request.get(allocationsUrl))
+  const commitmentType = String(inputs.commitmentTypes[0]!.id)
+  const outcomeId = String(inputs.outcomes[0]!.id)
+  const badMapping = await page.request.patch(`/api/extensions/streams/${owner.streamId}`, { data: { extensionKey: EXTENSION_KEY, enabled: true, config: {
+    enabledCommitmentTypes: [commitmentType], mappings: [{ commitmentType, outcomeId, streamBudgetId: cadStreamId, streamCommitmentId: selectedId }]
+  } } })
+  expect(badMapping.status()).toBe(400)
+  expect(await badMapping.json()).toMatchObject({ data: { code: 'GCS_OUTCOME_COST_ALLOCATION_CODING_CONFIGURATION_INVALID' } })
+
+  await page.goto(`/en/transfer-payments/${owner.programId}/streams/${owner.streamId}?section=extensions`)
+  await page.getByRole('row').filter({ hasText: 'Outcome cost allocation' }).getByRole('button', { name: 'Configure', exact: true }).click()
+  const configuration = page.getByRole('dialog', { name: 'Outcome cost allocation', exact: true })
+  await configuration.getByRole('button', { name: 'Add association', exact: true }).click()
+  const association = page.getByRole('dialog', { name: 'Add association', exact: true })
+  await association.getByRole('combobox').first().click()
+  await expect(page.getByRole('option', { name: new RegExp(`${marker}.*CAD`) })).toBeVisible()
+  await page.getByRole('option', { name: new RegExp(`${marker}.*JPY`) }).click()
+  await association.getByRole('button', { name: 'Add', exact: true }).click()
+  await expect(association).toHaveCount(0)
+  const saved = page.waitForResponse(response => response.request().method() === 'PATCH' && response.url().endsWith(`/api/extensions/streams/${owner.streamId}`))
+  await configuration.getByRole('button', { name: 'Save', exact: true }).click()
+  const savedResponse = await saved
+  await expectOk(savedResponse, 'Save same-year JPY mapping through the actual configuration editor')
+  const savedInput = savedResponse.request().postDataJSON() as { config: { mappings: Array<{ streamCommitmentId: string; streamBudgetId: string }> } }
+  expect(savedInput.config.mappings.find(mapping => mapping.streamCommitmentId === selectedId)).toMatchObject({ streamBudgetId: jpyStreamId })
+  expect(savedInput.config.mappings.find(mapping => mapping.streamCommitmentId === selectedId)?.streamBudgetId).not.toBe(cadStreamId)
+
+  const versionId = await createAllocationVersion(page, owner.agreementId)
+  for (const allocationMethod of ['amount', 'percentage'] as const) {
+    const rejected = await page.request.put(allocationsUrl, { data: { allocationVersionId: versionId, allocations: [{
+      commitmentType, streamCommitmentId: selectedId, agreementBudgetFiscalYearId: String(inputs.budgetYears.find(year => String(year.fiscal_year_id) === '41')!.id), outcomeId, allocationMethod,
+      allocationValue: allocationMethod === 'amount' ? parseCurrencyMoney('1', 'CAD') : '1'
+    }] } })
+    expect(rejected.status()).toBe(400)
+    expect(await rejected.json()).toMatchObject({ data: { code: 'GCS_OUTCOME_COST_ALLOCATION_STALE_COORDINATE' } })
+  }
+  const retained = await responseJson<{ allocations: Array<{ allocationVersionId: string }> }>(await page.request.get(allocationsUrl))
+  expect(retained.allocations.filter(row => row.allocationVersionId === versionId)).toEqual([])
+})

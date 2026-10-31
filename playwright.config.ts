@@ -10,6 +10,7 @@ export default defineConfig({
   retries: 0,
   use: {
     baseURL: process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:3000',
+    extraHTTPHeaders: { Origin: new URL(process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:3000').origin },
     browserName: 'chromium',
     executablePath: chromiumExecutablePath,
     channel: chromiumExecutablePath ? undefined : process.env.PLAYWRIGHT_CHANNEL || 'chrome',

@@ -1,3 +1,4 @@
+import { isCanonicalMoney, majorMoneyText, parseCurrencyMoney, parseMoney } from '@gcs-ssc/extensions/money'
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
@@ -12,6 +13,33 @@ import {
 import type { GcsExtensionJsonConfig } from '@gcs-ssc/extensions'
 import { installExtensionTestUiRuntime } from '@gcs-ssc/extensions/testing'
 import OutcomeAllocationDetail from '../../components/OutcomeAllocationDetail.vue'
+
+// The public SDK wrapper delegates to this strict current-contract bridge. Real host paint is covered by managed E2E.
+const StrictCurrencyInputBridge = defineComponent({
+  name: 'StrictCurrencyInputBridge',
+  inheritAttrs: false,
+  props: ['modelValue', 'currency'],
+  emits: ['update:modelValue'],
+  setup: (props, { attrs, emit }) => {
+    const text = (value: unknown): string => {
+      if (value === undefined || value === null) return ''
+      if (isCanonicalMoney(value)) return majorMoneyText(value)
+      if (typeof value === 'object' && 'draft' in value && typeof value.draft === 'string') return value.draft
+      throw new TypeError('Currency input requires current MoneyInput; scalar strings are invalid.')
+    }
+    return () => h('input', {
+      ...attrs,
+      value: text(props.modelValue),
+      'data-currency': props.currency,
+      onInput: (event: Event) => {
+        const draft = (event.target as HTMLInputElement).value
+        if (draft === '') { emit('update:modelValue', null); return }
+        try { emit('update:modelValue', parseCurrencyMoney(draft, props.currency)) }
+        catch { emit('update:modelValue', { draft }) }
+      }
+    })
+  }
+})
 
 const ArraySelectMenu = defineComponent({
   name: 'ArraySelectMenu',
@@ -147,6 +175,15 @@ const CompletionPanel = defineComponent({
   }, props.labels?.description)
 })
 
+const denominateFixture = (value: unknown, currency: string): unknown => {
+  if (Array.isArray(value)) return value.map(item => denominateFixture(item, currency))
+  if (value && typeof value === 'object') {
+    if ('amount' in value && 'currency' in value) return parseCurrencyMoney(majorMoneyText(parseMoney(value)), currency)
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, denominateFixture(item, currency)]))
+  }
+  return value
+}
+
 const jsonResponse = (value: unknown): Response => new Response(JSON.stringify(value), {
   status: 200,
   headers: {
@@ -166,13 +203,13 @@ const allocationResponse = {
       id: 1,
       stream_budget_id: 'stream-budget-1',
       fiscal_year_display: '2026-2027',
-      program_funding: '100.00'
+      program_funding: parseCurrencyMoney("100.00", 'cad')
     },
     {
       id: 2,
       stream_budget_id: 'stream-budget-2',
       fiscal_year_display: '2027-2028',
-      program_funding: '100.00'
+      program_funding: parseCurrencyMoney("100.00", 'cad')
     }
   ],
   versions: [{
@@ -264,6 +301,7 @@ const mountTab = async (
     ...i18n,
     locale: localeOverride
   })
+  runtime.components.CommonCurrencyInput = StrictCurrencyInputBridge
   runtime.components.USelectMenu = ArraySelectMenu
   runtime.components.USelect = InteractiveSelect
   runtime.components.UTable = AllocationTable
@@ -403,8 +441,8 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
   it.each(['en', 'fr'])('renders remaining funding and paid-only coding once in %s', async locale => {
     const response = {
       ...allocationResponse,
-      budgetYears: [{ ...allocationResponse.budgetYears[0], fiscal_year_id: '2026', program_funding: '1000.00', paid_amount: '200.00', remaining_funding: '800.00' }],
-      codingPaidAmounts: [{ agencyChartOfAccountId: 'retained-code', agencyFiscalYearId: '2026', paidAmount: '200.00' }],
+      budgetYears: [{ ...allocationResponse.budgetYears[0], fiscal_year_id: '2026', program_funding: parseCurrencyMoney("1000.00", 'cad'), paid_amount: parseCurrencyMoney("200.00", 'cad'), remaining_funding: parseCurrencyMoney("800.00", 'cad') }],
+      codingPaidAmounts: [{ agencyChartOfAccountId: 'retained-code', agencyFiscalYearId: '2026', paidAmount: parseCurrencyMoney("200.00", 'cad') }],
       hasPendingEffects: false
     }
     const wrapper = await mountTab(vi.fn(async () => jsonResponse(response)) as typeof fetch, config, locale, null, 'summary')
@@ -493,7 +531,7 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
   it.each(['cancel', 'dismiss'])('discards isolated edits on %s and restores the saved value when reopened', async action => {
     const response = { ...allocationResponse, allocations: [{
       allocationVersionId: 'version-1', commitmentType: '1', streamCommitmentId: 'stream-commitment-1',
-      agreementBudgetFiscalYearId: '1', outcomeId: 'outcome-1', allocationMethod: 'amount', allocationValue: '25.0000'
+      agreementBudgetFiscalYearId: '1', outcomeId: 'outcome-1', allocationMethod: 'amount', allocationValue: parseCurrencyMoney("25.0000", 'cad')
     }] }
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse(response))
     const wrapper = await mountTab(fetchMock as typeof fetch)
@@ -508,7 +546,7 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
     expect(wrapper.get('[data-cell="amount"]').text()).toBe('CA$25.00')
     await findButton(wrapper, 'Edit allocation').trigger('click')
     await flushPromises()
-    expect((wrapper.get('[data-control="allocation-modal"] input').element as HTMLInputElement).value).toBe('25.0000')
+    expect((wrapper.get('[data-control="allocation-modal"] input').element as HTMLInputElement).value).toBe('25')
     expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'PUT')).toBe(false)
     wrapper.unmount()
   })
@@ -516,14 +554,14 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
   it('keeps invalid or excessive drafts available for correction and applies a valid value only on Update', async () => {
     const response = { ...allocationResponse, allocations: [{
       allocationVersionId: 'version-1', commitmentType: '1', streamCommitmentId: 'stream-commitment-1',
-      agreementBudgetFiscalYearId: '1', outcomeId: 'outcome-1', allocationMethod: 'amount', allocationValue: '25.0000'
+      agreementBudgetFiscalYearId: '1', outcomeId: 'outcome-1', allocationMethod: 'amount', allocationValue: parseCurrencyMoney("25.0000", 'cad')
     }] }
     const locale = ref('en')
     const wrapper = await mountTab(vi.fn(async () => jsonResponse(response)) as typeof fetch, config, 'en', null, 'allocation', undefined, undefined, locale)
     await findButton(wrapper, 'Edit allocation').trigger('click')
     await flushPromises()
     const modal = wrapper.get('[data-control="allocation-modal"]')
-    for (const invalidValue of ['', '1e3', '101.0000']) {
+    for (const invalidValue of ['', '1e3', '101', '75.1250']) {
       await modal.get('input').setValue(invalidValue)
       await modal.get('form').trigger('submit')
       await flushPromises()
@@ -539,18 +577,18 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
       locale.value = 'en'
       await flushPromises()
     }
-    await modal.get('input').setValue('75.1250')
+    await modal.get('input').setValue('75.12')
     await modal.get('form').trigger('submit')
     await flushPromises()
     expect(wrapper.find('[data-control="allocation-modal"]').exists()).toBe(false)
-    expect(wrapper.get('[data-cell="amount"]').text()).toBe('CA$75.13')
+    expect(wrapper.get('[data-cell="amount"]').text()).toBe('CA$75.12')
     wrapper.unmount()
   })
 
   it('converts between money and percentage without changing the resolved allocation', async () => {
     const response = { ...allocationResponse, allocations: [{
       allocationVersionId: 'version-1', commitmentType: '1', streamCommitmentId: 'stream-commitment-1',
-      agreementBudgetFiscalYearId: '1', outcomeId: 'outcome-1', allocationMethod: 'amount', allocationValue: '25.0000'
+      agreementBudgetFiscalYearId: '1', outcomeId: 'outcome-1', allocationMethod: 'amount', allocationValue: parseCurrencyMoney("25.0000", 'cad')
     }] }
     const wrapper = await mountTab(vi.fn(async () => jsonResponse(response)) as typeof fetch)
     await findButton(wrapper, 'Edit allocation').trigger('click')
@@ -571,7 +609,7 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
   it('keeps the edit action visible and warns instead of opening while effects are pending', async () => {
     const response = { ...allocationResponse, hasPendingEffects: true, allocations: [{
       allocationVersionId: 'version-1', commitmentType: '1', streamCommitmentId: 'stream-commitment-1',
-      agreementBudgetFiscalYearId: '1', outcomeId: 'outcome-1', allocationMethod: 'amount', allocationValue: '25.0000'
+      agreementBudgetFiscalYearId: '1', outcomeId: 'outcome-1', allocationMethod: 'amount', allocationValue: parseCurrencyMoney("25.0000", 'cad')
     }] }
     const locale = ref('en')
     const toasts: Record<string, unknown>[] = []
@@ -601,7 +639,7 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
   it('keeps draft allocations read-only once Completion exists', async () => {
     const response = { ...allocationResponse, allocations: [{
       allocationVersionId: 'version-1', commitmentType: '1', streamCommitmentId: 'stream-commitment-1',
-      agreementBudgetFiscalYearId: '1', outcomeId: 'outcome-1', allocationMethod: 'amount', allocationValue: '25.0000'
+      agreementBudgetFiscalYearId: '1', outcomeId: 'outcome-1', allocationMethod: 'amount', allocationValue: parseCurrencyMoney("25.0000", 'cad')
     }] }
     const wrapper = await mountTab(vi.fn(async () => jsonResponse(response)) as typeof fetch, config, 'en', { id: 'completion-1' })
     expect(wrapper.findAll('button').some(button => button.attributes('aria-label')?.startsWith('Edit allocation:'))).toBe(true)
@@ -615,7 +653,7 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
       ...allocationResponse.versions[0], id: 'version-2', versionNumber: 2, status: 'inactive'
     }], allocations: [{
       allocationVersionId: 'version-1', commitmentType: '1', streamCommitmentId: 'stream-commitment-1',
-      agreementBudgetFiscalYearId: '1', outcomeId: 'outcome-1', allocationMethod: 'amount', allocationValue: '25.0000'
+      agreementBudgetFiscalYearId: '1', outcomeId: 'outcome-1', allocationMethod: 'amount', allocationValue: parseCurrencyMoney("25.0000", 'cad')
     }] }
     const wrapper = await mountTab(vi.fn(async () => jsonResponse(response)) as typeof fetch)
     await findButton(wrapper, 'Edit allocation').trigger('click')
@@ -634,7 +672,7 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
       versions: [{
         ...allocationResponse.versions[0],
         status: 'inactive',
-        fundingBasisAmount: 80
+        fundingBasisAmount: parseCurrencyMoney("80", 'cad')
       }],
       allocations: [{
         allocationVersionId: 'version-1',
@@ -643,7 +681,7 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
         agreementBudgetFiscalYearId: '1',
         outcomeId: 'outcome-1',
         allocationMethod: 'amount',
-        allocationValue: 100
+        allocationValue: parseCurrencyMoney("100", 'cad')
       }]
     }
     const fetchMock = vi.fn(async (): Promise<Response> => jsonResponse(historicalResponse))
@@ -676,7 +714,7 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
           agreementBudgetFiscalYearId: '2',
           outcomeId: 'outcome-1',
           allocationMethod: 'amount',
-          allocationValue: 100
+          allocationValue: parseCurrencyMoney("100", 'cad')
         },
         {
           allocationVersionId: 'version-1',
@@ -685,7 +723,7 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
           agreementBudgetFiscalYearId: '1',
           outcomeId: 'outcome-1',
           allocationMethod: 'amount',
-          allocationValue: 100
+          allocationValue: parseCurrencyMoney("100", 'cad')
         }
       ]
     }
@@ -758,7 +796,7 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
         agreementBudgetFiscalYearId: '1',
         outcomeId: 'outcome-1',
         allocationMethod: 'amount',
-        allocationValue: 100
+        allocationValue: parseCurrencyMoney("100", 'cad')
       }]
     }
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -801,19 +839,79 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
   ])('uses owning USD currency for allocation inputs and displayed totals in %s', async (language, expected) => {
     const response = { ...allocationResponse, currency: 'usd', allocations: [{
       allocationVersionId: 'version-1', commitmentType: '1', streamCommitmentId: 'stream-commitment-1',
-      agreementBudgetFiscalYearId: '1', outcomeId: 'outcome-1', allocationMethod: 'amount', allocationValue: '100.0000'
+      agreementBudgetFiscalYearId: '1', outcomeId: 'outcome-1', allocationMethod: 'amount', allocationValue: parseCurrencyMoney("100.0000", 'cad')
     }] }
-    const fetchMock = vi.fn(async (): Promise<Response> => jsonResponse(response))
+    const fetchMock = vi.fn(async (): Promise<Response> => jsonResponse(denominateFixture(response, 'usd')))
     const wrapper = await mountTab(fetchMock as typeof fetch, config, language)
     await findButton(wrapper, language === 'fr' ? 'Modifier la répartition' : 'Edit allocation').trigger('click')
     await flushPromises()
     expect(wrapper.get('[data-control="allocation-modal"] input').attributes('data-currency')).toBe('usd')
-    const formatter = wrapper.findComponent({ name: 'GcsCommonCurrencyInput' }).vm.$attrs['format-value'] as (value: string, locale: string, currency: string) => string | null
-    expect(formatter('100.2350', language, 'usd')).toBe(language === 'fr' ? '100,24 $US' : '$100.24')
-    expect(formatter('', language, 'usd')).toBeNull()
-    expect(formatter('1e3', language, 'usd')).toBeNull()
-    expect(formatter('999999999999999.9949', language, 'usd')).toBe(language === 'fr' ? '999 999 999 999 999,99 $US' : '$999,999,999,999,999.99')
+    const control = wrapper.getComponent(StrictCurrencyInputBridge)
+    expect(control.props('modelValue')).toEqual({ amount: '10000', currency: 'USD' })
+    const input = wrapper.get('[data-control="allocation-modal"] input')
+    for (const invalid of ['100.2350', '1e3', '999999999999999.9949']) {
+      await input.setValue(invalid)
+      expect(control.props('modelValue')).toEqual({ draft: invalid })
+      expect((input.element as HTMLInputElement).value).toBe(invalid)
+    }
+    await input.setValue('')
+    expect(control.props('modelValue')).toBeNull()
+    await input.setValue('100.23')
+    expect(control.props('modelValue')).toEqual({ amount: '10023', currency: 'USD' })
     expect(wrapper.get('[data-cell="amount"]').text()).toBe(expected)
+    wrapper.unmount()
+  })
+
+  it.each([
+    { currency: 'jpy', initial: '25', invalid: '25.5', valid: '26', minor: '26', digits: '25' },
+    { currency: 'kwd', initial: '25.123', invalid: '25.1234', valid: '26.001', minor: '26001', digits: '25.123' },
+    { currency: 'clf', initial: '25.1234', invalid: '25.12345', valid: '26.0001', minor: '260001', digits: '25.1234' },
+    { currency: 'mga', initial: '25.2', invalid: '25.1', valid: '26.2', minor: '131', digits: '25.2' }
+  ])('edits $currency in its actual minor units and sends the authoritative Money object', async ({ currency, initial, invalid, valid, minor, digits }) => {
+    const response = denominateFixture({
+      ...allocationResponse,
+      currency,
+      allocations: [{
+        allocationVersionId: 'version-1', commitmentType: '1', streamCommitmentId: 'stream-commitment-1',
+        agreementBudgetFiscalYearId: '1', outcomeId: 'outcome-1', allocationMethod: 'amount',
+        allocationValue: parseCurrencyMoney(initial, currency)
+      }]
+    }, currency)
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> =>
+      jsonResponse(init?.method === 'PUT' ? { ok: true } : response))
+    const wrapper = await mountTab(fetchMock as typeof fetch)
+    const amountCell = wrapper.get('[data-cell="amount"]').text()
+    expect(amountCell).toContain(digits)
+    if (currency === 'jpy') expect(amountCell).not.toContain('.00')
+    await findButton(wrapper, 'Edit allocation').trigger('click')
+    await flushPromises()
+    const modal = wrapper.get('[data-control="allocation-modal"]')
+    const control = wrapper.getComponent(StrictCurrencyInputBridge)
+    expect(control.props('modelValue')).toEqual(parseCurrencyMoney(initial, currency))
+    expect((modal.get('input').element as HTMLInputElement).value).toBe(initial)
+    await modal.get('input').setValue(invalid)
+    expect(control.props('modelValue')).toEqual({ draft: invalid })
+    await modal.get('form').trigger('submit')
+    await flushPromises()
+    expect(wrapper.find('[data-control="allocation-modal"]').exists()).toBe(true)
+    expect((modal.get('input').element as HTMLInputElement).value).toBe(invalid)
+    expect(modal.get('[name="allocationValue"]').attributes('error')).toBeTruthy()
+    expect(modal.text()).toContain('—')
+    await modal.get('input').setValue('')
+    expect(control.props('modelValue')).toBeNull()
+    await modal.get('input').setValue(valid)
+    expect(control.props('modelValue')).toEqual({ amount: minor, currency: currency.toUpperCase() })
+    expect(control.emitted('update:modelValue')).toContainEqual([{ amount: minor, currency: currency.toUpperCase() }])
+    await modal.get('form').trigger('submit')
+    await flushPromises()
+    expect(wrapper.find('[data-control="allocation-modal"]').exists()).toBe(false)
+    await findButton(wrapper, 'Save').trigger('click')
+    await flushPromises()
+    const saveCall = fetchMock.mock.calls.find(([, init]) => init?.method === 'PUT')
+    expect(saveCall).toBeDefined()
+    expect(JSON.parse(String(saveCall?.[1]?.body))).toMatchObject({ allocations: [expect.objectContaining({
+      allocationMethod: 'amount', allocationValue: { amount: minor, currency: currency.toUpperCase() }
+    })] })
     wrapper.unmount()
   })
 
@@ -822,12 +920,12 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
       ...allocationResponse,
       budgetYears: [{
         ...allocationResponse.budgetYears[0],
-        program_funding: '250.00'
+        program_funding: parseCurrencyMoney("250.00", 'cad')
       }],
       versions: [{
         ...allocationResponse.versions[0],
         status: 'inactive',
-        fundingBasisAmount: 80
+        fundingBasisAmount: parseCurrencyMoney("80", 'cad')
       }],
       allocations: [{
         allocationVersionId: 'version-1',
@@ -836,9 +934,9 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
         agreementBudgetFiscalYearId: '1',
         outcomeId: 'outcome-1',
         allocationMethod: 'percentage',
-        allocationValue: 50,
-        resolvedAmount: 40,
-        fundingBasisAmount: 80,
+        allocationValue: "50",
+        resolvedAmount: parseCurrencyMoney("40", 'cad'),
+        fundingBasisAmount: parseCurrencyMoney("80", 'cad'),
         outcomeLabelEn: 'Recorded outcome',
         outcomeLabelFr: 'Résultat enregistré',
         commitmentLabelEn: 'GL 4000 - Recorded commitment',
@@ -850,10 +948,10 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
     const wrapper = await mountTab(fetchMock as typeof fetch)
     const tableRows = wrapper.getComponent(AllocationTable).vm.$attrs.data as Array<{
       rowType: string
-      programFunding: number
+      programFunding: ReturnType<typeof parseCurrencyMoney>
     }>
 
-    expect(tableRows.find(row => row.rowType === 'association')?.programFunding).toBe(80)
+    expect(tableRows.find(row => row.rowType === 'association')?.programFunding).toEqual(parseCurrencyMoney('80', 'cad'))
     expect(wrapper.text()).toContain('$40.00')
     expect(wrapper.text()).toContain('$40.00')
     expect(wrapper.text()).not.toContain('$125.00')
@@ -874,7 +972,7 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
       ],
       budgetYears: [{
         ...allocationResponse.budgetYears[0],
-        program_funding: '0.05'
+        program_funding: parseCurrencyMoney("0.05", 'cad')
       }],
       allocations: [
         {
@@ -884,7 +982,7 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
           agreementBudgetFiscalYearId: '1',
           outcomeId: 'outcome-1',
           allocationMethod: 'percentage',
-          allocationValue: 50
+          allocationValue: "50"
         },
         {
           allocationVersionId: 'version-1',
@@ -893,7 +991,7 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
           agreementBudgetFiscalYearId: '1',
           outcomeId: 'outcome-2',
           allocationMethod: 'percentage',
-          allocationValue: 50
+          allocationValue: "50"
         }
       ]
     }
@@ -943,7 +1041,7 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
           agreementBudgetFiscalYearId: '1',
           outcomeId: 'outcome-1',
           allocationMethod: 'amount',
-          allocationValue: 120
+          allocationValue: parseCurrencyMoney("120", 'cad')
         },
         {
           allocationVersionId: 'version-1',
@@ -952,7 +1050,7 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
           agreementBudgetFiscalYearId: '2',
           outcomeId: 'outcome-1',
           allocationMethod: 'amount',
-          allocationValue: 80
+          allocationValue: parseCurrencyMoney("80", 'cad')
         }
       ]
     }
@@ -1020,7 +1118,7 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
         agreementBudgetFiscalYearId: '1',
         outcomeId: 'outcome-1',
         allocationMethod: 'amount',
-        allocationValue: 100,
+        allocationValue: parseCurrencyMoney("100", 'cad'),
         outcomeLabelEn: 'Recorded outcome',
         outcomeLabelFr: 'Résultat enregistré',
         commitmentLabelEn: 'GL 4000 - Recorded commitment',
@@ -1058,7 +1156,7 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
   it('renders read-only matrix data for viewers and warns before unassigned Contributors edit', async () => {
     const response = { ...allocationResponse, allocations: [{
       allocationVersionId: 'version-1', commitmentType: '1', streamCommitmentId: 'stream-commitment-1',
-      agreementBudgetFiscalYearId: '1', outcomeId: 'outcome-1', allocationMethod: 'amount', allocationValue: '25.0000'
+      agreementBudgetFiscalYearId: '1', outcomeId: 'outcome-1', allocationMethod: 'amount', allocationValue: parseCurrencyMoney("25.0000", 'cad')
     }] }
     const fetchMock = vi.fn(async () => jsonResponse(response))
     const viewer = await mountTab(fetchMock as typeof fetch, config, 'en', null, 'allocation', { canUpdate: false, canDelete: false, canWork: false })
@@ -1085,7 +1183,7 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
     const pendingSave = new Promise<Response>(resolve => { releaseSave = resolve })
     const response = { ...allocationResponse, allocations: [{
       allocationVersionId: 'version-1', commitmentType: '1', streamCommitmentId: 'stream-commitment-1',
-      agreementBudgetFiscalYearId: '1', outcomeId: 'outcome-1', allocationMethod: 'amount', allocationValue: '25.0000'
+      agreementBudgetFiscalYearId: '1', outcomeId: 'outcome-1', allocationMethod: 'amount', allocationValue: parseCurrencyMoney("25.0000", 'cad')
     }] }
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => init?.method === 'PUT' ? pendingSave : jsonResponse(response))
     const wrapper = await mountTab(fetchMock as typeof fetch)
@@ -1109,7 +1207,7 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
   it('refreshes completion state after the approval workflow changes and leaves submitted workflow actions available', async () => {
     const response = { ...allocationResponse, allocations: allocationResponse.budgetYears.map((year, index) => ({
       allocationVersionId: 'version-1', commitmentType: '1', streamCommitmentId: `stream-commitment-${index + 1}`,
-      agreementBudgetFiscalYearId: String(year.id), outcomeId: 'outcome-1', allocationMethod: 'amount', allocationValue: '100.0000'
+      agreementBudgetFiscalYearId: String(year.id), outcomeId: 'outcome-1', allocationMethod: 'amount', allocationValue: parseCurrencyMoney("100.0000", 'cad')
     })) }
     const fetchMock = vi.fn(async () => jsonResponse(response))
     const wrapper = await mountTab(fetchMock as typeof fetch, config, 'en', { id: 'completion-1' }, 'completion')
@@ -1121,4 +1219,23 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
     expect(panel.props('canWorkWorkflow')).toBe(true)
     wrapper.unmount()
   })
+  it.each(['en', 'fr'])('shows corrupt catalog money in the retained Agreement currency with an explicit warning (%s)', async locale => {
+    const response = {
+      ...allocationResponse,
+      allocations: [{
+        allocationVersionId: 'version-1', commitmentType: '1', streamCommitmentId: 'foreign-chart',
+        agreementBudgetFiscalYearId: '1', outcomeId: 'outcome-1', allocationMethod: 'amount',
+        allocationValue: parseCurrencyMoney('1', 'CAD'), resolvedAmount: parseCurrencyMoney('1', 'CAD'),
+        coordinateCurrencyMismatch: true
+      }]
+    }
+    const wrapper = await mountTab(vi.fn(async () => jsonResponse(response)) as typeof fetch, { enabledCommitmentTypes: [], mappings: [] }, locale, null, 'summary')
+    const warning = wrapper.findAll('[role="alert"]').find(item => item.text().includes(locale === 'fr' ? 'devise de l’entente' : 'Agreement currency'))
+    expect(warning).toBeDefined()
+    expect(warning!.text()).toContain(locale === 'fr' ? '1,00' : 'CA$1.00')
+    expect(warning!.text()).toContain('foreign-chart')
+    expect(warning!.text()).not.toContain('¥')
+    wrapper.unmount()
+  })
+
 })

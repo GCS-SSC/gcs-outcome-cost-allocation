@@ -1,3 +1,4 @@
+import { parseCurrencyMoney } from '@gcs-ssc/extensions/money'
 import { describe, expect, it, vi } from 'vitest'
 import {
   buildOutcomeAllocationRows,
@@ -45,7 +46,7 @@ describe('agreement outcome cost allocation tab helpers', () => {
         commitmentTypeLabel: 'Commitments',
         yearId: 'year-1',
         yearLabel: '2026-2027',
-        programFunding: 1000,
+        programFunding: parseCurrencyMoney("1000", 'cad'),
         streamBudgetId: 'budget-1',
         streamCommitmentId: 'commitment-1',
         commitmentLineLabel: 'GL 100',
@@ -58,7 +59,7 @@ describe('agreement outcome cost allocation tab helpers', () => {
         commitmentTypeLabel: 'Commitments',
         yearId: 'year-1',
         yearLabel: '2026-2027',
-        programFunding: 1000,
+        programFunding: parseCurrencyMoney("1000", 'cad'),
         streamBudgetId: 'budget-1',
         streamCommitmentId: 'commitment-2',
         commitmentLineLabel: 'GL 200',
@@ -80,7 +81,7 @@ describe('agreement outcome cost allocation tab helpers', () => {
         id: 'year:1:year-1',
         rowType: 'fiscalYear',
         associationCount: 2,
-        programFunding: 1000
+        programFunding: parseCurrencyMoney("1000", 'cad')
       }),
       expect.objectContaining({
         id: 'association-1',
@@ -102,7 +103,7 @@ describe('agreement outcome cost allocation tab helpers', () => {
       commitmentTypeLabel: 'Commitments',
       yearId: 'year-1',
       yearLabel: '2026-2027',
-      programFunding: 1000,
+      programFunding: parseCurrencyMoney("1000", 'cad'),
       streamBudgetId: 'budget-1',
       streamCommitmentId: 'commitment-1',
       commitmentLineLabel: 'GL 100',
@@ -136,7 +137,7 @@ describe('agreement outcome cost allocation tab helpers', () => {
       streamCommitmentId: 'commitment-1',
       outcomeId: 'outcome-1',
       allocationMethod: 'amount',
-      allocationValue: 10
+      allocationValue: parseCurrencyMoney("10", 'cad')
     }] as const
 
     expect(buildSaveOutcomeAllocationsRequestBody('version-1', [...allocations])).toEqual({
@@ -153,7 +154,7 @@ describe('agreement outcome cost allocation tab helpers', () => {
       streamCommitmentId: 'commitment-1',
       outcomeId: 'outcome-1',
       allocationMethod: 'amount',
-      allocationValue: 10
+      allocationValue: parseCurrencyMoney("10", 'cad')
     }]
     const fetcher = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }))
 

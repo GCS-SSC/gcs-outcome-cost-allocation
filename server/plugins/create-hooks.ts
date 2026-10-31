@@ -17,7 +17,7 @@ import {
   registerGcsExtensionStatusReferenceGuard
 } from '@gcs-ssc/extensions/server'
 import { sql } from 'kysely'
-import { guardAgencyCodingConfiguration } from '../agency-coding-configuration.ts'
+import { guardOutcomeCostAllocationConfiguration } from '../agency-coding-configuration.ts'
 import { asOutcomeCostAllocationDb } from '../db.ts'
 import {
   generatedPaymentStatusResurrectionExceedsCoverage,
@@ -461,7 +461,7 @@ export const guardOutcomeCostAllocationStatusReference = async (
 
 /** Registers locks and guards for allocation history and legacy generated records. */
 export default defineGcsExtensionNitroPlugin(nitroApp => {
-  registerGcsExtensionConfigurationGuard(EXTENSION_KEY, guardAgencyCodingConfiguration, nitroApp)
+  registerGcsExtensionConfigurationGuard(EXTENSION_KEY, guardOutcomeCostAllocationConfiguration, nitroApp)
   registerGcsExtensionDisableGuard(EXTENSION_KEY, guardExtensionDisable, nitroApp)
   registerGcsExtensionAgreementLifecycleLock(EXTENSION_KEY, lockAgreementLifecycle, nitroApp)
   registerGcsExtensionAgreementDeleteGuard(EXTENSION_KEY, guardAgreementDelete, nitroApp)

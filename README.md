@@ -75,11 +75,37 @@ creation, editing, Completion/activation and new managed Commitment allocation u
 host financial locks. ARs, manual Adjustments and unlinked catch-all memos do not block
 solely by existing. No pending/reserved matrix column is added.
 
-Financial source queries and SDK coverage amounts use exact decimal text. Percentage,
-cent balancing and weighted Payment calculations use scaled integer/BigInt arithmetic.
-Persisted rows obey their PostgreSQL NUMERIC precision, while aggregate funding retains
-its full exact decimal value. Legacy numeric inputs are accepted only when their scaled
-units remain safely representable; they do not limit exact string transport.
+Monetary APIs and retained allocation evidence use the shared SDK `Money` object:
+`{ amount: "12345", currency: "KWD" }` represents KWD 12.345. The integer amount is
+always minor units and the currency is retained with it. Monetary database columns
+store exact integer minor units in `NUMERIC`, with scale-zero and range checks;
+individual rows allow 38 digits and funding aggregates retain their full exact integer
+value. Currency metadata determines the real subdivision, including JPY, KWD, CLF
+and MGA. Inputs containing fractional minor units are rejected, never silently rounded.
+
+Every allocation write binds its live Agreement year, selected accounting line and
+Program budget to the same native currency, fiscal year, Stream and Agency. The API
+revalidates these coordinates after fresh authorization inside the mutation transaction;
+the owning baseline trigger independently enforces the same boundary for direct SQL.
+Both fixed-amount and percentage allocations obey it. Stream configuration authoring
+pairs accounting lines and budgets by fiscal year **and** currency, and its server guard
+rejects foreign or mismatched coordinates. Coding choices and budget captions display
+the currency so otherwise identical accounting dimensions remain distinguishable.
+
+Saved monetary values are decoded only with the independently resolved immutable
+Agreement currency. An illegally imported foreign-currency Chart cannot relabel their
+minor units. Such rows remain visible with a currency-conflict warning and their native
+amounts; further allocation writes fail until coordinates are repaired. This does not
+prevent authorized administrators from retiring or moving a Stream allocation: retained
+Agreement-year history remains readable under the accepted administrative contract.
+
+All monetary calculation, weighted splitting, capacity saturation and residual
+balancing use `@gcs-ssc/extensions/money`, backed by Dinero BigInt and actual
+currency definitions. Percentage values remain separate decimal strings with up to
+four fractional digits. Editors hold major-unit decimal drafts and convert only at
+the shared currency boundary. No scalar decimal/number monetary API input or old
+cents-only calculation path is supported. This is a clean baseline cutover and requires
+fresh extension/host database rebuilds; no live environment is reset by these changes.
 
 ## Host coding allocator
 
@@ -159,12 +185,12 @@ settings, and mutations preserve the other tab's policy.
 
 AR evidence retains authored percentages, including lines rounding to zero. Credit
 Memo evidence retains the selected Commitment and matrix identities, effective date,
-resolved target accounts and exact combined weights before cent rounding. Amount-only
+resolved target accounts and exact combined weights before minor-unit settlement. Amount-only
 draft changes reuse those retained weights and accounts; explicit cash received-date
 changes resolve the current committed matrix and matching exceptions for the edited
 date. Later matrix or configuration edits never recode existing drafts or posted
-evidence. Previously captured percentage evidence remains immutable on amount-only
-changes. Missing or invalid allocation evidence fails explicitly.
+evidence. Linked Credit Memos require the current retained weight-based policy;
+missing, obsolete or invalid allocation evidence fails explicitly.
 
 The disposable managed fixture creates yearly AR sets and ensures a unique linked
 Credit Memo account exists for every CAD Commitment account across all fiscal years.

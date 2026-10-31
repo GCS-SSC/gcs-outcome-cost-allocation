@@ -57,7 +57,7 @@ export interface OutcomeCostAllocationHostDatabase {
   'Funding_Case_Agreement_Budget_Line_Item': {
     id: string
     egcs_fc_fundingagreementbudgetfiscalyear: string
-    egcs_fc_programfunding: number
+    egcs_fc_programfunding: string
     egcs_fc_currency: string
     _deleted: boolean
   }
@@ -92,6 +92,7 @@ export interface OutcomeCostAllocationHostDatabase {
   }
   'Agency_Chart_of_Account': {
     id: string
+    egcs_ay_organizationagency: string
     egcs_ay_fiscalyear: string
     egcs_ay_currency: string
     egcs_ay_kind: 'commitment' | 'account_receivable' | 'credit_memo'

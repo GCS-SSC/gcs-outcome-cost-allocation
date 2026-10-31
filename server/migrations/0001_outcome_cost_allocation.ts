@@ -3,6 +3,8 @@ import { attachGcsLifecycleEntityIdentity, defineGcsExtensionMigration } from '@
 
 export default defineGcsExtensionMigration({
   up: async (db) => {
+    // Monetary NUMERIC columns contain canonical integer minor units. Untyped
+    // NUMERIC lets checks reject fractional input before PostgreSQL can round it.
     await db.schema
       .createTable('extensions.gcs_outcome_cost_allocation_versions')
       .addColumn('id', 'bigserial', col => col.primaryKey())
@@ -20,7 +22,7 @@ export default defineGcsExtensionMigration({
       )
       .addCheckConstraint(
         'gcs_outcome_cost_allocation_version_funding_nonnegative',
-        sql`funding_basis_amount IS NULL OR funding_basis_amount >= 0`
+        sql`funding_basis_amount IS NULL OR (funding_basis_amount >= 0 AND funding_basis_amount < 'Infinity'::numeric AND funding_basis_amount = trunc(funding_basis_amount) AND scale(funding_basis_amount) = 0)`
       )
       .execute()
 
@@ -100,9 +102,9 @@ export default defineGcsExtensionMigration({
       .addColumn('agreement_budget_fiscal_year_id', 'bigint', col => col.notNull())
       .addColumn('outcome_id', 'bigint', col => col.notNull().references('Transfer_Payment_Outcome.id').onDelete('restrict'))
       .addColumn('allocation_method', 'varchar(20)', col => col.notNull())
-      .addColumn('allocation_value', 'numeric(19, 4)', col => col.notNull())
-      .addColumn('resolved_amount', 'numeric(19, 2)')
-      .addColumn('funding_basis_amount', 'numeric(19, 2)')
+      .addColumn('allocation_value', 'numeric', col => col.notNull())
+      .addColumn('resolved_amount', 'numeric')
+      .addColumn('funding_basis_amount', 'numeric')
       .addColumn('outcome_label_en', 'varchar(255)')
       .addColumn('outcome_label_fr', 'varchar(255)')
       .addColumn('commitment_label_en', 'text')
@@ -115,12 +117,15 @@ export default defineGcsExtensionMigration({
       )
       .addCheckConstraint(
         'gcs_outcome_cost_allocation_value_range',
-        sql`allocation_value >= 0 AND (allocation_method <> 'percentage' OR allocation_value <= 100)`
+        sql`allocation_value >= 0 AND CASE allocation_method
+          WHEN 'amount' THEN allocation_value = trunc(allocation_value) AND scale(allocation_value) = 0 AND allocation_value < 1e38
+          WHEN 'percentage' THEN allocation_value <= 100 AND allocation_value = trunc(allocation_value, 4)
+          ELSE false END`
       )
       .addCheckConstraint(
         'gcs_outcome_cost_allocation_economics_nonnegative',
-        sql`(resolved_amount IS NULL OR resolved_amount >= 0)
-          AND (funding_basis_amount IS NULL OR funding_basis_amount >= 0)`
+        sql`(resolved_amount IS NULL OR (resolved_amount >= 0 AND resolved_amount = trunc(resolved_amount) AND scale(resolved_amount) = 0 AND resolved_amount < 1e38))
+          AND (funding_basis_amount IS NULL OR (funding_basis_amount >= 0 AND funding_basis_amount < 'Infinity'::numeric AND funding_basis_amount = trunc(funding_basis_amount) AND scale(funding_basis_amount) = 0))`
       )
       .addForeignKeyConstraint('gcs_outcome_cost_allocation_ref_allocations_version', ['allocation_version_id'], 'extensions.gcs_outcome_cost_allocation_versions', ['id'], constraint => constraint.onDelete('restrict'))
       .addForeignKeyConstraint('gcs_outcome_cost_allocation_ref_allocations_streamcommitment', ['stream_commitment_id'], 'Transfer_Payment_Stream_Chart_of_Account', ['id'], constraint => constraint.onDelete('restrict'))
@@ -149,11 +154,11 @@ export default defineGcsExtensionMigration({
       .addColumn('agreement_budget_fiscal_year_id', 'bigint', col => col.notNull())
       .addColumn('outcome_id', 'bigint', col => col.notNull().references('Transfer_Payment_Outcome.id').onDelete('restrict'))
       .addColumn('stream_commitment_id', 'bigint', col => col.notNull())
-      .addColumn('generated_amount', 'numeric(19, 2)', col => col.notNull())
+      .addColumn('generated_amount', 'numeric', col => col.notNull())
       .addColumn('_deleted', 'boolean', col => col.defaultTo(false).notNull())
       .addCheckConstraint(
         'gcs_outcome_cost_allocation_generated_amount_nonnegative',
-        sql`generated_amount >= 0`
+        sql`generated_amount >= 0 AND generated_amount = trunc(generated_amount) AND scale(generated_amount) = 0 AND generated_amount < 1e38`
       )
       .addForeignKeyConstraint('gcs_outcome_cost_allocation_ref_lines_version', ['allocation_version_id'], 'extensions.gcs_outcome_cost_allocation_versions', ['id'], constraint => constraint.onDelete('restrict'))
       .addForeignKeyConstraint('gcs_outcome_cost_allocation_ref_lines_commitment', ['generated_commitment_id'], 'Funding_Case_Agreement_Commitment', ['id'], constraint => constraint.onDelete('restrict'))
@@ -515,6 +520,9 @@ export default defineGcsExtensionMigration({
           INNER JOIN "Transfer_Payment_Stream" stream
             ON stream.id = agreement.egcs_fc_transferpaymentstream
             AND stream._deleted = false
+          INNER JOIN "Transfer_Payment_Profile" program
+            ON program.id = stream.egcs_tp_transferpaymentprofile
+            AND program._deleted = false
           INNER JOIN "Funding_Case_Agreement_Budget_Fiscal_Year" agreement_year
             ON COALESCE(agreement_year.egcs_fc_originalbudgetfiscalyear, agreement_year.id) = NEW.agreement_budget_fiscal_year_id
             AND agreement_year.egcs_fc_fundingagreement = agreement.id
@@ -535,6 +543,9 @@ export default defineGcsExtensionMigration({
           INNER JOIN "Agency_Chart_of_Account" chart
             ON chart.id = stream_commitment.egcs_tp_agencychartofaccount
             AND chart.egcs_ay_fiscalyear = agreement_year.egcs_fc_fiscalyear
+            AND chart.egcs_ay_organizationagency = program.egcs_tp_agency
+            AND chart.egcs_ay_kind = 'commitment'
+            AND chart.egcs_ay_currency = agreement.egcs_fc_currency
             AND chart._deleted = false
           INNER JOIN "Transfer_Payment_Stream_Commitment_Type" commitment_type
             ON commitment_type.id = NEW.commitment_type
@@ -550,6 +561,7 @@ export default defineGcsExtensionMigration({
             ON program_budget.id = stream_budget.egcs_tp_transferpaymentbudget
             AND program_budget.egcs_tp_transferpaymentprofile = stream.egcs_tp_transferpaymentprofile
             AND program_budget.egcs_tp_fiscalyear = agreement_year.egcs_fc_fiscalyear
+            AND program_budget.egcs_tp_currency = agreement.egcs_fc_currency
             AND program_budget._deleted = false
           WHERE agreement.id = parent_agreement_id
             AND agreement._deleted = false
@@ -662,7 +674,7 @@ export default defineGcsExtensionMigration({
         old_generated_agreement_id bigint;
         new_generated_agreement_id bigint;
         active_line_count bigint;
-        active_line_total numeric(19, 2);
+        active_line_total numeric;
       BEGIN
         IF TG_OP <> 'INSERT' THEN
           SELECT provenance.agreement_id

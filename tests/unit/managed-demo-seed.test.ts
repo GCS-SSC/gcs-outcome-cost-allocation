@@ -4,7 +4,7 @@ import {
   seedManagedOutcomeCostAllocationDemo,
   type ManagedDemoRequest
 } from '../../demo/managed-demo-seed'
-import { parseAllocationMoney } from '../../shared/allocation'
+import { parseCurrencyMoney } from '@gcs-ssc/extensions/money'
 
 const response = (body: unknown) => ({
   json: async () => body,
@@ -14,8 +14,8 @@ const response = (body: unknown) => ({
 })
 
 describe('managed OCA demo seeding', () => {
-  it('passes a full-range allocation value as exact decimal text', async () => {
-    const exactFunding = parseAllocationMoney('999999999999999.99')!
+  it('passes a full-range allocation value as currency-bearing integer minor units', async () => {
+    const exactFunding = parseCurrencyMoney('999999999999999.99', 'CAD')
     const put = vi.fn(async () => response({}))
     const post = vi.fn(async (url: string) => response(
       url.endsWith('/allocation-versions')
@@ -67,7 +67,7 @@ describe('managed OCA demo seeding', () => {
       '/api/extensions/gcs-outcome-cost-allocation/agreements/agreement-1/allocations',
       expect.objectContaining({
         data: expect.objectContaining({
-          allocations: [expect.objectContaining({ allocationValue: '999999999999999.99' })]
+          allocations: [expect.objectContaining({ allocationValue: exactFunding })]
         })
       })
     )

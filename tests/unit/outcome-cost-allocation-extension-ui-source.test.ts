@@ -54,7 +54,6 @@ describe('outcome cost allocation extension UI', () => {
     expect(agreementTab).not.toContain('getCommitmentTypeUnallocated')
     expect(agreementTab).toContain('return getFiscalYearUnallocated(row.yearId)')
     expect(agreementTab).toContain('inputmode="decimal"')
-    expect(agreementTab).toContain('parseExactNumeric19Scale4')
     expect(agreementTab).toContain('text-error')
     expect(agreementTab).toContain('outcome-cost-allocation-table')
     expect(agreementTab).toContain('table-layout: fixed')

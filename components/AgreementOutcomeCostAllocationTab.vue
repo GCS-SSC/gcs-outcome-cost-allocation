@@ -3,7 +3,8 @@ import { h, type VNode, computed, ref, watch, type Ref } from 'vue'
 import type { ExtensionEntityTabContext, GcsExtensionJsonConfig, GcsExtensionRbacRequirement } from '@gcs-ssc/extensions'
 import { ExtensionBadge, ExtensionButton, ExtensionResourceLayout, useExtensionApi, useExtensionI18n, useExtensionToast } from '@gcs-ssc/extensions/ui'
 import { AgreementOutcomeCostAllocationTabMessages, AgreementOutcomeCostAllocationTabStatusMessages } from '../i18n/AgreementOutcomeCostAllocationTab'
-import { type AllocationMoney, type CostAllocationVersion, resolveAllocationAmounts, subtractMoney, sumMoney, toMoney } from '../shared/allocation'
+import { type AllocationMoney, type CostAllocationVersion, resolveAllocationAmounts } from '../shared/allocation'
+import { parseMoney, subtractMoney, sumMoney } from '@gcs-ssc/extensions/money'
 import {
   type AllocationResponse,
   deleteOutcomeAllocationDraftVersionRequest,
@@ -28,6 +29,10 @@ const { t: statusText } = useExtensionI18n(AgreementOutcomeCostAllocationTabStat
 const api = useExtensionApi(extensionKey)
 const toast = useExtensionToast()
 const data: Ref<AllocationResponse | null> = ref(null)
+const currency = (): string => {
+  if (!data.value) throw new Error('Allocation money requires its owning Agreement currency.')
+  return data.value.currency
+}
 const status: Ref<'idle' | 'pending' | 'success' | 'error'> = ref('idle')
 const search = ref('')
 const pagination = ref({ pageIndex: 0, pageSize: 10 })
@@ -62,7 +67,7 @@ watch(() => context.agreementId, () => {
 const hasPendingMutation = computed(() => isCreatingDraft.value || Boolean(deletingVersionId.value))
 const hasDraftVersion = computed(() => data.value?.versions.some(version => version.status === 'draft') === true)
 const formatMoney = (value: AllocationMoney) => data.value?.currency
-  ? formatCurrencyAmount(value, locale.value, data.value.currency)
+  ? formatCurrencyAmount(value, locale.value)
   : '—'
 const formatDate = (value?: string | null) => value
   ? new Intl.DateTimeFormat(locale.value === 'fr' ? 'fr-CA' : 'en-CA', { dateStyle: 'medium' }).format(new Date(value))
@@ -71,9 +76,9 @@ const versionLabel = (version: CostAllocationVersion) => `${t('version')} ${vers
 const rows = computed(() => (data.value?.versions ?? []).map(version => {
   const allocations = data.value?.allocations.filter(allocation => allocation.allocationVersionId === version.id) ?? []
   const total = version.status === 'draft'
-    ? sumMoney(resolveAllocationAmounts(allocations, (data.value?.budgetYears ?? []).map(year => ({ agreementBudgetFiscalYearId: String(year.id), programFunding: year.remaining_funding ?? year.program_funding }))).map(allocation => allocation.amount))
-    : sumMoney(allocations.map(allocation => toMoney(allocation.resolvedAmount ?? allocation.allocationValue)))
-  const funding = version.fundingBasisAmount ?? sumMoney((data.value?.budgetYears ?? []).map(year => year.remaining_funding ?? year.program_funding))
+    ? sumMoney(resolveAllocationAmounts(allocations, (data.value?.budgetYears ?? []).map(year => ({ agreementBudgetFiscalYearId: String(year.id), programFunding: year.remaining_funding ?? year.program_funding })), currency()).map(allocation => allocation.amount), currency())
+    : sumMoney(allocations.map(allocation => parseMoney(allocation.resolvedAmount ?? allocation.allocationValue)), currency())
+  const funding = version.fundingBasisAmount ?? sumMoney((data.value?.budgetYears ?? []).map(year => year.remaining_funding ?? year.program_funding), currency())
   return { ...version, label: versionLabel(version), date: formatDate(version.completedAt ?? version.createdAt), statusLabel: statusText(version.status), total, unallocated: subtractMoney(funding, total) }
 }))
 const filteredRows = computed(() => {

@@ -1,9 +1,15 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { IncomingMessage, ServerResponse } from 'node:http'
+import { Socket } from 'node:net'
+import { createEvent } from 'h3'
+import { moneyFromMinorUnits } from '@gcs-ssc/extensions/money'
+import nativePutAllocations from '../../server/api/allocations.put'
+import { getSavedAllocations } from '../../server/allocation-data'
+import { asOutcomeCostAllocationDb } from '../../server/db'
+import { guardOutcomeCostAllocationConfiguration } from '../../server/agency-coding-configuration'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { Kysely, sql, type Transaction } from 'kysely'
 import { KyselyPGlite } from 'kysely-pglite'
 import migration0001 from '../../server/migrations/0001_outcome_cost_allocation'
-import migration0002 from '../../server/migrations/0002_versioned_allocations'
-import migration0003 from '../../server/migrations/0003_scoped_allocations'
 
 interface GuardTestDatabase {
   Funding_Case_Agreement_Profile: {
@@ -136,6 +142,7 @@ describe('outcome allocation generated-record database guards', () => {
       CREATE TABLE "Funding_Case_Agreement_Profile" (
         id bigint PRIMARY KEY,
         egcs_fc_transferpaymentstream bigint NOT NULL,
+        egcs_fc_currency text NOT NULL DEFAULT 'cad',
         egcs_fc_title_en text NOT NULL DEFAULT '',
         _deleted boolean NOT NULL DEFAULT false
       )
@@ -170,6 +177,7 @@ describe('outcome allocation generated-record database guards', () => {
         id bigint PRIMARY KEY,
         egcs_tp_transferpaymentprofile bigint NOT NULL,
         egcs_tp_fiscalyear bigint NOT NULL,
+        egcs_tp_currency text NOT NULL DEFAULT 'cad',
         _deleted boolean NOT NULL DEFAULT false
       )
     `.execute(db)
@@ -185,6 +193,9 @@ describe('outcome allocation generated-record database guards', () => {
       CREATE TABLE "Agency_Chart_of_Account" (
         id bigint PRIMARY KEY,
         egcs_ay_fiscalyear bigint NOT NULL,
+        egcs_ay_organizationagency bigint NOT NULL DEFAULT 1,
+        egcs_ay_currency text NOT NULL DEFAULT 'cad',
+        egcs_ay_kind text NOT NULL DEFAULT 'commitment',
         egcs_ay_accountingdimensions jsonb NOT NULL DEFAULT '[]'::jsonb,
         _deleted boolean NOT NULL DEFAULT false
       )
@@ -231,7 +242,8 @@ describe('outcome allocation generated-record database guards', () => {
       CREATE TABLE "Funding_Case_Agreement_Budget_Line_Item" (
         id bigint PRIMARY KEY,
         egcs_fc_fundingagreementbudgetfiscalyear bigint NOT NULL,
-        egcs_fc_programfunding numeric(19, 2) NOT NULL,
+        egcs_fc_currency text NOT NULL DEFAULT 'cad',
+        egcs_fc_programfunding numeric NOT NULL CHECK (egcs_fc_programfunding = trunc(egcs_fc_programfunding)),
         _deleted boolean NOT NULL DEFAULT false
       )
     `.execute(db)
@@ -261,7 +273,7 @@ describe('outcome allocation generated-record database guards', () => {
         egcs_fc_commitment bigint NOT NULL,
         egcs_fc_commitmentlinenumber smallint NOT NULL,
         egcs_fc_transferpaymentstreamchartofaccount bigint NOT NULL,
-        egcs_fc_amount numeric(19, 2) NOT NULL,
+        egcs_fc_amount numeric NOT NULL CHECK (egcs_fc_amount = trunc(egcs_fc_amount)),
         _deleted boolean NOT NULL DEFAULT false
       )
     `.execute(db)
@@ -273,7 +285,7 @@ describe('outcome allocation generated-record database guards', () => {
         egcs_fc_paymenttype text NOT NULL,
         egcs_fc_periodstart smallint NOT NULL,
         egcs_fc_periodend smallint NOT NULL,
-        egcs_fc_paymentamount numeric(19, 2) NOT NULL,
+        egcs_fc_paymentamount numeric NOT NULL CHECK (egcs_fc_paymentamount = trunc(egcs_fc_paymentamount)),
         egcs_fc_comment text,
         egcs_fc_status bigint NOT NULL,
         _deleted boolean NOT NULL DEFAULT false
@@ -284,15 +296,13 @@ describe('outcome allocation generated-record database guards', () => {
         id bigserial PRIMARY KEY,
         egcs_fc_fundingagreementpayment bigint NOT NULL,
         egcs_fc_fundingagreementcommitmentline bigint NOT NULL,
-        egcs_fc_amount numeric(19, 2) NOT NULL,
+        egcs_fc_amount numeric NOT NULL CHECK (egcs_fc_amount = trunc(egcs_fc_amount)),
         _deleted boolean NOT NULL DEFAULT false
       )
     `.execute(db)
 
     recordingMigration = true
     await migration0001.up(db)
-    await migration0002.up(db)
-    await migration0003.up(db)
     recordingMigration = false
     const guardFunction = await sql<{ definition: string }>`
       SELECT pg_get_functiondef(
@@ -572,6 +582,41 @@ describe('outcome allocation generated-record database guards', () => {
     )
   })
 
+  it('stores integer minor units and rejects fractional minor units without rounding', async () => {
+    const attempt = async (method: 'amount' | 'percentage', value: string, basis: string | null = null) => {
+      const rollback = new Error('Rollback the isolated storage fixture.')
+      let stored: string | undefined
+      try {
+        await managedMutation(db, '1', async trx => {
+          await sql`INSERT INTO extensions.gcs_outcome_cost_allocation_versions
+            (id, agreement_id, version_number, status) VALUES (980101, 1, 980101, 'draft')`.execute(trx)
+          const result = await sql<{ value: string }>`INSERT INTO extensions.gcs_outcome_cost_allocation_allocations
+            (allocation_version_id, agreement_id, commitment_type, stream_commitment_id,
+             agreement_budget_fiscal_year_id, outcome_id, allocation_method, allocation_value, funding_basis_amount)
+            VALUES (980101, 1, 1, 10, 20, 30, ${method}, CAST(${value} AS numeric), CAST(${basis} AS numeric))
+            RETURNING allocation_value::text AS value`.execute(trx)
+          stored = result.rows[0]?.value
+          throw rollback
+        })
+      } catch (error) {
+        if (error !== rollback) throw error
+      }
+      return stored
+    }
+    for (const units of ['1', '12345', '99999999999999999999999999999999999999']) {
+      expect(await attempt('amount', units)).toBe(units)
+    }
+    for (const invalid of ['0.1', '1.001', '1.0', '100000000000000000000000000000000000000']) {
+      await expectGuardConstraint(attempt('amount', invalid), 'gcs_outcome_cost_allocation_value_range')
+    }
+    for (const invalidBasis of ['0.1', 'NaN', 'Infinity', '-Infinity']) {
+      await expectGuardConstraint(attempt('amount', '1', invalidBasis), 'gcs_outcome_cost_allocation_economics_nonnegative')
+    }
+    expect(await attempt('percentage', '0.0001')).toBe('0.0001')
+    expect(await attempt('percentage', '100')).toBe('100')
+    await expectGuardConstraint(attempt('percentage', '0.00001'), 'gcs_outcome_cost_allocation_value_range')
+  })
+
   it('requires the managed agreement lock for valid PGlite mutations', async () => {
     await expectGuardConstraint(
       sql`
@@ -743,7 +788,7 @@ describe('outcome allocation generated-record database guards', () => {
           egcs_fc_paymentamount,
           egcs_fc_status
         ) VALUES
-          (72, 40, 20, 'advance', 0, 0, 1, 1),
+          (72, 40, 20, 'advance', 0, 0, 2, 1),
           (73, 40, 20, 'advance', 0, 0, 1, 1)
       `.execute(trx))
 
@@ -762,7 +807,7 @@ describe('outcome allocation generated-record database guards', () => {
           egcs_fc_fundingagreementpayment,
           egcs_fc_fundingagreementcommitmentline,
           egcs_fc_amount
-        ) VALUES (72, 50, 0.99)
+        ) VALUES (72, 50, 1)
       `.execute(trx))
 
     await expectGuardConstraint(
@@ -978,6 +1023,133 @@ describe('outcome allocation generated-record database guards', () => {
     )
 
     await sql`UPDATE "Funding_Case_Agreement_Profile" SET _deleted = false WHERE id = 1`.execute(db)
+  })
+
+  let nativeFixtureSequence = 10_000
+  const createNativeCoordinate = async (currency = 'cad', chartCurrency = currency, budgetCurrency = currency, chartAgency = '1') => {
+    nativeFixtureSequence += 100
+    const id = String(nativeFixtureSequence)
+    const versionId = String(nativeFixtureSequence + 1)
+    await sql`CREATE TABLE IF NOT EXISTS "Common_Completion" (id bigserial PRIMARY KEY, egcs_cn_entitytype text, egcs_cn_entityid bigint, _deleted boolean DEFAULT false)`.execute(db)
+    await sql`INSERT INTO "Transfer_Payment_Profile" (id, egcs_tp_agency) VALUES (${id}::bigint, 1)`.execute(db)
+    await sql`INSERT INTO "Transfer_Payment_Stream" (id, egcs_tp_transferpaymentprofile) VALUES (${id}::bigint, ${id}::bigint)`.execute(db)
+    await sql`INSERT INTO "Funding_Case_Agreement_Profile" (id, egcs_fc_transferpaymentstream, egcs_fc_currency) VALUES (${id}::bigint, ${id}::bigint, ${currency})`.execute(db)
+    await sql`INSERT INTO "Agency_Fiscal_Year" (id, egcs_ay_fiscalyeardisplay, egcs_ay_fiscalyear) VALUES (${id}::bigint, '2026–2027', 2026)`.execute(db)
+    await sql`INSERT INTO "Funding_Case_Agreement_Budget_Version" (id, egcs_fc_fundingagreement, egcs_fc_iscurrent) VALUES (${id}::bigint, ${id}::bigint, true)`.execute(db)
+    await sql`INSERT INTO "Funding_Case_Agreement_Budget_Fiscal_Year" (id, egcs_fc_fundingagreement, egcs_fc_budgetversion, egcs_fc_fiscalyear) VALUES (${id}::bigint, ${id}::bigint, ${id}::bigint, ${id}::bigint)`.execute(db)
+    await sql`INSERT INTO "Funding_Case_Agreement_Budget_Line_Item" (id, egcs_fc_fundingagreementbudgetfiscalyear, egcs_fc_programfunding, egcs_fc_currency) VALUES (${id}::bigint, ${id}::bigint, 1000, ${currency})`.execute(db)
+    await sql`INSERT INTO "Transfer_Payment_Fiscal_Year_Budget" (id, egcs_tp_transferpaymentprofile, egcs_tp_fiscalyear, egcs_tp_currency) VALUES (${id}::bigint, ${id}::bigint, ${id}::bigint, ${budgetCurrency})`.execute(db)
+    await sql`INSERT INTO "Transfer_Payment_Stream_Budget" (id, egcs_tp_transferpaymentstream, egcs_tp_transferpaymentbudget) VALUES (${id}::bigint, ${id}::bigint, ${id}::bigint)`.execute(db)
+    await sql`INSERT INTO "Agency_Chart_of_Account" (id, egcs_ay_fiscalyear, egcs_ay_organizationagency, egcs_ay_currency) VALUES (${id}::bigint, ${id}::bigint, ${chartAgency}::bigint, ${chartCurrency})`.execute(db)
+    await sql`INSERT INTO "Transfer_Payment_Stream_Chart_of_Account" (id, egcs_tp_agencychartofaccount, egcs_tp_transferpaymentstream) VALUES (${id}::bigint, ${id}::bigint, ${id}::bigint)`.execute(db)
+    await sql`INSERT INTO "Transfer_Payment_Stream_Commitment_Type" (id, egcs_tp_transferpaymentstream, egcs_tp_agencycommitmenttype) VALUES (${id}::bigint, ${id}::bigint, 1)`.execute(db)
+    await sql`INSERT INTO "Transfer_Payment_Outcome" (id, egcs_tp_transferpaymentprofile, egcs_tp_name_en, egcs_tp_name_fr) VALUES (${id}::bigint, ${id}::bigint, 'Native outcome', 'Résultat natif')`.execute(db)
+    await managedMutation(db, id, async trx => {
+      await sql`INSERT INTO extensions.gcs_outcome_cost_allocation_versions (id, agreement_id, version_number, status) VALUES (${versionId}::bigint, ${id}::bigint, 1, 'draft')`.execute(trx)
+    })
+    return { id, versionId, currency }
+  }
+  const nativeAllocation = (fixture: Awaited<ReturnType<typeof createNativeCoordinate>>, method: 'amount' | 'percentage') => ({
+    commitmentType: fixture.id, streamCommitmentId: fixture.id, agreementBudgetFiscalYearId: fixture.id, outcomeId: fixture.id,
+    ...(method === 'amount' ? { allocationMethod: 'amount', allocationValue: moneyFromMinorUnits('100', fixture.currency) }
+      : { allocationMethod: 'percentage', allocationValue: '10' })
+  })
+  const invokeNativePut = async (fixture: Awaited<ReturnType<typeof createNativeCoordinate>>, allocation: unknown) => {
+    const request = new IncomingMessage(new Socket())
+    const body = JSON.stringify({ allocationVersionId: fixture.versionId, allocations: [allocation] })
+    request.method = 'PUT'; request.url = `/api/extensions/gcs-outcome-cost-allocation/agreements/${fixture.id}/allocations`
+    request.headers = { 'content-type': 'application/json', 'content-length': String(Buffer.byteLength(body)) }
+    request.push(Buffer.from(body)); request.push(null)
+    const event = createEvent(request, new ServerResponse(request))
+    const authorization = { lockAuthState: vi.fn(async () => undefined), authorizeCurrentEntity: vi.fn(async () => undefined) }
+    const unexpectedService = async (): Promise<never> => { throw new Error('Unexpected financial service in native coordinate fixture') }
+    const context = Object.assign(event.context, {
+      $db: db,
+      params: { agreementId: fixture.id },
+      gcsExtension: {
+        config: {}, agencyConfig: {}, extensionKey: 'gcs-outcome-cost-allocation',
+        entity: { agencyId: '1', streamId: fixture.id }, writeAuthorization: authorization,
+        agreementFinancials: { getCostAllocationContext: async () => ({ agreementId: fixture.id, hasPendingEffects: false, codingPaidAmounts: [] }),
+          getPaymentCalculation: unexpectedService, getRecordedPaidToDate: unexpectedService, getClaimRecoveryProjection: unexpectedService,
+          getPaidAccountingProjection: unexpectedService, getCommitmentLinePaymentCoverage: unexpectedService, validatePaymentAllocations: unexpectedService, getCommitmentPaymentCapacity: unexpectedService }
+      }
+    })
+    const result = nativePutAllocations(Object.assign(event, { context }))
+    return { result, authorization }
+  }
+  const insertNativeDirect = async (fixture: Awaited<ReturnType<typeof createNativeCoordinate>>, method: 'amount' | 'percentage') => await managedMutation(db, fixture.id, async trx => {
+    await sql`INSERT INTO extensions.gcs_outcome_cost_allocation_allocations (allocation_version_id, agreement_id, commitment_type, stream_commitment_id, agreement_budget_fiscal_year_id, outcome_id, allocation_method, allocation_value)
+      VALUES (${fixture.versionId}::bigint, ${fixture.id}::bigint, ${fixture.id}::bigint, ${fixture.id}::bigint, ${fixture.id}::bigint, ${fixture.id}::bigint, ${method}, ${method === 'amount' ? '100' : '10'}::numeric)`.execute(trx)
+  })
+
+  it.each(['amount', 'percentage'] as const)('rejects a foreign Chart currency through the actual PUT route and baseline guard (%s)', async method => {
+    const fixture = await createNativeCoordinate('cad', 'jpy')
+    const { result, authorization } = await invokeNativePut(fixture, nativeAllocation(fixture, method))
+    await expect(result).rejects.toMatchObject({ code: 'GCS_OUTCOME_COST_ALLOCATION_STALE_COORDINATE' })
+    expect(authorization.lockAuthState).toHaveBeenCalledOnce()
+    expect(authorization.authorizeCurrentEntity).toHaveBeenCalledOnce()
+    await expectGuardConstraint(insertNativeDirect(fixture, method), 'gcs_outcome_cost_allocation_allocation_coordinate_guard')
+    expect(await getSavedAllocations(asOutcomeCostAllocationDb(db), fixture.id)).toEqual([])
+  })
+  it.each(['amount', 'percentage'] as const)('rejects a foreign Program budget with matching Agreement/Chart currencies (%s)', async method => {
+    const fixture = await createNativeCoordinate('cad', 'cad', 'usd')
+    const { result } = await invokeNativePut(fixture, nativeAllocation(fixture, method))
+    await expect(result).rejects.toMatchObject({ code: 'GCS_OUTCOME_COST_ALLOCATION_STALE_COORDINATE' })
+    await expectGuardConstraint(insertNativeDirect(fixture, method), 'gcs_outcome_cost_allocation_allocation_coordinate_guard')
+  })
+  it.each(['jpy', 'kwd', 'clf', 'mga'].flatMap(currency => (['amount', 'percentage'] as const).map(method => ({ currency, method }))))('accepts matching native coordinates through route and guard ($currency/$method)', async ({ currency, method }) => {
+    const fixture = await createNativeCoordinate(currency)
+    const { result } = await invokeNativePut(fixture, nativeAllocation(fixture, method))
+    await expect(result).resolves.toEqual({ ok: true })
+    const rows = await getSavedAllocations(asOutcomeCostAllocationDb(db), fixture.id)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).not.toHaveProperty('coordinateCurrencyMismatch')
+    if (method === 'amount') expect(rows[0]).toMatchObject({ allocationValue: moneyFromMinorUnits('100', currency) })
+    else expect(rows[0]).toMatchObject({ allocationValue: '10' })
+    // The insert executed the real baseline trigger under its real managed lock.
+    expect(await sql<{ total: string }>`SELECT count(*)::text AS total FROM extensions.gcs_outcome_cost_allocation_allocations WHERE agreement_id = ${fixture.id}::bigint AND NOT _deleted`.execute(db).then(value => value.rows[0]?.total)).toBe('1')
+  })
+  it('rejects foreign Agency and wrong-year coordinates independently of a matching currency', async () => {
+    for (const wrongYear of [false, true]) {
+      const fixture = await createNativeCoordinate('cad', 'cad', 'cad', wrongYear ? '1' : '2')
+      if (wrongYear) await sql`UPDATE "Agency_Chart_of_Account" SET egcs_ay_fiscalyear = 400 WHERE id = ${fixture.id}::bigint`.execute(db)
+      const { result } = await invokeNativePut(fixture, nativeAllocation(fixture, 'amount'))
+      await expect(result).rejects.toMatchObject({ code: 'GCS_OUTCOME_COST_ALLOCATION_STALE_COORDINATE' })
+      await expectGuardConstraint(insertNativeDirect(fixture, 'amount'), 'gcs_outcome_cost_allocation_allocation_coordinate_guard')
+    }
+  })
+  it('retains native owner Money and exposes a currency conflict for an illegally imported catalog', async () => {
+    const fixture = await createNativeCoordinate('cad')
+    const { result } = await invokeNativePut(fixture, nativeAllocation(fixture, 'amount'))
+    await result
+    await managedMutation(db, fixture.id, async trx => {
+      await sql`UPDATE extensions.gcs_outcome_cost_allocation_allocations SET resolved_amount = 100, funding_basis_amount = 1000 WHERE agreement_id = ${fixture.id}::bigint`.execute(trx)
+    })
+    // Models corrupt imported metadata only: the actual core baseline forbids this edit.
+    await sql`UPDATE "Agency_Chart_of_Account" SET egcs_ay_currency = 'jpy' WHERE id = ${fixture.id}::bigint`.execute(db)
+    const rows = await getSavedAllocations(asOutcomeCostAllocationDb(db), fixture.id)
+    expect(rows).toMatchObject([{ allocationValue: { amount: '100', currency: 'CAD' }, resolvedAmount: { amount: '100', currency: 'CAD' }, fundingBasisAmount: { amount: '1000', currency: 'CAD' }, coordinateCurrencyMismatch: true }])
+    // The actual baseline also prevents physical removal of referenced catalog selections.
+    await expect(sql`DELETE FROM "Transfer_Payment_Stream_Chart_of_Account" WHERE id = ${fixture.id}::bigint`.execute(db)).rejects.toMatchObject({ code: '23503' })
+    expect(await getSavedAllocations(asOutcomeCostAllocationDb(db), fixture.id)).toMatchObject([{ allocationValue: { amount: '100', currency: 'CAD' }, resolvedAmount: { amount: '100', currency: 'CAD' }, fundingBasisAmount: { amount: '1000', currency: 'CAD' }, coordinateCurrencyMismatch: true }])
+  })
+  it('preserves retained allocation reads when an administrator retires its Stream funding year', async () => {
+    const fixture = await createNativeCoordinate('kwd')
+    const { result } = await invokeNativePut(fixture, nativeAllocation(fixture, 'amount'))
+    await result
+    await sql`UPDATE "Transfer_Payment_Stream_Budget" SET _deleted = true WHERE id = ${fixture.id}::bigint`.execute(db)
+    expect(await getSavedAllocations(asOutcomeCostAllocationDb(db), fixture.id)).toMatchObject([{ allocationValue: { amount: '100', currency: 'KWD' } }])
+  })
+  it('validates API configuration mappings against both year and currency', async () => {
+    const fixture = await createNativeCoordinate('jpy')
+    const config = { enabledCommitmentTypes: [fixture.id], mappings: [{ commitmentType: fixture.id, streamCommitmentId: fixture.id, streamBudgetId: fixture.id, outcomeId: fixture.id }] }
+    const guard = () => db.transaction().execute(async transaction => await guardOutcomeCostAllocationConfiguration({
+      db: transaction as unknown as Transaction<unknown>, extensionKey: 'gcs-outcome-cost-allocation', targetExtensionKey: 'gcs-outcome-cost-allocation',
+      event: {}, scope: 'stream', agencyId: '1', streamId: fixture.id, enabled: true, config
+    }))
+    await expect(guard()).resolves.toBeUndefined()
+    await sql`UPDATE "Transfer_Payment_Fiscal_Year_Budget" SET egcs_tp_currency = 'cad' WHERE id = ${fixture.id}::bigint`.execute(db)
+    await expect(guard()).rejects.toMatchObject({ code: 'GCS_OUTCOME_COST_ALLOCATION_CODING_CONFIGURATION_INVALID' })
   })
 
 })

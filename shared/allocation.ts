@@ -1,91 +1,49 @@
+import {
+  addMoney, allocateMoney, allocateMoneyByPercentages, compareMoney,
+  minMoney, parseDecimalText, parseMoney, percentageMoney, subtractMoney, sumMoney,
+  zeroMoney, moneyToMinorUnits, moneyCalculator, type DecimalText, type Money
+} from '@gcs-ssc/extensions/money'
+
 export const EXTENSION_KEY = 'gcs-outcome-cost-allocation'
-
-/** Stream-owned commitment-type identity. */
 export type CommitmentType = string
-/** @deprecated UI options are loaded from the stream-owned commitment-type API. */
-export const COMMITMENT_TYPES: CommitmentType[] = []
-
 export const ALLOCATION_METHODS = ['amount', 'percentage'] as const
 export type AllocationMethod = typeof ALLOCATION_METHODS[number]
 export const ALLOCATION_VERSION_STATUSES = ['draft', 'active', 'inactive'] as const
 export type AllocationVersionStatus = typeof ALLOCATION_VERSION_STATUSES[number]
+export type AllocationMoney = Money
+export type AllocationDecimal4 = DecimalText
 
-declare const allocationMoneyBrand: unique symbol
-declare const allocationDecimal4Brand: unique symbol
-export type AllocationMoney = string & { readonly [allocationMoneyBrand]: 'AllocationMoney' }
-export type AllocationDecimal4 = string & { readonly [allocationDecimal4Brand]: 'AllocationDecimal4' }
-export type AllocationDecimalInput = string | number
-
-/** Converts a canonical non-negative numeric(19,4) value to exact scale-four units. */
-export const toExactNumeric19Scale4Units = (value: unknown): bigint | null => {
-  if (typeof value !== 'number' && typeof value !== 'string') {
-    return null
-  }
-  if (typeof value === 'number' && !Number.isFinite(value)) {
-    return null
-  }
-
-  const numericText = String(value)
-  const match = /^(0|[1-9]\d*)(?:\.(\d+))?$/.exec(numericText)
-  if (!match) {
-    return null
-  }
-
-  const integerDigits = (match[1] ?? '').replace(/^0+/, '') || '0'
-  const fractionDigits = match[2] ?? ''
-  if (integerDigits.length > 15 || fractionDigits.length > 4) {
-    return null
-  }
-
-  const scaledUnits = BigInt(`${integerDigits}${fractionDigits.padEnd(4, '0')}`)
-  return typeof value === 'number' && scaledUnits > BigInt(Number.MAX_SAFE_INTEGER) ? null : scaledUnits
+/** Four decimal places belong to percentages, independently of monetary denomination. */
+export const percentageToScaledUnits = (value: unknown): bigint | null => {
+  if (typeof value !== 'string' || !/^(0|[1-9]\d*)(?:\.\d{1,4})?$/.test(value)) return null
+  const [whole = '0', fraction = ''] = value.split('.')
+  const units = BigInt(`${whole}${fraction.padEnd(4, '0')}`)
+  return units <= BigInt(1_000_000) ? units : null
 }
 
-/** Parses a canonical non-negative numeric(19,4) value. */
-export const parseExactNumeric19Scale4 = (value: unknown): AllocationDecimal4 | null => {
-  const units = toExactNumeric19Scale4Units(value)
-  if (units === null) return null
-  return fromScale4Units(units)
-}
+export const parseAllocationPercentage = (value: unknown): DecimalText | null =>
+  percentageToScaledUnits(value) === null ? null : parseDecimalText(String(value))
 
-export const fromScale4Units = (units: bigint): AllocationDecimal4 => {
-  const text = units.toString().padStart(5, '0')
-  return `${text.slice(0, -4)}.${text.slice(-4)}` as AllocationDecimal4
-}
-
-export const parseAllocationMoney = (value: unknown): AllocationMoney | null => {
-  if (typeof value !== 'string' && typeof value !== 'number') return null
-  if (typeof value === 'number' && !Number.isFinite(value)) return null
-  const match = /^(-?)(0|[1-9]\d*)(?:\.(\d{1,2}))?$/.exec(String(value))
-  if (!match || (match[2]?.replace(/^0+/, '').length ?? 0) > 17) return null
-  const sign = match[1] === '-' ? -BIGINT_ONE : BIGINT_ONE
-  const cents = sign * BigInt(`${match[2]}${(match[3] ?? '').padEnd(2, '0')}`)
-  if (typeof value === 'number' && (cents > BigInt(Number.MAX_SAFE_INTEGER) || cents < BigInt(Number.MIN_SAFE_INTEGER))) return null
-  return fromCents(cents)
-}
-
-export interface OutcomeAllocationInput {
-  /** Native denomination derived from the immutable owning accounting line. */
-  currency?: string
+export type OutcomeAllocationInput = {
   commitmentType?: CommitmentType
   streamCommitmentId: string
   agreementBudgetFiscalYearId: string
   outcomeId: string
-  allocationMethod: AllocationMethod
-  allocationValue: AllocationDecimalInput
-}
+} & ({ allocationMethod: 'amount'; allocationValue: Money }
+  | { allocationMethod: 'percentage'; allocationValue: DecimalText })
 
-export interface VersionedOutcomeAllocationInput extends OutcomeAllocationInput {
+export type VersionedOutcomeAllocationInput = OutcomeAllocationInput & {
   allocationVersionId: string
-  resolvedAmount?: AllocationMoney | null
-  fundingBasisAmount?: AllocationMoney | null
+  /** Invalid imported catalog coordinates never change the retained native denomination. */
+  coordinateCurrencyMismatch?: boolean
+  resolvedAmount?: Money | null
+  fundingBasisAmount?: Money | null
   outcomeLabelEn?: string | null
   outcomeLabelFr?: string | null
   commitmentLabelEn?: string | null
   commitmentLabelFr?: string | null
   fiscalYearDisplay?: string | null
 }
-
 export interface CostAllocationVersion {
   id: string
   agreementId: string
@@ -93,133 +51,35 @@ export interface CostAllocationVersion {
   versionNumber: number
   createdAt?: string | null
   completedAt?: string | null
-  fundingBasisAmount?: AllocationMoney | null
+  fundingBasisAmount?: Money | null
 }
-
-export interface OutcomeAllocationResolved extends OutcomeAllocationInput {
-  amount: AllocationMoney
-}
-
-export interface YearFundingTotal {
-  agreementBudgetFiscalYearId: string
-  /** Canonical strings are authoritative; safe numbers remain deprecated input compatibility. */
-  programFunding: AllocationDecimalInput
-}
-
+export type OutcomeAllocationResolved = OutcomeAllocationInput & { amount: Money }
+export interface YearFundingTotal { agreementBudgetFiscalYearId: string; programFunding: Money }
 export interface StreamCommitmentMapping {
   commitmentType: CommitmentType
   outcomeId: string
   streamBudgetId: string
   streamCommitmentId: string
 }
+export interface OutcomeCostAllocationConfig { enabledCommitmentTypes: CommitmentType[]; mappings: StreamCommitmentMapping[] }
+export interface AllocationValidationIssue { code: string; path: string; message: string }
+export interface PaymentLineAllocationInput { commitmentLineId: string; weightAmount: Money; remainingAmount: Money }
+export interface PaymentLineAllocationResolved extends PaymentLineAllocationInput { paymentAmount: Money }
+export const isCommitmentType = (value: unknown): value is CommitmentType => typeof value === 'string' && /^\d+$/.test(value)
 
-export interface OutcomeCostAllocationConfig {
-  enabledCommitmentTypes: CommitmentType[]
-  mappings: StreamCommitmentMapping[]
+/** Returns an exact percentage rounded only at its separate four-place display boundary. */
+export const percentageForMoney = (amount: Money, funding: Money): DecimalText => {
+  if (compareMoney(funding, zeroMoney(funding.currency)) <= 0) return parseDecimalText('0')
+  // Currency cancels here: this is a dimensionless ratio rather than a monetary result.
+  compareMoney(amount, zeroMoney(funding.currency))
+  const denominator = moneyToMinorUnits(funding)
+  const numerator = moneyCalculator.multiply(moneyToMinorUnits(amount), BigInt(1_000_000))
+  const rounded = moneyCalculator.integerDivide(moneyCalculator.add(numerator, moneyCalculator.integerDivide(denominator, BigInt(2))), denominator)
+  const text = String(rounded).padStart(5, '0')
+  return parseDecimalText(`${text.slice(0, -4)}.${text.slice(-4)}`)
 }
+export const moneyForPercentage = (funding: Money, percentage: DecimalText): Money => percentageMoney(funding, percentage)
 
-export interface AllocationValidationIssue {
-  code: string
-  path: string
-  message: string
-}
-
-export interface PaymentLineAllocationInput {
-  commitmentLineId: string
-  weightAmount: AllocationDecimalInput
-  remainingAmount: AllocationDecimalInput
-}
-
-export interface PaymentLineAllocationResolved {
-  commitmentLineId: string
-  weightAmount: AllocationMoney
-  remainingAmount: AllocationMoney
-  paymentAmount: AllocationMoney
-}
-
-type PaymentLineAllocationCandidate = Omit<PaymentLineAllocationResolved, 'paymentAmount'>
-
-const BIGINT_ZERO = BigInt(0)
-const BIGINT_ONE = BigInt(1)
-const BIGINT_TWO = BigInt(2)
-const PERCENTAGE_DENOMINATOR = BigInt(1_000_000)
-
-/**
- * Checks whether a value is one of the commitment types supported by allocation generation.
- */
-export const isCommitmentType = (value: unknown): value is CommitmentType =>
-  typeof value === 'string' && /^\d+$/.test(value)
-
-/**
- * Converts a finite decimal number to a rounded scaled integer without binary half-cent drift.
- */
-/**
- * Rounds a numeric amount to the nearest cent.
- */
-export const toMoney = (value: AllocationDecimalInput): AllocationMoney => {
-  const money = parseAllocationMoney(value)
-  if (money !== null) return money
-  const units = toExactNumeric19Scale4Units(value) ?? BIGINT_ZERO
-  return fromCents((units + BigInt(50)) / BigInt(100))
-}
-
-/**
- * Converts a monetary value to an integer number of cents.
- */
-export const toCents = (value: AllocationDecimalInput): bigint => {
-  const parsed = parseAllocationMoney(value)
-  if (parsed === null) return BIGINT_ZERO
-  const negative = parsed.startsWith('-')
-  const unsigned = negative ? parsed.slice(1) : parsed
-  const [integer = '0', fraction = '00'] = unsigned.split('.')
-  const cents = BigInt(`${integer}${fraction}`)
-  return negative ? -cents : cents
-}
-
-/**
- * Converts an integer number of cents to a monetary value.
- */
-export const fromCents = (value: bigint | number): AllocationMoney => {
-  const cents = typeof value === 'bigint' ? value : BigInt(value)
-  const sign = cents < BIGINT_ZERO ? '-' : ''
-  const text = (cents < BIGINT_ZERO ? -cents : cents).toString().padStart(3, '0')
-  return `${sign}${text.slice(0, -2)}.${text.slice(-2)}` as AllocationMoney
-}
-
-export const compareMoney = (left: AllocationDecimalInput, right: AllocationDecimalInput): number => {
-  const difference = toCents(left) - toCents(right)
-  return difference < BIGINT_ZERO ? -1 : difference > BIGINT_ZERO ? 1 : 0
-}
-
-export const sumMoney = (values: AllocationDecimalInput[]): AllocationMoney =>
-  fromCents(values.reduce((sum, value) => sum + toCents(value), BIGINT_ZERO))
-
-export const subtractMoney = (left: AllocationDecimalInput, right: AllocationDecimalInput): AllocationMoney =>
-  fromCents(toCents(left) - toCents(right))
-
-export const percentageForMoney = (
-  amount: AllocationDecimalInput,
-  funding: AllocationDecimalInput
-): AllocationDecimal4 => {
-  const fundingCents = toCents(funding)
-  if (fundingCents <= BIGINT_ZERO) return parseExactNumeric19Scale4('0')!
-  const units = (toCents(amount) * PERCENTAGE_DENOMINATOR + fundingCents / BIGINT_TWO) / fundingCents
-  return fromScale4Units(units)
-}
-
-export const moneyForPercentage = (
-  funding: AllocationDecimalInput,
-  percentage: AllocationDecimalInput
-): AllocationMoney => {
-  const units = toExactNumeric19Scale4Units(percentage) ?? BIGINT_ZERO
-  const numerator = toCents(funding) * units
-  return fromCents(numerator / PERCENTAGE_DENOMINATOR
-    + (numerator % PERCENTAGE_DENOMINATOR >= PERCENTAGE_DENOMINATOR / BIGINT_TWO ? BIGINT_ONE : BIGINT_ZERO))
-}
-
-/**
- * Keeps valid commitment types and complete mapping records from an unknown extension config.
- */
 export const parseOutcomeCostAllocationConfig = (value: unknown): OutcomeCostAllocationConfig => {
   if (!value || typeof value !== 'object') {
     return {
@@ -266,9 +126,7 @@ export const parseOutcomeCostAllocationConfig = (value: unknown): OutcomeCostAll
   }
 }
 
-/**
- * Reports allocations that reference outcomes or agreement budget years outside the active sets.
- */
+
 export const validateAllocationReferences = (
   allocations: OutcomeAllocationInput[],
   yearTotals: YearFundingTotal[],
@@ -298,149 +156,50 @@ export const validateAllocationReferences = (
   return issues
 }
 
-/**
- * Combines reference issues with an agreement-level check that resolved allocations equal total program funding.
- */
+
 export const validateAllocationTotals = (
-  allocations: OutcomeAllocationInput[],
-  yearTotals: YearFundingTotal[],
-  activeOutcomeIds: Set<string>
+  allocations: OutcomeAllocationInput[], yearTotals: YearFundingTotal[], activeOutcomeIds: Set<string>, currency: string
 ): AllocationValidationIssue[] => {
-  const issues: AllocationValidationIssue[] = validateAllocationReferences(allocations, yearTotals, activeOutcomeIds)
-  const resolvedAllocations = resolveAllocationAmounts(allocations, yearTotals)
-  const allocatedTotalCents = resolvedAllocations
-    .reduce((sum, allocation) => sum + toCents(allocation.amount), BIGINT_ZERO)
-  const agreementBudgetTotalCents = yearTotals
-    .reduce((sum, total) => sum + toCents(total.programFunding), BIGINT_ZERO)
-  if (allocatedTotalCents !== agreementBudgetTotalCents) {
-    issues.push({
-      code: 'GCS_OUTCOME_COST_ALLOCATION_TOTAL_INVALID',
-      path: 'allocations',
-      message: 'apiErrors.extensions.outcome_cost_allocation.total_invalid'
-    })
+  const issues = validateAllocationReferences(allocations, yearTotals, activeOutcomeIds)
+  const resolved = resolveAllocationAmounts(allocations, yearTotals, currency)
+  if (compareMoney(sumMoney(resolved.map(row => row.amount), currency), sumMoney(yearTotals.map(row => row.programFunding), currency)) !== 0) {
+    issues.push({ code: 'GCS_OUTCOME_COST_ALLOCATION_TOTAL_INVALID', path: 'allocations', message: 'apiErrors.extensions.outcome_cost_allocation.total_invalid' })
   }
-  for (const total of yearTotals) {
-    const allocatedYearCents = resolvedAllocations
-      .filter(allocation => allocation.agreementBudgetFiscalYearId === total.agreementBudgetFiscalYearId)
-      .reduce((sum, allocation) => sum + toCents(allocation.amount), BIGINT_ZERO)
-    if (allocatedYearCents !== toCents(total.programFunding)) {
-      issues.push({
-        code: 'GCS_OUTCOME_COST_ALLOCATION_YEAR_TOTAL_INVALID',
-        path: `allocations.${total.agreementBudgetFiscalYearId}`,
-        message: 'apiErrors.extensions.outcome_cost_allocation.year_total_invalid'
-      })
+  for (const year of yearTotals) {
+    if (compareMoney(sumMoney(resolved.filter(row => row.agreementBudgetFiscalYearId === year.agreementBudgetFiscalYearId).map(row => row.amount), currency), year.programFunding) !== 0) {
+      issues.push({ code: 'GCS_OUTCOME_COST_ALLOCATION_YEAR_TOTAL_INVALID', path: `allocations.${year.agreementBudgetFiscalYearId}`, message: 'apiErrors.extensions.outcome_cost_allocation.year_total_invalid' })
     }
   }
   return issues
 }
-
-/** Rejects draft values whose resolved total exceeds any individual fiscal-year budget. */
 export const validateAllocationYearLimits = (
-  allocations: OutcomeAllocationInput[],
-  yearTotals: YearFundingTotal[]
+  allocations: OutcomeAllocationInput[], yearTotals: YearFundingTotal[], currency: string
 ): AllocationValidationIssue[] => {
-  const resolvedAllocations = resolveAllocationAmounts(allocations, yearTotals)
-  return yearTotals.flatMap(total => {
-    const allocatedCents = resolvedAllocations
-      .filter(allocation => allocation.agreementBudgetFiscalYearId === total.agreementBudgetFiscalYearId)
-      .reduce((sum, allocation) => sum + BigInt(toCents(allocation.amount)), BIGINT_ZERO)
-    return allocatedCents > toCents(total.programFunding)
-      ? [{
-          code: 'GCS_OUTCOME_COST_ALLOCATION_YEAR_TOTAL_EXCEEDED',
-          path: `allocations.${total.agreementBudgetFiscalYearId}`,
-          message: 'apiErrors.extensions.outcome_cost_allocation.year_total_exceeded'
-        }]
-      : []
-  })
+  const resolved = resolveAllocationAmounts(allocations, yearTotals, currency)
+  return yearTotals.flatMap(year => compareMoney(sumMoney(resolved.filter(row => row.agreementBudgetFiscalYearId === year.agreementBudgetFiscalYearId).map(row => row.amount), currency), year.programFunding) > 0
+    ? [{ code: 'GCS_OUTCOME_COST_ALLOCATION_YEAR_TOTAL_EXCEEDED', path: `allocations.${year.agreementBudgetFiscalYearId}`, message: 'apiErrors.extensions.outcome_cost_allocation.year_total_exceeded' }] : [])
 }
+const stableAllocationCoordinate = (allocation: OutcomeAllocationInput): string => [allocation.commitmentType ?? '', allocation.agreementBudgetFiscalYearId, allocation.outcomeId, allocation.streamCommitmentId].join(':')
 
-const stableAllocationCoordinate = (
-  allocation: OutcomeAllocationInput | undefined
-): string => allocation
-  ? [
-      allocation.commitmentType ?? '',
-      allocation.agreementBudgetFiscalYearId,
-      allocation.outcomeId,
-      allocation.streamCommitmentId
-    ].join(':')
-  : ''
-
-/**
- * Resolves amount allocations directly and percentage allocations against their agreement-year funding total.
- */
+/** Settles percentage quotas once per year, with deterministic coordinate ties. */
 export const resolveAllocationAmounts = (
-  allocations: OutcomeAllocationInput[],
-  yearTotals: YearFundingTotal[]
+  allocations: OutcomeAllocationInput[], yearTotals: YearFundingTotal[], currency: string
 ): OutcomeAllocationResolved[] => {
-  const totalsByYearId = new Map(yearTotals.map(total => [
-    total.agreementBudgetFiscalYearId,
-    toCents(total.programFunding)
-  ]))
-  const resolvedCents = allocations.map(allocation =>
-    allocation.allocationMethod === 'amount'
-      ? ((toExactNumeric19Scale4Units(allocation.allocationValue) ?? BIGINT_ZERO) + BigInt(50)) / BigInt(100)
-      : BIGINT_ZERO
-  )
-  const percentageIndexesByYearId = new Map<string, number[]>()
-
-  allocations.forEach((allocation, index) => {
-    if (allocation.allocationMethod !== 'percentage') {
-      return
-    }
-
-    const indexes = percentageIndexesByYearId.get(allocation.agreementBudgetFiscalYearId) ?? []
-    indexes.push(index)
-    percentageIndexesByYearId.set(allocation.agreementBudgetFiscalYearId, indexes)
-  })
-
-  for (const [yearId, indexes] of percentageIndexesByYearId) {
-    const fundingCents = totalsByYearId.get(yearId) ?? BIGINT_ZERO
-    const denominator = PERCENTAGE_DENOMINATOR
-    const shares = indexes.map(index => {
-      const allocation = allocations[index]
-      const percentageUnits = toExactNumeric19Scale4Units(allocation?.allocationValue ?? 0) ?? BIGINT_ZERO
-      const numerator = fundingCents * percentageUnits
-      return {
-        index,
-        cents: numerator / denominator,
-        remainder: numerator % denominator,
-        numerator
-      }
+  const amounts = allocations.map(row => row.allocationMethod === 'amount' ? parseMoney(row.allocationValue) : zeroMoney(currency))
+  for (const year of yearTotals) {
+    const indexes = allocations.flatMap((row, index) => row.allocationMethod === 'percentage' && row.agreementBudgetFiscalYearId === year.agreementBudgetFiscalYearId ? [index] : [])
+      .sort((a, b) => stableAllocationCoordinate(allocations[a]!).localeCompare(stableAllocationCoordinate(allocations[b]!)) || a - b)
+    const percentages = indexes.map(index => {
+      const row = allocations[index]!
+      if (row.allocationMethod !== 'percentage') throw new Error('Allocation method changed during resolution')
+      return row.allocationValue
     })
-    const totalNumerator = shares.reduce((sum, share) => sum + share.numerator, BIGINT_ZERO)
-    const targetCents = totalNumerator / denominator
-      + (totalNumerator % denominator >= denominator / BIGINT_TWO ? BIGINT_ONE : BIGINT_ZERO)
-    const floorCents = shares.reduce((sum, share) => sum + share.cents, BIGINT_ZERO)
-    let residualCents = targetCents - floorCents
-
-    shares
-      .sort((left, right) => {
-        if (left.remainder === right.remainder) {
-          const leftCoordinate = stableAllocationCoordinate(allocations[left.index])
-          const rightCoordinate = stableAllocationCoordinate(allocations[right.index])
-          if (leftCoordinate === rightCoordinate) {
-            return left.index - right.index
-          }
-          return leftCoordinate < rightCoordinate ? -1 : 1
-        }
-        return left.remainder > right.remainder ? -1 : 1
-      })
-      .forEach(share => {
-        const balancedCents = share.cents + (residualCents > BIGINT_ZERO ? BIGINT_ONE : BIGINT_ZERO)
-        resolvedCents[share.index] = balancedCents
-        if (residualCents > BIGINT_ZERO) residualCents -= BIGINT_ONE
-      })
+    const shares = allocateMoneyByPercentages(year.programFunding, percentages)
+    indexes.forEach((index, position) => { amounts[index] = shares[position]! })
   }
-
-  return allocations.map((allocation, index) => ({
-    ...allocation,
-    amount: fromCents(resolvedCents[index] ?? BIGINT_ZERO)
-  }))
+  return allocations.map((row, index) => ({ ...row, amount: amounts[index]! }))
 }
 
-/**
- * Validates positive allocations against stream budgets, configured mappings, and active stream commitments.
- */
 export const validateCommitmentMappings = (
   commitmentType: CommitmentType,
   allocations: OutcomeAllocationResolved[],
@@ -454,7 +213,7 @@ export const validateCommitmentMappings = (
     .map(mapping => `${mapping.outcomeId}:${mapping.streamBudgetId}:${mapping.streamCommitmentId}`))
 
   allocations
-    .filter(allocation => toCents(allocation.amount) > BIGINT_ZERO)
+    .filter(allocation => compareMoney(allocation.amount, zeroMoney(allocation.amount.currency)) > 0)
     .forEach((allocation, index) => {
       const streamBudgetId = streamBudgetIdsByAgreementBudgetFiscalYearId.get(allocation.agreementBudgetFiscalYearId)
       if (!streamBudgetId) {
@@ -504,129 +263,36 @@ export const validateCommitmentMappings = (
   return issues
 }
 
-const normalizePaymentLineAllocationCandidates = (
-  lines: PaymentLineAllocationInput[]
-): PaymentLineAllocationCandidate[] => lines
-  .map(line => ({
-    ...line,
-    weightAmount: toMoney(line.weightAmount),
-    remainingAmount: toMoney(line.remainingAmount)
-  }))
-  .filter(line => toCents(line.weightAmount) > BIGINT_ZERO && toCents(line.remainingAmount) > BIGINT_ZERO)
 
-const canAllocatePaymentAmount = (
-  candidates: PaymentLineAllocationCandidate[],
-  amountToAllocate: AllocationMoney
-) => {
-  const totalRemainingCents = candidates.reduce((sum, line) => sum + toCents(line.remainingAmount), BIGINT_ZERO)
-  const amountToAllocateCents = toCents(amountToAllocate)
-  return amountToAllocateCents > BIGINT_ZERO
-    && totalRemainingCents > BIGINT_ZERO
-    && amountToAllocateCents <= totalRemainingCents
-}
-
-const recordPaymentLineAllocation = (
-  allocatedByLineId: Map<string, PaymentLineAllocationResolved>,
-  line: PaymentLineAllocationCandidate,
-  paymentLineAmount: AllocationMoney
-) => {
-  const existing = allocatedByLineId.get(line.commitmentLineId)
-  allocatedByLineId.set(line.commitmentLineId, {
-    ...(existing ?? line),
-    paymentAmount: fromCents(toCents(existing?.paymentAmount ?? '0.00') + toCents(paymentLineAmount))
-  })
-}
-
-/**
- * Allocates one weighted round, capping each line at its remaining amount and carrying eligible remainders forward.
- */
-const allocatePaymentRound = (
-  candidates: PaymentLineAllocationCandidate[],
-  remainingPaymentCents: bigint,
-  allocatedByLineId: Map<string, PaymentLineAllocationResolved>
-) => {
-  const totalWeightCents = candidates.reduce(
-    (sum, line) => sum + toCents(line.weightAmount),
-    BIGINT_ZERO
-  )
-  if (totalWeightCents <= BIGINT_ZERO) {
-    return {
-      roundAllocatedCents: BIGINT_ZERO,
-      roundRemainingCents: remainingPaymentCents,
-      nextCandidates: []
-    }
-  }
-
-  const roundStartCents = remainingPaymentCents
-  let roundRemainingCents = remainingPaymentCents
-  const nextCandidates: PaymentLineAllocationCandidate[] = []
-  const shares = candidates.map(line => {
-    const numerator = roundStartCents * toCents(line.weightAmount)
-    return { lineId: line.commitmentLineId, cents: numerator / totalWeightCents, remainder: numerator % totalWeightCents }
-  })
-  let residualCents = roundStartCents - shares.reduce((sum, share) => sum + share.cents, BIGINT_ZERO)
-  shares.sort((left, right) => left.remainder === right.remainder
-    ? left.lineId < right.lineId ? 1 : left.lineId > right.lineId ? -1 : 0
-    : left.remainder > right.remainder ? -1 : 1)
-  for (const share of shares) {
-    if (residualCents <= BIGINT_ZERO) break
-    share.cents += BIGINT_ONE
-    residualCents -= BIGINT_ONE
-  }
-  const targetByLineId = new Map(shares.map(share => [share.lineId, share.cents]))
-  for (const line of candidates) {
-    const lineRemainingCents = toCents(line.remainingAmount)
-    const targetCents = targetByLineId.get(line.commitmentLineId) ?? BIGINT_ZERO
-    const paymentLineCents = [targetCents, lineRemainingCents, roundRemainingCents]
-      .reduce((minimum, value) => value < minimum ? value : minimum)
-    if (paymentLineCents <= BIGINT_ZERO) {
-      nextCandidates.push(line)
-      continue
-    }
-
-    recordPaymentLineAllocation(allocatedByLineId, line, fromCents(paymentLineCents))
-    roundRemainingCents -= paymentLineCents
-    const nextRemainingCents = lineRemainingCents - paymentLineCents
-    if (nextRemainingCents > BIGINT_ZERO) {
-      nextCandidates.push({
-        ...line,
-        remainingAmount: fromCents(nextRemainingCents)
-      })
-    }
-  }
-
-  return {
-    roundAllocatedCents: roundStartCents - roundRemainingCents,
-    roundRemainingCents,
-    nextCandidates
-  }
-}
-
-/**
- * Distributes a valid payment proportionally across positive line weights without exceeding any line remainder.
- */
+/** Capacity-limited proportional rounds use Dinero allocation and exact monetary operations. */
 export const allocatePaymentAmountToCommitmentLines = (
-  lines: PaymentLineAllocationInput[],
-  paymentAmount: AllocationDecimalInput
+  lines: PaymentLineAllocationInput[], paymentAmount: Money, currency: string
 ): PaymentLineAllocationResolved[] => {
-  let candidates = normalizePaymentLineAllocationCandidates(lines)
-  const amountToAllocate = toMoney(paymentAmount)
-  if (!canAllocatePaymentAmount(candidates, amountToAllocate)) {
-    return []
-  }
-
-  let remainingPaymentCents = toCents(amountToAllocate)
-  const allocatedByLineId = new Map<string, PaymentLineAllocationResolved>()
-
-  while (remainingPaymentCents > BIGINT_ZERO && candidates.length > 0) {
-    const round = allocatePaymentRound(candidates, remainingPaymentCents, allocatedByLineId)
-    if (round.roundAllocatedCents <= BIGINT_ZERO) {
-      break
+  const zero = zeroMoney(currency)
+  let candidates = lines.map(line => ({ ...line, weightAmount: parseMoney(line.weightAmount), remainingAmount: parseMoney(line.remainingAmount) }))
+    .filter(line => compareMoney(line.weightAmount, zero) > 0 && compareMoney(line.remainingAmount, zero) > 0)
+  if (compareMoney(paymentAmount, zero) <= 0 || compareMoney(paymentAmount, sumMoney(candidates.map(row => row.remainingAmount), currency)) > 0) return []
+  let remaining = paymentAmount
+  const allocated = new Map<string, PaymentLineAllocationResolved>()
+  while (compareMoney(remaining, zero) > 0 && candidates.length) {
+    // The previous payment allocator broke equal remainders by descending line identity.
+    const ranked = [...candidates].sort((a, b) => b.commitmentLineId.localeCompare(a.commitmentLineId))
+    const targets = allocateMoney(remaining, ranked.map(line => parseDecimalText(line.weightAmount.amount)), { method: 'largestRemainder' })
+    const targetById = new Map(ranked.map((line, index) => [line.commitmentLineId, targets[index]!]))
+    const before = remaining
+    const next: PaymentLineAllocationInput[] = []
+    for (const line of candidates) {
+      const applied = minMoney([targetById.get(line.commitmentLineId)!, line.remainingAmount, remaining], currency)
+      if (compareMoney(applied, zero) > 0) {
+        const prior = allocated.get(line.commitmentLineId)
+        allocated.set(line.commitmentLineId, { ...(prior ?? line), paymentAmount: addMoney(prior?.paymentAmount ?? zero, applied) })
+        remaining = subtractMoney(remaining, applied)
+      }
+      const available = subtractMoney(line.remainingAmount, applied)
+      if (compareMoney(available, zero) > 0) next.push({ ...line, remainingAmount: available })
     }
-
-    remainingPaymentCents = round.roundRemainingCents
-    candidates = round.nextCandidates
+    if (compareMoney(before, remaining) === 0) break
+    candidates = next
   }
-
-  return Array.from(allocatedByLineId.values())
+  return [...allocated.values()]
 }

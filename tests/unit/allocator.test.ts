@@ -1,3 +1,4 @@
+import { parseCurrencyMoney } from '@gcs-ssc/extensions/money'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { Kysely, sql, type Transaction } from 'kysely'
 import { KyselyPGlite } from 'kysely-pglite'
@@ -5,10 +6,12 @@ import type { GcsCodingAllocatorContext } from '@gcs-ssc/extensions/server'
 import allocator from '../../server/allocator'
 import type { OutcomeCostAllocationHostDatabase } from '../../server/db'
 
+const money = (amount: string, currency = 'CAD') => parseCurrencyMoney(amount, currency)
+
 let db: Kysely<OutcomeCostAllocationHostDatabase>
 const coding = (id: string) => ({ codingLineId: id, agencyChartOfAccountId: id, agencyFiscalYearId: '2026', accountingDimensions: [] })
 const context = (overrides: Partial<GcsCodingAllocatorContext> = {}): GcsCodingAllocatorContext => ({
-  db: db as unknown as Transaction<unknown>, agreementId: '1', agencyId: '1', streamId: '1', currency: 'cad', amount: '100.00',
+  db: db as unknown as Transaction<unknown>, agreementId: '1', agencyId: '1', streamId: '1', currency: 'cad', amount: money('100.00'),
   output: { kind: 'commitment', commitmentId: '1', commitmentTypeId: '1' }, codingLines: [coding('10'), coding('20')],
   commitmentCodingLines: [coding('10'), coding('20')], existingLines: [], codingPaidFloors: [], codingAvailableAmounts: [],
   config: { enabledCommitmentTypes: ['1'], mappings: [] }, agencyConfig: {}, ...overrides
@@ -26,7 +29,7 @@ describe('host-interface outcome allocator', () => {
     await sql`CREATE TABLE extensions.gcs_outcome_cost_allocation_allocations (
       id bigserial PRIMARY KEY, allocation_version_id bigint, agreement_id bigint,
       commitment_type bigint, stream_commitment_id bigint, agreement_budget_fiscal_year_id bigint DEFAULT 2026,
-      resolved_amount numeric(19,2), _deleted boolean DEFAULT false
+      resolved_amount numeric, _deleted boolean DEFAULT false
     )`.execute(db)
   })
   beforeEach(async () => {
@@ -39,21 +42,21 @@ describe('host-interface outcome allocator', () => {
   afterAll(async () => { await db.destroy() })
 
   it('reads only the active owning snapshot and splits the declared total', async () => {
-    expect(await allocator(context({ amount: '40.00' }))).toEqual([
-      { codingLineId: '10', amount: '30.00' }, { codingLineId: '20', amount: '10.00' }
+    expect(await allocator(context({ amount: money('40.00') }))).toEqual([
+      { codingLineId: '10', amount: money('30.00') }, { codingLineId: '20', amount: money('10.00') }
     ])
   })
 
   it('retains the creation-time matrix after a different version activates', async () => {
     await allocator(context())
     await sql`UPDATE extensions.gcs_outcome_cost_allocation_versions SET status = CASE WHEN id = 2 THEN 'active' ELSE 'inactive' END WHERE agreement_id = 1`.execute(db)
-    expect(await allocator(context({ amount: '40.00' }))).toEqual([{ codingLineId: '10', amount: '30.00' }, { codingLineId: '20', amount: '10.00' }])
-    expect(await allocator(context({ amount: '40.00', output: { kind: 'commitment', commitmentId: '2', commitmentTypeId: '1' } }))).toEqual([{ codingLineId: '10', amount: '40.00' }])
+    expect(await allocator(context({ amount: money('40.00') }))).toEqual([{ codingLineId: '10', amount: money('30.00') }, { codingLineId: '20', amount: money('10.00') }])
+    expect(await allocator(context({ amount: money('40.00'), output: { kind: 'commitment', commitmentId: '2', commitmentTypeId: '1' } }))).toEqual([{ codingLineId: '10', amount: money('40.00') }])
   })
 
   it('adds paid floors to a new split of unpaid funds rather than targeting cumulative percentages', async () => {
-    expect(await allocator(context({ existingLines: [{ id: '1', codingLineId: '20', amount: '50.00', paidAmount: '20.00' }] }))).toEqual([
-      { codingLineId: '20', amount: '40.00' }, { codingLineId: '10', amount: '60.00' }
+    expect(await allocator(context({ existingLines: [{ id: '1', codingLineId: '20', amount: money('50.00'), paidAmount: money('20.00') }] }))).toEqual([
+      { codingLineId: '20', amount: money('40.00') }, { codingLineId: '10', amount: money('60.00') }
     ])
   })
 
@@ -61,39 +64,39 @@ describe('host-interface outcome allocator', () => {
     await sql`INSERT INTO extensions.gcs_outcome_cost_allocation_allocations
       (allocation_version_id, agreement_id, commitment_type, stream_commitment_id, resolved_amount)
       VALUES (1, 1, 1, 10, 25)`.execute(db)
-    expect(await allocator(context({ amount: '125.00',
-      existingLines: [{ id: '1', codingLineId: '10', amount: '40.00', paidAmount: '10.00' },
-        { id: '2', codingLineId: '10', amount: '40.00', paidAmount: '15.00' }],
-      codingPaidFloors: [{ codingLineId: '10', paidAmount: '50.00' }]
-    }))).toEqual([{ codingLineId: '10', amount: '110.00' }, { codingLineId: '20', amount: '15.00' }])
+    expect(await allocator(context({ amount: money('125.00'),
+      existingLines: [{ id: '1', codingLineId: '10', amount: money('40.00'), paidAmount: money('10.00') },
+        { id: '2', codingLineId: '10', amount: money('40.00'), paidAmount: money('15.00') }],
+      codingPaidFloors: [{ codingLineId: '10', paidAmount: money('50.00') }]
+    }))).toEqual([{ codingLineId: '10', amount: money('110.00') }, { codingLineId: '20', amount: money('15.00') }])
   })
 
   it('retains already paid coding even when its new weight is zero', async () => {
     await sql`UPDATE extensions.gcs_outcome_cost_allocation_allocations SET resolved_amount = 0 WHERE stream_commitment_id = 20`.execute(db)
-    expect(await allocator(context({ codingPaidFloors: [{ codingLineId: '20', paidAmount: '30.00' }] }))).toEqual([
-      { codingLineId: '20', amount: '30.00' }, { codingLineId: '10', amount: '70.00' }
+    expect(await allocator(context({ codingPaidFloors: [{ codingLineId: '20', paidAmount: money('30.00') }] }))).toEqual([
+      { codingLineId: '20', amount: money('30.00') }, { codingLineId: '10', amount: money('70.00') }
     ])
   })
 
   it('drops old unselected zero coding rather than returning a retired catalog identity', async () => {
-    expect(await allocator(context({ existingLines: [{ id: '1', codingLineId: 'retired', amount: '0.00', paidAmount: '0.00' }] })))
-      .toEqual([{ codingLineId: '10', amount: '75.00' }, { codingLineId: '20', amount: '25.00' }])
+    expect(await allocator(context({ existingLines: [{ id: '1', codingLineId: 'retired', amount: money('0.00'), paidAmount: money('0.00') }] })))
+      .toEqual([{ codingLineId: '10', amount: money('75.00') }, { codingLineId: '20', amount: money('25.00') }])
   })
 
   it('rejects a declared total below preserved paid amounts', async () => {
-    await expect(allocator(context({ amount: '19.99', codingPaidFloors: [{ codingLineId: '20', paidAmount: '20.00' }] })))
+    await expect(allocator(context({ amount: money('19.99'), codingPaidFloors: [{ codingLineId: '20', paidAmount: money('20.00') }] })))
       .rejects.toMatchObject({ code: 'GCS_OUTCOME_COST_ALLOCATION_PAYMENT_EXCEEDS_GENERATED_LINE' })
   })
 
   it('preserves fully paid coding when the remaining matrix has no allocation rows', async () => {
     await sql`DELETE FROM extensions.gcs_outcome_cost_allocation_allocations WHERE allocation_version_id = 1`.execute(db)
-    expect(await allocator(context({ codingPaidFloors: [{ codingLineId: '10', paidAmount: '100.00' }] })))
-      .toEqual([{ codingLineId: '10', amount: '100.00' }])
+    expect(await allocator(context({ codingPaidFloors: [{ codingLineId: '10', paidAmount: money('100.00') }] })))
+      .toEqual([{ codingLineId: '10', amount: money('100.00') }])
   })
 
   it('keeps selected zero coding when the declared total is zero', async () => {
-    expect(await allocator(context({ amount: '0.00' }))).toEqual([
-      { codingLineId: '10', amount: '0.00' }, { codingLineId: '20', amount: '0.00' }
+    expect(await allocator(context({ amount: money('0.00') }))).toEqual([
+      { codingLineId: '10', amount: money('0.00') }, { codingLineId: '20', amount: money('0.00') }
     ])
   })
 
@@ -101,11 +104,11 @@ describe('host-interface outcome allocator', () => {
     await expect(db.transaction().execute(async trx => {
       await sql`UPDATE extensions.gcs_outcome_cost_allocation_allocations SET resolved_amount = 25 WHERE stream_commitment_id = 10`.execute(trx)
       expect(await allocator(context({ db: trx as unknown as Transaction<unknown> }))).toEqual([
-        { codingLineId: '10', amount: '50.00' }, { codingLineId: '20', amount: '50.00' }
+        { codingLineId: '10', amount: money('50.00') }, { codingLineId: '20', amount: money('50.00') }
       ])
       throw new Error('rollback')
     })).rejects.toThrow('rollback')
-    expect(await allocator(context())).toEqual([{ codingLineId: '10', amount: '75.00' }, { codingLineId: '20', amount: '25.00' }])
+    expect(await allocator(context())).toEqual([{ codingLineId: '10', amount: money('75.00') }, { codingLineId: '20', amount: money('25.00') }])
   })
 
   it('defers unmanaged types without reading a snapshot', async () => {
@@ -133,27 +136,27 @@ describe('host-interface outcome allocator', () => {
       output: { kind: 'payment', commitmentId: '1', commitmentTypeId: '1', fiscalYearId: '2026' }, ...overrides
     })
     it('weights payments by the pinned matrix instead of the remaining balances', async () => {
-      expect(await allocator(payment({ amount: '50.00', codingAvailableAmounts: [
-        { codingLineId: '10', amount: '75.00' }, { codingLineId: '20', amount: '10.00' }
-      ] }))).toEqual([{ codingLineId: '10', amount: '40.00' }, { codingLineId: '20', amount: '10.00' }])
+      expect(await allocator(payment({ amount: money('50.00'), codingAvailableAmounts: [
+        { codingLineId: '10', amount: money('75.00') }, { codingLineId: '20', amount: money('10.00') }
+      ] }))).toEqual([{ codingLineId: '10', amount: money('40.00') }, { codingLineId: '20', amount: money('10.00') }])
     })
     it('pays exact remaining capacity, excludes other fiscal years, and rejects a cent overrun', async () => {
       await sql`INSERT INTO extensions.gcs_outcome_cost_allocation_allocations
         (allocation_version_id,agreement_id,commitment_type,stream_commitment_id,agreement_budget_fiscal_year_id,resolved_amount)
         VALUES (1,1,1,30,2027,999)`.execute(db)
-      const input = payment({ amount: '85.00', codingAvailableAmounts: [
-        { codingLineId: '10', amount: '75.00' }, { codingLineId: '20', amount: '10.00' }, { codingLineId: '30', amount: '999.00' }
+      const input = payment({ amount: money('85.00'), codingAvailableAmounts: [
+        { codingLineId: '10', amount: money('75.00') }, { codingLineId: '20', amount: money('10.00') }, { codingLineId: '30', amount: money('999.00') }
       ] })
-      expect(await allocator(input)).toEqual([{ codingLineId: '10', amount: '75.00' }, { codingLineId: '20', amount: '10.00' }])
-      await expect(allocator({ ...input, amount: '85.01' })).rejects.toMatchObject({ code: 'GCS_OUTCOME_COST_ALLOCATION_PAYMENT_EXCEEDS_REMAINING' })
+      expect(await allocator(input)).toEqual([{ codingLineId: '10', amount: money('75.00') }, { codingLineId: '20', amount: money('10.00') }])
+      await expect(allocator({ ...input, amount: money('85.01') })).rejects.toMatchObject({ code: 'GCS_OUTCOME_COST_ALLOCATION_PAYMENT_EXCEEDS_REMAINING' })
     })
     it('balances fractional cents and large exact strings', async () => {
-      expect(await allocator(payment({ amount: '0.01', codingAvailableAmounts: [
-        { codingLineId: '10', amount: '1.00' }, { codingLineId: '20', amount: '1.00' }
-      ] }))).toEqual([{ codingLineId: '10', amount: '0.01' }])
-      expect(await allocator(payment({ amount: '900719925474099.91', codingAvailableAmounts: [
-        { codingLineId: '10', amount: '900719925474099.91' }
-      ] }))).toEqual([{ codingLineId: '10', amount: '900719925474099.91' }])
+      expect(await allocator(payment({ amount: money('0.01'), codingAvailableAmounts: [
+        { codingLineId: '10', amount: money('1.00') }, { codingLineId: '20', amount: money('1.00') }
+      ] }))).toEqual([{ codingLineId: '10', amount: money('0.01') }])
+      expect(await allocator(payment({ amount: money('900719925474099.91'), codingAvailableAmounts: [
+        { codingLineId: '10', amount: money('900719925474099.91') }
+      ] }))).toEqual([{ codingLineId: '10', amount: money('900719925474099.91') }])
     })
     it('rejects a missing Commitment pin even when the Agreement has an active matrix', async () => {
       await sql`DELETE FROM extensions.kv_entry`.execute(db)
@@ -172,9 +175,9 @@ describe('host-interface outcome allocator', () => {
     )
     it('uses the Commitment’s completed historical pin instead of a newer active matrix', async () => {
       await sql`UPDATE extensions.kv_entry SET value='{"versionId":"2"}'::jsonb`.execute(db)
-      expect(await allocator(payment({ amount: '10.00', codingAvailableAmounts: [
-        { codingLineId: '10', amount: '75.00' }, { codingLineId: '20', amount: '25.00' }
-      ] }))).toEqual([{ codingLineId: '10', amount: '10.00' }])
+      expect(await allocator(payment({ amount: money('10.00'), codingAvailableAmounts: [
+        { codingLineId: '10', amount: money('75.00') }, { codingLineId: '20', amount: money('25.00') }
+      ] }))).toEqual([{ codingLineId: '10', amount: money('10.00') }])
     })
   })
 })

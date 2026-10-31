@@ -1,3 +1,4 @@
+import { parseCurrencyMoney, type Money } from '@gcs-ssc/extensions/money'
 import { expect, test, type APIResponse, type Page } from '@playwright/test'
 import { configureSingleApprovalSubmission, completeAndApprove, deleteUnsubmittedCommitmentDrafts } from './correction-fixture'
 import type { AgencyCodingConfig } from '../../shared/agency-coding'
@@ -14,8 +15,8 @@ const read = async <T>(response: APIResponse): Promise<T> => {
 }
 interface Id { id: string }
 interface CreditMemo {
-  id: string; egcs_fc_receiveddate: string; egcs_fc_amount: string
-  egcs_fc_lines: Array<{ egcs_fc_creditmemochartofaccount: string; egcs_fc_commitmentchartofaccount: string | null; egcs_fc_amount: string }>
+  id: string; egcs_fc_receiveddate: string; egcs_fc_amount: Money
+  egcs_fc_lines: Array<{ egcs_fc_creditmemochartofaccount: string; egcs_fc_commitmentchartofaccount: string | null; egcs_fc_amount: Money }>
 }
 
 /** Runs the owning policy through real host allocation, approval and recovery APIs. */
@@ -53,10 +54,10 @@ export const registerAgencyCodingJourney = (deps: Dependencies) => {
       const base = `/api/agreements/${owner.agreementId}`
       const allocationsUrl = `/api/extensions/gcs-outcome-cost-allocation/agreements/${owner.agreementId}/allocations`
       const inputs = await read<{
-        commitmentTypes: Id[]; outcomes: Id[]; budgetYears: Array<{ id: string; fiscal_year_id: string; stream_budget_id: string; remaining_funding: string }>;
+        commitmentTypes: Id[]; outcomes: Id[]; budgetYears: Array<{ id: string; fiscal_year_id: string; stream_budget_id: string; remaining_funding: Money }>;
         streamCommitments: Array<{ id: string; stream_budget_id: string }>
       }>(await page.request.get(allocationsUrl))
-      const year = inputs.budgetYears.find(item => item.remaining_funding === '100.00')!
+      const year = inputs.budgetYears.find(item => item.remaining_funding.amount === '10000')!
       expect(year).toBeTruthy()
       const code = inputs.streamCommitments.find(item => item.stream_budget_id === year.stream_budget_id)!
       const type = inputs.commitmentTypes[0]!.id
@@ -65,10 +66,10 @@ export const registerAgencyCodingJourney = (deps: Dependencies) => {
         extensionKey: 'gcs-outcome-cost-allocation', enabled: true, config: { enabledCommitmentTypes: [type], mappings: [{ commitmentType: type, streamCommitmentId: code.id, streamBudgetId: year.stream_budget_id, outcomeId: outcome }] }
       } }))
       const version = await deps.createAllocationVersion(page, owner.agreementId)
-      await read(await page.request.put(allocationsUrl, { data: { allocationVersionId: version, allocations: [{ commitmentType: type, streamCommitmentId: code.id, agreementBudgetFiscalYearId: year.id, outcomeId: outcome, allocationMethod: 'amount', allocationValue: '100.00' }] } }))
+      await read(await page.request.put(allocationsUrl, { data: { allocationVersionId: version, allocations: [{ commitmentType: type, streamCommitmentId: code.id, agreementBudgetFiscalYearId: year.id, outcomeId: outcome, allocationMethod: 'amount', allocationValue: parseCurrencyMoney('100.00', 'CAD') }] } }))
       await workflow('gcs-outcome-cost-allocation:allocation-version', 'Committed')
       await completeAndApprove(page, approver, 'gcs-outcome-cost-allocation:allocation-version', version)
-      const commitment = await read<Id>(await page.request.post(`${base}/commitments`, { data: { egcs_fc_type: type, egcs_fc_currency: 'cad', egcs_fc_totalamount: '100.00' } }))
+      const commitment = await read<Id>(await page.request.post(`${base}/commitments`, { data: { egcs_fc_type: type, egcs_fc_currency: 'cad', egcs_fc_totalamount: parseCurrencyMoney('100.00', 'CAD') } }))
       await workflow('fundingcaseagreementcommitment', 'Committed')
       await completeAndApprove(page, approver, 'fundingcaseagreementcommitment', commitment.id)
       const streamAccounts = await read<{ items: Array<{ id: string; egcs_tp_agencychartofaccount: string }> }>(await page.request.get(`/api/transfer-payments/${owner.programId}/streams/${owner.streamId}/chart-of-accounts?limit=100`))
@@ -210,7 +211,7 @@ export const registerAgencyCodingJourney = (deps: Dependencies) => {
       overlap.creditMemoRules.push({ ...overlap.creditMemoRules[0]!, startDate: '2027-03-31', endDate: '2027-04-01' })
       expect((await page.request.patch(`/api/extensions/agency/${owner.agencyId}`, { data: { extensionKey: 'gcs-outcome-cost-allocation', enabled: true, config: overlap } })).status()).toBe(400)
 
-      const paymentInput = { egcs_fc_commitmenttype: type, egcs_fc_fiscalyear: year.id, egcs_fc_paymenttype: 'advance', egcs_fc_periodstart: 0, egcs_fc_periodend: 2, egcs_fc_paymentamount: '80.00', egcs_fc_currency: 'cad', egcs_fc_applicantrecipient: String(proponent.id) }
+      const paymentInput = { egcs_fc_commitmenttype: type, egcs_fc_fiscalyear: year.id, egcs_fc_paymenttype: 'advance', egcs_fc_periodstart: 0, egcs_fc_periodend: 2, egcs_fc_paymentamount: parseCurrencyMoney('80.00', 'CAD'), egcs_fc_currency: 'cad', egcs_fc_applicantrecipient: String(proponent.id) }
       const source = await read<Id>(await page.request.post(`${base}/payments`, { data: paymentInput }))
       await workflow('fundingcasepayment', 'Paid')
       await completeAndApprove(page, approver, 'fundingcasepayment', source.id)
@@ -218,7 +219,7 @@ export const registerAgencyCodingJourney = (deps: Dependencies) => {
         egcs_ay_name_en: `Automatic AR ${token}`, egcs_ay_name_fr: `Créance automatique ${token}`, egcs_ay_monitorrequired: false, egcs_ay_advancepaymentrelated: true, egcs_ay_claimrelated: false
       } }))
       const debtInput = {
-        egcs_fc_amount: '30.00', egcs_fc_agencyfinancialid: String(financial.id), egcs_fc_applicantrecipient: String(proponent.id), egcs_fc_agencyfiscalyear: year.fiscal_year_id, egcs_fc_type: arType.id,
+        egcs_fc_amount: parseCurrencyMoney('30.00', 'CAD'), egcs_fc_agencyfinancialid: String(financial.id), egcs_fc_applicantrecipient: String(proponent.id), egcs_fc_agencyfiscalyear: year.fiscal_year_id, egcs_fc_type: arType.id,
         egcs_fc_sources: [`advance:${source.id}`], egcs_fc_requesteddate: '2026-10-11', egcs_fc_recoverymethod: 'offset', egcs_fc_narrative_en: 'Automatically coded paid-advance recovery.'
       }
       const debtsBefore = await read<{ items: Id[] }>(await page.request.get(`${base}/account-receivables?limit=100`))
@@ -227,56 +228,55 @@ export const registerAgencyCodingJourney = (deps: Dependencies) => {
       await selectAccount(arAccount)
       const debt = await read<Id>(await page.request.post(`${base}/account-receivables`, { data: debtInput }))
       const debtUrl = `/api/account-receivables/${debt.id}`
-      const automaticDebt = await read<{ egcs_fc_lines: Array<{ egcs_fc_amount: string; egcs_fc_accountreceivablechartofaccount: string }> }>(await page.request.get(debtUrl))
-      expect(automaticDebt.egcs_fc_lines).toMatchObject([{ egcs_fc_amount: '30.00', egcs_fc_accountreceivablechartofaccount: arAccount }])
+      const automaticDebt = await read<{ egcs_fc_lines: Array<{ egcs_fc_amount: Money; egcs_fc_accountreceivablechartofaccount: string }> }>(await page.request.get(debtUrl))
+      expect(automaticDebt.egcs_fc_lines).toMatchObject([{ egcs_fc_amount: parseCurrencyMoney('30.00', 'CAD'), egcs_fc_accountreceivablechartofaccount: arAccount }])
       await workflow('fundingcaseaccountreceivable', 'Receivable established')
       await completeAndApprove(page, approver, 'fundingcaseaccountreceivable', debt.id)
       await workflow('fundingcaseaccountreceivablecreditmemo', 'Issued')
-      const cashInput = (date: string, amount: string) => ({ egcs_fc_receivable: debt.id, egcs_fc_receivables: [debt.id], egcs_fc_totalamount: amount, egcs_fc_agency: owner.agencyId, egcs_fc_applicantrecipient: String(proponent.id), egcs_fc_currency: 'cad', egcs_fc_receiveddate: date, egcs_fc_reason: 'Configured Agency coding recovery.' })
+      const cashInput = (date: string, amount: string) => ({ egcs_fc_receivable: debt.id, egcs_fc_receivables: [debt.id], egcs_fc_totalamount: parseCurrencyMoney(amount, 'CAD'), egcs_fc_agency: owner.agencyId, egcs_fc_applicantrecipient: String(proponent.id), egcs_fc_currency: 'cad', egcs_fc_receiveddate: date, egcs_fc_reason: 'Configured Agency coding recovery.' })
       const cashUrl = '/api/account-receivable-credit-memos'
       const memoId = (await read<Id>(await page.request.post(cashUrl, { data: cashInput('2026-09-30', '10.00') }))).id
       const memo = await read<CreditMemo>(await page.request.get(`${cashUrl}/${memoId}`))
-      expect(memo.egcs_fc_lines).toMatchObject([{ egcs_fc_creditmemochartofaccount: linkedAccount, egcs_fc_commitmentchartofaccount: commitmentAccount, egcs_fc_amount: '10.00' }])
+      expect(memo.egcs_fc_lines).toMatchObject([{ egcs_fc_creditmemochartofaccount: linkedAccount, egcs_fc_commitmentchartofaccount: commitmentAccount, egcs_fc_amount: parseCurrencyMoney('10.00', 'CAD') }])
       const changedPolicy = structuredClone(policy)
       changedPolicy.creditMemoRules[0]!.startDate = '2026-09-30'
       await savePolicy(changedPolicy)
       await read(await page.request.patch(`${cashUrl}/${memo.id}`, { data: cashInput('2026-09-30', '6.00') }))
       const redistributed = await read<CreditMemo>(await page.request.get(`${cashUrl}/${memo.id}`))
-      expect(redistributed.egcs_fc_lines).toMatchObject([{ egcs_fc_creditmemochartofaccount: linkedAccount, egcs_fc_amount: '6.00' }])
+      expect(redistributed.egcs_fc_lines).toMatchObject([{ egcs_fc_creditmemochartofaccount: linkedAccount, egcs_fc_amount: parseCurrencyMoney('6.00', 'CAD') }])
       // Agency configuration does not make an unselected Stream destination eligible.
       expect((await page.request.patch(`${cashUrl}/${memo.id}`, { data: cashInput('2026-10-01', '6.00') })).status()).toBe(400)
-      expect(await read<CreditMemo>(await page.request.get(`${cashUrl}/${memo.id}`))).toMatchObject({ egcs_fc_receiveddate: '2026-09-30', egcs_fc_lines: [{ egcs_fc_creditmemochartofaccount: linkedAccount, egcs_fc_amount: '6.00' }] })
+      expect(await read<CreditMemo>(await page.request.get(`${cashUrl}/${memo.id}`))).toMatchObject({ egcs_fc_receiveddate: '2026-09-30', egcs_fc_lines: [{ egcs_fc_creditmemochartofaccount: linkedAccount, egcs_fc_amount: parseCurrencyMoney('6.00', 'CAD') }] })
       const catchAllSelection = await selectAccount(catchAll)
       await read(await page.request.patch(`${cashUrl}/${memo.id}`, { data: cashInput('2026-10-01', '6.00') }))
       const dateChanged = await read<CreditMemo>(await page.request.get(`${cashUrl}/${memo.id}`))
-      expect(dateChanged.egcs_fc_lines).toMatchObject([{ egcs_fc_creditmemochartofaccount: catchAll, egcs_fc_commitmentchartofaccount: null, egcs_fc_amount: '6.00' }])
+      expect(dateChanged.egcs_fc_lines).toMatchObject([{ egcs_fc_creditmemochartofaccount: catchAll, egcs_fc_commitmentchartofaccount: null, egcs_fc_amount: parseCurrencyMoney('6.00', 'CAD') }])
       const stableDraft = await deps.createAllocationVersion(page, owner.agreementId)
       await read(await page.request.delete(`/api/extensions/gcs-outcome-cost-allocation/agreements/${owner.agreementId}/allocation-versions/${stableDraft}`))
       await completeAndApprove(page, approver, 'fundingcaseaccountreceivablecreditmemo', memo.id)
-      const balances = () => page.request.get(`${base}/commitment-line-balances?egcs_fc_fiscalyear=${year.id}&egcs_fc_commitmenttype=${type}`).then(read<{ lines: Array<{ egcs_fc_paidamount: string; egcs_fc_creditmemoamount: string; egcs_fc_balance: string }> }>)
-      expect((await balances()).lines).toMatchObject([{ egcs_fc_paidamount: '80.00', egcs_fc_creditmemoamount: '0.00', egcs_fc_balance: '20.00' }])
+      const balances = () => page.request.get(`${base}/commitment-line-balances?egcs_fc_fiscalyear=${year.id}&egcs_fc_commitmenttype=${type}`).then(read<{ lines: Array<{ egcs_fc_paidamount: Money; egcs_fc_creditmemoamount: Money; egcs_fc_balance: Money }> }>)
+      expect((await balances()).lines).toMatchObject([{ egcs_fc_paidamount: parseCurrencyMoney('80.00', 'CAD'), egcs_fc_creditmemoamount: parseCurrencyMoney('0.00', 'CAD'), egcs_fc_balance: parseCurrencyMoney('20.00', 'CAD') }])
       await savePolicy(policy)
       const linked = await read<CreditMemo>(await page.request.post(cashUrl, { data: cashInput('2026-09-30', '5.00') }))
       expect((await page.request.post(`/api/extensions/gcs-outcome-cost-allocation/agreements/${owner.agreementId}/allocation-versions`)).status()).toBe(400)
       await completeAndApprove(page, approver, 'fundingcaseaccountreceivablecreditmemo', linked.id)
-      expect((await balances()).lines).toMatchObject([{ egcs_fc_paidamount: '75.00', egcs_fc_creditmemoamount: '5.00', egcs_fc_balance: '25.00' }])
-      expect(await read(await page.request.get(debtUrl))).toMatchObject({ egcs_fc_outstanding: '19.00', egcs_fc_recovered: '11.00' })
-      // Without a date exception, recovery must resolve the normal linked account.
-      await read(await page.request.patch(`/api/agency/${owner.agencyId}/chart-of-accounts/${linkedAccount}`, { data: { egcs_ay_commitmentchartofaccount: null } }))
-      const missingLink = await page.request.post(cashUrl, { data: cashInput('2026-09-30', '1.00') })
-      expect(missingLink.status()).toBe(400)
-      expect(await missingLink.json()).toMatchObject({ data: { code: 'GCS_OUTCOME_COST_ALLOCATION_CODING_CONFIGURATION_INVALID' } })
-      expect(await read(await page.request.get(debtUrl))).toMatchObject({ egcs_fc_outstanding: '19.00', egcs_fc_recovered: '11.00' })
-      await read(await page.request.patch(`/api/agency/${owner.agencyId}/chart-of-accounts/${linkedAccount}`, { data: { egcs_ay_commitmentchartofaccount: commitmentAccount } }))
+      expect((await balances()).lines).toMatchObject([{ egcs_fc_paidamount: parseCurrencyMoney('75.00', 'CAD'), egcs_fc_creditmemoamount: parseCurrencyMoney('5.00', 'CAD'), egcs_fc_balance: parseCurrencyMoney('25.00', 'CAD') }])
+      expect(await read(await page.request.get(debtUrl))).toMatchObject({ egcs_fc_outstanding: parseCurrencyMoney('19.00', 'CAD'), egcs_fc_recovered: parseCurrencyMoney('11.00', 'CAD') })
+      // Used accounting relationships are immutable; retirement remains a separate operation.
+      const unlinkUsedAccount = await page.request.patch(`/api/agency/${owner.agencyId}/chart-of-accounts/${linkedAccount}`, { data: { egcs_ay_commitmentchartofaccount: null } })
+      expect(unlinkUsedAccount.status()).toBe(400)
+      expect(await unlinkUsedAccount.json()).toMatchObject({ data: { code: 'AGENCY_CHART_IN_USE' } })
+      expect(await read(await page.request.get(`/api/agency/${owner.agencyId}/chart-of-accounts/${linkedAccount}`))).toMatchObject({ egcs_ay_commitmentchartofaccount: commitmentAccount })
+      expect(await read(await page.request.get(debtUrl))).toMatchObject({ egcs_fc_outstanding: parseCurrencyMoney('19.00', 'CAD'), egcs_fc_recovered: parseCurrencyMoney('11.00', 'CAD') })
 
-      const offsetInput = { ...paymentInput, egcs_fc_paymenttype: 'reimbursement', egcs_fc_paymentamount: '10.00', egcs_fc_periodstart: 3, egcs_fc_periodend: 5 }
-      const preview = await read<{ egcs_fc_offsetplanhash: string; egcs_fc_offsetdate: string; egcs_fc_offsetdatetoken: string; egcs_fc_offsetamount: string; egcs_fc_netamount: string; egcs_fc_creditmemos: Array<{ egcs_fc_key: string; egcs_fc_allocationmode: string; egcs_fc_lines: Array<{ egcs_fc_codingaccount: string; egcs_fc_amount: string }> }> }>(await page.request.post(`${base}/payments/preview`, { data: offsetInput }))
-      expect(preview).toMatchObject({ egcs_fc_offsetamount: '10.00', egcs_fc_netamount: '0.00', egcs_fc_creditmemos: [{ egcs_fc_allocationmode: 'allocator' }] })
-      expect(preview.egcs_fc_creditmemos[0]!.egcs_fc_lines).toMatchObject([{ egcs_fc_codingaccount: catchAllSelection, egcs_fc_amount: '10.00' }])
+      const offsetInput = { ...paymentInput, egcs_fc_paymenttype: 'reimbursement', egcs_fc_paymentamount: parseCurrencyMoney('10.00', 'CAD'), egcs_fc_periodstart: 3, egcs_fc_periodend: 5 }
+      const preview = await read<{ egcs_fc_offsetplanhash: string; egcs_fc_offsetdate: string; egcs_fc_offsetdatetoken: string; egcs_fc_offsetamount: Money; egcs_fc_netamount: Money; egcs_fc_creditmemos: Array<{ egcs_fc_key: string; egcs_fc_allocationmode: string; egcs_fc_lines: Array<{ egcs_fc_codingaccount: string; egcs_fc_amount: Money }> }> }>(await page.request.post(`${base}/payments/preview`, { data: offsetInput }))
+      expect(preview).toMatchObject({ egcs_fc_offsetamount: parseCurrencyMoney('10.00', 'CAD'), egcs_fc_netamount: parseCurrencyMoney('0.00', 'CAD'), egcs_fc_creditmemos: [{ egcs_fc_allocationmode: 'allocator' }] })
+      expect(preview.egcs_fc_creditmemos[0]!.egcs_fc_lines).toMatchObject([{ egcs_fc_codingaccount: catchAllSelection, egcs_fc_amount: parseCurrencyMoney('10.00', 'CAD') }])
       const offsetPayment = await read<Id>(await page.request.post(`${base}/payments`, { data: { ...offsetInput, egcs_fc_offsetplanhash: preview.egcs_fc_offsetplanhash, egcs_fc_offsetdate: preview.egcs_fc_offsetdate, egcs_fc_offsetdatetoken: preview.egcs_fc_offsetdatetoken, egcs_fc_offsetcreditmemos: preview.egcs_fc_creditmemos.map(memo => ({ egcs_fc_key: memo.egcs_fc_key, egcs_fc_lines: memo.egcs_fc_lines })) } }))
       await completeAndApprove(page, approver, 'fundingcasepayment', offsetPayment.id)
-      expect(await read(await page.request.get(debtUrl))).toMatchObject({ egcs_fc_outstanding: '9.00', egcs_fc_recovered: '21.00' })
-      expect((await balances()).lines).toMatchObject([{ egcs_fc_paidamount: '85.00', egcs_fc_creditmemoamount: '5.00', egcs_fc_balance: '15.00' }])
+      expect(await read(await page.request.get(debtUrl))).toMatchObject({ egcs_fc_outstanding: parseCurrencyMoney('9.00', 'CAD'), egcs_fc_recovered: parseCurrencyMoney('21.00', 'CAD') })
+      expect((await balances()).lines).toMatchObject([{ egcs_fc_paidamount: parseCurrencyMoney('85.00', 'CAD'), egcs_fc_creditmemoamount: parseCurrencyMoney('5.00', 'CAD'), egcs_fc_balance: parseCurrencyMoney('15.00', 'CAD') }])
     } finally { await approver.close() }
   })
 }

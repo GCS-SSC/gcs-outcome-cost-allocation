@@ -1,26 +1,26 @@
+import { parseCurrencyMoney, parseDecimalText, parseMoney, sumMoney } from '@gcs-ssc/extensions/money'
 import { describe, expect, it } from 'vitest'
 import {
   allocatePaymentAmountToCommitmentLines,
-  parseAllocationMoney,
-  parseExactNumeric19Scale4,
   parseOutcomeCostAllocationConfig,
+  parseAllocationPercentage,
   resolveAllocationAmounts,
-  sumMoney,
-  toMoney,
   validateAllocationReferences,
   validateAllocationTotals,
   validateAllocationYearLimits,
   validateCommitmentMappings
 } from '../../shared/allocation'
 
+const money = (amount: string, currency = 'CAD') => parseCurrencyMoney(amount, currency)
+
 const years = [
   {
     agreementBudgetFiscalYearId: 'year-1',
-    programFunding: 1000
+    programFunding: money('1000')
   },
   {
     agreementBudgetFiscalYearId: 'year-2',
-    programFunding: 333.33
+    programFunding: money('333.33')
   }
 ]
 
@@ -34,23 +34,23 @@ describe('outcome cost allocation logic', () => {
         agreementBudgetFiscalYearId: 'year-1',
         outcomeId: 'outcome-1',
         allocationMethod: 'amount',
-        allocationValue: 600
+        allocationValue: money('600')
       },
       {
         streamCommitmentId: 'stream-commitment-1',
         agreementBudgetFiscalYearId: 'year-1',
         outcomeId: 'outcome-2',
         allocationMethod: 'amount',
-        allocationValue: 400
+        allocationValue: money('400')
       },
       {
         streamCommitmentId: 'stream-commitment-1',
         agreementBudgetFiscalYearId: 'year-2',
         outcomeId: 'outcome-1',
         allocationMethod: 'amount',
-        allocationValue: 333.33
+        allocationValue: money('333.33')
       }
-    ], years, activeOutcomes)).toEqual([])
+    ], years, activeOutcomes, 'CAD')).toEqual([])
 
     expect(validateAllocationTotals([
       {
@@ -58,9 +58,9 @@ describe('outcome cost allocation logic', () => {
         agreementBudgetFiscalYearId: 'year-1',
         outcomeId: 'outcome-1',
         allocationMethod: 'amount',
-        allocationValue: 999
+        allocationValue: money('999')
       }
-    ], years, activeOutcomes).map(issue => issue.code)).toContain('GCS_OUTCOME_COST_ALLOCATION_TOTAL_INVALID')
+    ], years, activeOutcomes, 'CAD').map(issue => issue.code)).toContain('GCS_OUTCOME_COST_ALLOCATION_TOTAL_INVALID')
   })
 
   it('rejects an allocation total that exceeds the agreement budget by one cent', () => {
@@ -70,16 +70,16 @@ describe('outcome cost allocation logic', () => {
         agreementBudgetFiscalYearId: 'year-1',
         outcomeId: 'outcome-1',
         allocationMethod: 'amount',
-        allocationValue: 1000.01
+        allocationValue: money('1000.01')
       },
       {
         streamCommitmentId: 'stream-commitment-1',
         agreementBudgetFiscalYearId: 'year-2',
         outcomeId: 'outcome-2',
         allocationMethod: 'amount',
-        allocationValue: 333.33
+        allocationValue: money('333.33')
       }
-    ], years, activeOutcomes).map(issue => issue.code)).toContain(
+    ], years, activeOutcomes, 'CAD').map(issue => issue.code)).toContain(
       'GCS_OUTCOME_COST_ALLOCATION_TOTAL_INVALID'
     )
   })
@@ -91,23 +91,23 @@ describe('outcome cost allocation logic', () => {
         agreementBudgetFiscalYearId: 'year-1',
         outcomeId: 'outcome-1',
         allocationMethod: 'percentage',
-        allocationValue: 60
+        allocationValue: parseDecimalText('60')
       },
       {
         streamCommitmentId: 'stream-commitment-1',
         agreementBudgetFiscalYearId: 'year-1',
         outcomeId: 'outcome-2',
         allocationMethod: 'percentage',
-        allocationValue: 40
+        allocationValue: parseDecimalText('40')
       },
       {
         streamCommitmentId: 'stream-commitment-1',
         agreementBudgetFiscalYearId: 'year-2',
         outcomeId: 'outcome-1',
         allocationMethod: 'percentage',
-        allocationValue: 100
+        allocationValue: parseDecimalText('100')
       }
-    ], years, activeOutcomes)).toEqual([])
+    ], years, activeOutcomes, 'CAD')).toEqual([])
 
     expect(validateAllocationTotals([
       {
@@ -115,23 +115,23 @@ describe('outcome cost allocation logic', () => {
         agreementBudgetFiscalYearId: 'year-1',
         outcomeId: 'outcome-1',
         allocationMethod: 'percentage',
-        allocationValue: 60
+        allocationValue: parseDecimalText('60')
       },
       {
         streamCommitmentId: 'stream-commitment-1',
         agreementBudgetFiscalYearId: 'year-1',
         outcomeId: 'outcome-2',
         allocationMethod: 'amount',
-        allocationValue: 400
+        allocationValue: money('400')
       },
       {
         streamCommitmentId: 'stream-commitment-1',
         agreementBudgetFiscalYearId: 'year-2',
         outcomeId: 'outcome-1',
         allocationMethod: 'percentage',
-        allocationValue: 100
+        allocationValue: parseDecimalText('100')
       }
-    ], years, activeOutcomes)).toEqual([])
+    ], years, activeOutcomes, 'CAD')).toEqual([])
   })
 
   it('rejects shifting another fiscal year budget into one year', () => {
@@ -141,18 +141,18 @@ describe('outcome cost allocation logic', () => {
         agreementBudgetFiscalYearId: 'year-1',
         outcomeId: 'outcome-1',
         allocationMethod: 'amount',
-        allocationValue: 1333.33
+        allocationValue: money('1333.33')
       }
-    ], years, activeOutcomes).map(issue => issue.code)).toContain('GCS_OUTCOME_COST_ALLOCATION_YEAR_TOTAL_INVALID')
+    ], years, activeOutcomes, 'CAD').map(issue => issue.code)).toContain('GCS_OUTCOME_COST_ALLOCATION_YEAR_TOTAL_INVALID')
     expect(validateAllocationYearLimits([
       {
         streamCommitmentId: 'stream-commitment-1',
         agreementBudgetFiscalYearId: 'year-1',
         outcomeId: 'outcome-1',
         allocationMethod: 'amount',
-        allocationValue: 1333.33
+        allocationValue: money('1333.33')
       }
-    ], years).map(issue => issue.code)).toContain('GCS_OUTCOME_COST_ALLOCATION_YEAR_TOTAL_EXCEEDED')
+    ], years, 'CAD').map(issue => issue.code)).toContain('GCS_OUTCOME_COST_ALLOCATION_YEAR_TOTAL_EXCEEDED')
   })
 
   it('validates the agreement total across all commitment types combined', () => {
@@ -163,7 +163,7 @@ describe('outcome cost allocation logic', () => {
         agreementBudgetFiscalYearId: 'year-1',
         outcomeId: 'outcome-1',
         allocationMethod: 'amount',
-        allocationValue: 1000
+        allocationValue: money('1000')
       },
       {
         commitmentType: '2',
@@ -171,9 +171,9 @@ describe('outcome cost allocation logic', () => {
         agreementBudgetFiscalYearId: 'year-2',
         outcomeId: 'outcome-2',
         allocationMethod: 'amount',
-        allocationValue: 333.33
+        allocationValue: money('333.33')
       }
-    ], years, activeOutcomes)).toEqual([])
+    ], years, activeOutcomes, 'CAD')).toEqual([])
   })
 
   it('validates scoped allocation references without requiring each commitment type to equal the agreement total', () => {
@@ -184,7 +184,7 @@ describe('outcome cost allocation logic', () => {
         agreementBudgetFiscalYearId: 'year-1',
         outcomeId: 'outcome-1',
         allocationMethod: 'amount',
-        allocationValue: 1000
+        allocationValue: money('1000')
       }
     ], years, activeOutcomes)).toEqual([])
   })
@@ -196,25 +196,25 @@ describe('outcome cost allocation logic', () => {
         agreementBudgetFiscalYearId: 'year-2',
         outcomeId: 'outcome-1',
         allocationMethod: 'percentage',
-        allocationValue: 33.33
+        allocationValue: parseDecimalText('33.33')
       },
       {
         streamCommitmentId: 'stream-commitment-1',
         agreementBudgetFiscalYearId: 'year-2',
         outcomeId: 'outcome-2',
         allocationMethod: 'percentage',
-        allocationValue: 66.67
+        allocationValue: parseDecimalText('66.67')
       }
-    ], years)
+    ], years, 'CAD')
 
-    expect(resolved.map(allocation => allocation.amount)).toEqual(['111.10', '222.23'])
-    expect(sumMoney(resolved.map(allocation => allocation.amount))).toBe('333.33')
+    expect(resolved.map(allocation => allocation.amount)).toEqual([money('111.10'), money('222.23')])
+    expect(sumMoney(resolved.map(allocation => allocation.amount), 'CAD')).toEqual(money('333.33'))
   })
 
   it('balances percentage residual cents deterministically and validates the resolved values', () => {
     const centSensitiveYears = [{
       agreementBudgetFiscalYearId: 'year-1',
-      programFunding: 2.05
+      programFunding: money('2.05')
     }]
     const allocations = [
       {
@@ -222,28 +222,28 @@ describe('outcome cost allocation logic', () => {
         agreementBudgetFiscalYearId: 'year-1',
         outcomeId: 'outcome-1',
         allocationMethod: 'percentage' as const,
-        allocationValue: 10
+        allocationValue: parseDecimalText('10')
       },
       {
         streamCommitmentId: 'stream-commitment-1',
         agreementBudgetFiscalYearId: 'year-1',
         outcomeId: 'outcome-2',
         allocationMethod: 'percentage' as const,
-        allocationValue: 90
+        allocationValue: parseDecimalText('90')
       }
     ]
 
-    const resolved = resolveAllocationAmounts(allocations, centSensitiveYears)
+    const resolved = resolveAllocationAmounts(allocations, centSensitiveYears, 'CAD')
 
-    expect(resolved.map(allocation => allocation.amount)).toEqual(['0.21', '1.84'])
-    expect(sumMoney(resolved.map(allocation => allocation.amount))).toBe('2.05')
-    expect(validateAllocationTotals(allocations, centSensitiveYears, activeOutcomes)).toEqual([])
+    expect(resolved.map(allocation => allocation.amount)).toEqual([money('0.21'), money('1.84')])
+    expect(sumMoney(resolved.map(allocation => allocation.amount), 'CAD')).toEqual(money('2.05'))
+    expect(validateAllocationTotals(allocations, centSensitiveYears, activeOutcomes, 'CAD')).toEqual([])
   })
 
   it('assigns equal percentage remainders to the same coordinate after request reordering', () => {
     const centSensitiveYears = [{
       agreementBudgetFiscalYearId: 'year-1',
-      programFunding: 2.05
+      programFunding: money('2.05')
     }]
     const allocations = [
       {
@@ -251,41 +251,45 @@ describe('outcome cost allocation logic', () => {
         agreementBudgetFiscalYearId: 'year-1',
         outcomeId: 'outcome-1',
         allocationMethod: 'percentage' as const,
-        allocationValue: 10
+        allocationValue: parseDecimalText('10')
       },
       {
         streamCommitmentId: 'stream-commitment-1',
         agreementBudgetFiscalYearId: 'year-1',
         outcomeId: 'outcome-2',
         allocationMethod: 'percentage' as const,
-        allocationValue: 90
+        allocationValue: parseDecimalText('90')
       }
     ]
     const byOutcomeId = (resolved: ReturnType<typeof resolveAllocationAmounts>) => new Map(
       resolved.map(allocation => [allocation.outcomeId, allocation.amount])
     )
 
-    const forward = byOutcomeId(resolveAllocationAmounts(allocations, centSensitiveYears))
-    const reversed = byOutcomeId(resolveAllocationAmounts([...allocations].reverse(), centSensitiveYears))
+    const forward = byOutcomeId(resolveAllocationAmounts(allocations, centSensitiveYears, 'CAD'))
+    const reversed = byOutcomeId(resolveAllocationAmounts([...allocations].reverse(), centSensitiveYears, 'CAD'))
 
     expect(forward).toEqual(new Map([
-      ['outcome-1', '0.21'],
-      ['outcome-2', '1.84']
+      ['outcome-1', money('0.21')],
+      ['outcome-2', money('1.84')]
     ]))
     expect(reversed).toEqual(forward)
   })
 
-  it('rounds decimal half cents correctly without binary floating-point drift', () => {
-    expect(toMoney(10.075)).toBe('10.08')
-    expect(toMoney(1.005)).toBe('1.01')
+  it('rejects fractional currency minor units instead of silently rounding authored amounts', () => {
+    expect(() => parseCurrencyMoney('10.075', 'CAD')).toThrow('fractional')
+    expect(() => parseCurrencyMoney('1.005', 'CAD')).toThrow('fractional')
+    expect(() => parseCurrencyMoney('0.1', 'JPY')).toThrow('fractional')
+    expect(() => parseMoney('1.00')).toThrow('Money must be an object')
   })
 
-  it('accepts full database ranges while enforcing canonical string syntax', () => {
-    expect(parseAllocationMoney('99999999999999999.99')).toBe('99999999999999999.99')
-    expect(parseExactNumeric19Scale4('999999999999999.9999')).toBe('999999999999999.9999')
-    expect(parseAllocationMoney(' 1.00')).toBeNull()
-    expect(parseAllocationMoney('01.00')).toBeNull()
-    expect(parseExactNumeric19Scale4('00.1000')).toBeNull()
+  it('accepts exact Money objects and validates percentage syntax independently', () => {
+    expect(parseMoney({ amount: '9999999999999999999', currency: 'CAD' })).toEqual(money('99999999999999999.99'))
+    expect(parseAllocationPercentage('99.9999')).toBe('99.9999')
+    expect(parseAllocationPercentage('100.0001')).toBeNull()
+    expect(parseAllocationPercentage('00.1000')).toBeNull()
+    expect(parseAllocationPercentage('0.00001')).toBeNull()
+    expect(() => parseCurrencyMoney(' 1.00', 'CAD')).toThrow()
+    expect(() => parseCurrencyMoney('01.00', 'CAD')).toThrow()
   })
 
   it('reports missing activity outcomes and stale budget rows', () => {
@@ -295,9 +299,9 @@ describe('outcome cost allocation logic', () => {
         agreementBudgetFiscalYearId: 'stale-year',
         outcomeId: 'stale-outcome',
         allocationMethod: 'amount',
-        allocationValue: 1000
+        allocationValue: money('1000')
       }
-    ], years, activeOutcomes).map(issue => issue.code)
+    ], years, activeOutcomes, 'CAD').map(issue => issue.code)
 
     expect(issues).toContain('GCS_OUTCOME_COST_ALLOCATION_STALE_OUTCOME')
     expect(issues).toContain('GCS_OUTCOME_COST_ALLOCATION_STALE_BUDGET_YEAR')
@@ -331,16 +335,16 @@ describe('outcome cost allocation logic', () => {
           agreementBudgetFiscalYearId: 'year-1',
           outcomeId: 'outcome-1',
           allocationMethod: 'amount',
-          allocationValue: 500,
-          amount: toMoney('500')
+          allocationValue: money('500'),
+          amount: money('500')
         },
         {
           streamCommitmentId: 'inactive-stream-commitment',
           agreementBudgetFiscalYearId: 'year-1',
           outcomeId: 'outcome-2',
           allocationMethod: 'amount',
-          allocationValue: 500,
-          amount: toMoney('500')
+          allocationValue: money('500'),
+          amount: money('500')
         }
       ],
       config,
@@ -369,8 +373,8 @@ describe('outcome cost allocation logic', () => {
         agreementBudgetFiscalYearId: 'year-1',
         outcomeId: 'outcome-1',
         allocationMethod: 'amount',
-        allocationValue: 1000,
-        amount: toMoney('1000')
+        allocationValue: money('1000'),
+        amount: money('1000')
       }],
       config,
       new Map([['year-1', 'stream-budget-1']]),
@@ -386,78 +390,78 @@ describe('outcome cost allocation logic', () => {
     expect(allocatePaymentAmountToCommitmentLines([
       {
         commitmentLineId: 'line-1',
-        weightAmount: 75,
-        remainingAmount: 75
+        weightAmount: money('75'),
+        remainingAmount: money('75')
       },
       {
         commitmentLineId: 'line-2',
-        weightAmount: 25,
-        remainingAmount: 10
+        weightAmount: money('25'),
+        remainingAmount: money('10')
       }
-    ], 50)).toEqual([
+    ], money('50'), 'CAD')).toEqual([
       {
         commitmentLineId: 'line-1',
-        weightAmount: '75.00',
-        remainingAmount: '75.00',
-        paymentAmount: '40.00'
+        weightAmount: money('75.00'),
+        remainingAmount: money('75.00'),
+        paymentAmount: money('40.00')
       },
       {
         commitmentLineId: 'line-2',
-        weightAmount: '25.00',
-        remainingAmount: '10.00',
-        paymentAmount: '10.00'
+        weightAmount: money('25.00'),
+        remainingAmount: money('10.00'),
+        paymentAmount: money('10.00')
       }
     ])
 
     expect(allocatePaymentAmountToCommitmentLines([
       {
         commitmentLineId: 'line-1',
-        weightAmount: 75,
-        remainingAmount: 25
+        weightAmount: money('75'),
+        remainingAmount: money('25')
       }
-    ], 50)).toEqual([])
+    ], money('50'), 'CAD')).toEqual([])
   })
 
   it('rounds generated payment lines to cents while preserving the payment total', () => {
     const lines = allocatePaymentAmountToCommitmentLines([
       {
         commitmentLineId: 'line-1',
-        weightAmount: 1,
-        remainingAmount: 100
+        weightAmount: money('1'),
+        remainingAmount: money('100')
       },
       {
         commitmentLineId: 'line-2',
-        weightAmount: 1,
-        remainingAmount: 100
+        weightAmount: money('1'),
+        remainingAmount: money('100')
       },
       {
         commitmentLineId: 'line-3',
-        weightAmount: 1,
-        remainingAmount: 100
+        weightAmount: money('1'),
+        remainingAmount: money('100')
       }
-    ], 100)
+    ], money('100'), 'CAD')
 
-    expect(lines.map(line => line.paymentAmount)).toEqual(['33.33', '33.33', '33.34'])
-    expect(sumMoney(lines.map(line => line.paymentAmount))).toBe('100.00')
+    expect(lines.map(line => line.paymentAmount)).toEqual([money('33.33'), money('33.33'), money('33.34')])
+    expect(sumMoney(lines.map(line => line.paymentAmount), 'CAD')).toEqual(money('100.00'))
   })
 
   it('weights large exact financial values without overflowing Number multiplication', () => {
     const lines = allocatePaymentAmountToCommitmentLines([
       {
         commitmentLineId: 'line-1',
-        weightAmount: 900_000_000_000,
-        remainingAmount: 900_000_000_000
+        weightAmount: money('900000000000'),
+        remainingAmount: money('900000000000')
       },
       {
         commitmentLineId: 'line-2',
-        weightAmount: 900_000_000_000,
-        remainingAmount: 900_000_000_000
+        weightAmount: money('900000000000'),
+        remainingAmount: money('900000000000')
       }
-    ], 900_000_000_000)
+    ], money('900000000000'), 'CAD')
 
     expect(lines.map(line => line.paymentAmount)).toEqual([
-      '450000000000.00',
-      '450000000000.00'
+      money('450000000000.00'),
+      money('450000000000.00')
     ])
   })
 })

@@ -1,5 +1,6 @@
 import { z } from 'zod'
-import { parseExactNumeric19Scale4, toExactNumeric19Scale4Units } from '../shared/allocation.ts'
+import { MoneySchema } from '@gcs-ssc/extensions/money'
+import { parseAllocationPercentage } from '../shared/allocation.ts'
 
 const MAX_POSTGRES_BIGINT_TEXT = '9223372036854775807'
 
@@ -8,21 +9,14 @@ const isPositivePostgresBigintText = (value: string): boolean =>
   && (value.length < MAX_POSTGRES_BIGINT_TEXT.length
     || (value.length === MAX_POSTGRES_BIGINT_TEXT.length && value <= MAX_POSTGRES_BIGINT_TEXT))
 
-const addInvalidNumericIssue = (context: z.RefinementCtx) => {
-  context.addIssue({
-    code: z.ZodIssueCode.custom,
-    message: 'Expected a non-negative numeric(19,4) value.'
-  })
-}
-
-export const Numeric19Scale4Schema = z
-  .unknown()
-  .superRefine((value, context) => {
-    if (parseExactNumeric19Scale4(value) === null) {
-      addInvalidNumericIssue(context)
-    }
-  })
-  .transform(value => parseExactNumeric19Scale4(value)!)
+export const AllocationPercentageSchema = z.unknown().transform((value, context) => {
+  const percentage = parseAllocationPercentage(value)
+  if (percentage === null) {
+    context.addIssue({ code: 'custom', message: 'Expected exact percentage text between 0 and 100 with at most four fractional digits.' })
+    return z.NEVER
+  }
+  return percentage
+})
 
 /** Canonical positive decimal identity accepted by PostgreSQL signed bigint columns. */
 export const PositivePostgresBigintIdSchema = z.preprocess(
@@ -43,25 +37,16 @@ export const AllocationVersionRouteParamsSchema = AgreementRouteParamsSchema.ext
   allocationVersionId: PositivePostgresBigintIdSchema
 })
 
-const OutcomeAllocationRequestBaseSchema = z.object({
+const OutcomeAllocationCoordinatesSchema = z.object({
   commitmentType: PositivePostgresBigintIdSchema,
   streamCommitmentId: PositivePostgresBigintIdSchema,
   agreementBudgetFiscalYearId: PositivePostgresBigintIdSchema,
-  outcomeId: PositivePostgresBigintIdSchema,
-  allocationMethod: z.enum(['amount', 'percentage']),
-  allocationValue: Numeric19Scale4Schema
+  outcomeId: PositivePostgresBigintIdSchema
 })
-
-export const OutcomeAllocationRequestSchema = OutcomeAllocationRequestBaseSchema.superRefine((allocation, context) => {
-  if (allocation.allocationMethod === 'percentage'
-    && (toExactNumeric19Scale4Units(allocation.allocationValue) ?? BigInt(0)) > BigInt(1_000_000)) {
-    context.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['allocationValue'],
-      message: 'Expected a percentage between 0 and 100.'
-    })
-  }
-})
+export const OutcomeAllocationRequestSchema = z.discriminatedUnion('allocationMethod', [
+  OutcomeAllocationCoordinatesSchema.extend({ allocationMethod: z.literal('amount'), allocationValue: MoneySchema.refine(value => !value.amount.startsWith('-'), 'Expected nonnegative money.') }),
+  OutcomeAllocationCoordinatesSchema.extend({ allocationMethod: z.literal('percentage'), allocationValue: AllocationPercentageSchema })
+])
 
 export const SaveAllocationsRequestSchema = z.object({
   allocationVersionId: PositivePostgresBigintIdSchema,

@@ -1,10 +1,10 @@
 import { h, type VNode } from 'vue'
 import { translateGcsExtensionMessage } from '@gcs-ssc/extensions'
+import { formatMoneyText, zeroMoney } from '@gcs-ssc/extensions/money'
 import { notifications } from '../i18n/notifications'
 import type {
   CommitmentType,
   CostAllocationVersion,
-  AllocationDecimalInput,
   AllocationMoney,
   VersionedOutcomeAllocationInput
 } from './allocation'
@@ -17,8 +17,8 @@ export interface ConfiguredAssociationRow {
   commitmentTypeLabel: string
   yearId: string
   yearLabel: string
-  /** Canonical strings are authoritative; safe numbers remain deprecated input compatibility. */
-  programFunding: AllocationDecimalInput
+  /** Exact decimal text in the owning Agreement denomination. */
+  programFunding: AllocationMoney
   streamBudgetId: string
   streamCommitmentId: string
   commitmentLineLabel: string
@@ -38,7 +38,7 @@ export interface AllocationTableRow {
   outcomeId: string
   outcomeLabel: string
   associationCount: number
-  programFunding: AllocationDecimalInput
+  programFunding: AllocationMoney
   association?: ConfiguredAssociationRow
 }
 
@@ -90,7 +90,9 @@ export const buildOutcomeAllocationRows = (
       continue
     }
 
-    const commitmentTypeLabel = typeRows[0]?.commitmentTypeLabel ?? commitmentType
+    const firstTypeRow = typeRows[0]
+    if (!firstTypeRow) continue
+    const commitmentTypeLabel = firstTypeRow.commitmentTypeLabel
     const typeGroupId = getCommitmentTypeGroupId(commitmentType)
     rows.push({
       id: typeGroupId,
@@ -104,7 +106,7 @@ export const buildOutcomeAllocationRows = (
       outcomeId: '',
       outcomeLabel: `${typeRows.length} ${options.recordsLabel}`,
       associationCount: typeRows.length,
-      programFunding: '0.00' as AllocationMoney
+      programFunding: zeroMoney(firstTypeRow.programFunding.currency)
     })
 
     if (!options.isExpanded(typeGroupId)) {
@@ -263,16 +265,10 @@ export interface AllocationResponse {
 }
 
 /**
- * Formats exact allocated cents in the owning denomination.
+ * Formats exact allocated money using the owning currency's minor-unit precision.
  * @param value - Canonical allocated money.
  * @param language - Current interface locale.
- * @param currency - Owning Agreement denomination.
  * @returns Localized currency text without numeric coercion.
  */
-export const formatCurrencyAmount = (value: AllocationMoney, language: string, currency: string) => {
-  const [integer = '0', fraction = '00'] = value.split('.')
-  const units = integer === '-0' ? -0 : BigInt(integer)
-  return new Intl.NumberFormat(language, {
-    style: 'currency', currency, minimumFractionDigits: 2, maximumFractionDigits: 2
-  }).formatToParts(units).map(part => part.type === 'fraction' ? fraction : part.value).join('')
-}
+export const formatCurrencyAmount = (value: AllocationMoney, language: string) =>
+  formatMoneyText(value, language)

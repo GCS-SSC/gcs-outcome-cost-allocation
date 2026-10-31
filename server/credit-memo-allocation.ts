@@ -1,11 +1,12 @@
 import type { GcsCodingAllocatorContext, GcsCodingAllocationResult } from '@gcs-ssc/extensions/server'
 import { createGcsExtensionUserError, getExtensionKvEntry } from '@gcs-ssc/extensions/server'
 import { sql } from 'kysely'
+import { addMoney, allocateMoney, moneyCalculator as calculator, compareMoney, moneyToMinorUnits, parseDecimalText, parseMoney, zeroMoney, type Money } from '@gcs-ssc/extensions/money'
 import { z } from 'zod'
-import { AgencyCodingSchema, RetainedAgencyCodingSchema, RetainedCreditMemoCodingSchema, splitAgencyCoding } from '../shared/agency-coding.ts'
-import { fromCents, parseOutcomeCostAllocationConfig, toCents, toExactNumeric19Scale4Units } from '../shared/allocation.ts'
+import { AgencyCodingSchema, RetainedCreditMemoCodingSchema } from '../shared/agency-coding.ts'
+import { parseOutcomeCostAllocationConfig, percentageToScaledUnits } from '../shared/allocation.ts'
 import { asOutcomeCostAllocationDb } from './db.ts'
-import { databaseNumericText, parseDatabaseMoney } from './numeric.ts'
+import { databaseMinorUnitsText, parseDatabaseMoney } from './numeric.ts'
 
 const invalid = () => createGcsExtensionUserError({ code: 'GCS_OUTCOME_COST_ALLOCATION_CODING_CONFIGURATION_INVALID', statusCode: 400,
   message: { en: 'The credit memo allocation policy is invalid. Check its commitment coding, override percentages and dates, and make every target account available in this Stream.',
@@ -37,20 +38,11 @@ const missingLink = (agencyChartOfAccountId: string, ambiguous: boolean) => crea
  * @param amount Exact Credit Memo total.
  * @returns Exact coding amounts with deterministic residual balancing.
  */
-const splitWeights = (lines: Array<{ codingLineId: string; weight: string }>, amount: string) => {
-  const total = toCents(amount)
-  const denominator = lines.reduce((sum, line) => sum + BigInt(line.weight), BigInt(0))
-  const split = lines.map(line => {
-    const numerator = total * BigInt(line.weight)
-    return { codingLineId: line.codingLineId, cents: numerator / denominator, remainder: numerator % denominator }
-  })
-  let remaining = total - split.reduce((sum, line) => sum + line.cents, BigInt(0))
-  for (const line of [...split].sort((a, b) => a.remainder === b.remainder ? a.codingLineId.localeCompare(b.codingLineId) : a.remainder > b.remainder ? -1 : 1)) {
-    if (remaining <= BigInt(0)) break
-    line.cents += BigInt(1)
-    remaining -= BigInt(1)
-  }
-  return split.map(line => ({ codingLineId: line.codingLineId, amount: fromCents(line.cents) }))
+const splitWeights = (lines: Array<{ codingLineId: string; weight: string }>, amount: Money) => {
+  const ordered = [...lines].sort((left, right) => left.codingLineId.localeCompare(right.codingLineId))
+  const portions = allocateMoney(amount, ordered.map(line => parseDecimalText(line.weight)), { method: 'largestRemainder' })
+  const byId = new Map(ordered.map((line, index) => [line.codingLineId, portions[index]!]))
+  return lines.map(line => ({ codingLineId: line.codingLineId, amount: byId.get(line.codingLineId)! }))
 }
 
 /**
@@ -59,7 +51,7 @@ const splitWeights = (lines: Array<{ codingLineId: string; weight: string }>, am
  * @param lines Exact allocations keyed by Agency account ID.
  * @returns Allocations keyed by Stream selection ID, rejecting unavailable or ambiguous accounts.
  */
-const streamAllocations = (context: GcsCodingAllocatorContext, lines: Array<{ codingLineId: string; amount: string }>) => lines.map(line => {
+const streamAllocations = (context: GcsCodingAllocatorContext, lines: Array<{ codingLineId: string; amount: Money }>) => lines.map(line => {
   const matches = context.codingLines.filter(account => account.agencyChartOfAccountId === line.codingLineId)
   if (matches.length !== 1) throw invalid()
   return { ...line, codingLineId: matches[0]!.codingLineId }
@@ -72,19 +64,16 @@ const streamAllocations = (context: GcsCodingAllocatorContext, lines: Array<{ co
  */
 export const allocateCreditMemo = async (context: GcsCodingAllocatorContext): Promise<GcsCodingAllocationResult> => {
   if (context.output.kind !== 'credit-memo') throw invalid()
+  const amount = parseMoney(context.amount)
+  const zero = zeroMoney(context.currency)
+  if (amount.currency !== zero.currency) throw invalid()
   const effectiveDate = context.output.effectiveDate ?? ''
   if (!z.iso.date().safeParse(effectiveDate).success) throw invalid()
   if (context.retainedPolicy) {
     const retained = RetainedCreditMemoCodingSchema.safeParse(context.retainedPolicy)
-    if (retained.success) {
-      if (retained.data.currency !== context.currency || retained.data.effectiveDate !== effectiveDate) throw invalid()
-      return { lines: streamAllocations(context, splitWeights(retained.data.lines, context.amount)), policy: retained.data }
-    }
-    // Previously captured percentage policies remain immutable on amount-only draft edits.
-    const legacy = RetainedAgencyCodingSchema.safeParse(context.retainedPolicy)
-    if (!legacy.success || legacy.data.kind !== 'credit-memo' || legacy.data.currency !== context.currency
-      || legacy.data.effectiveDate !== effectiveDate) throw invalid()
-    return { lines: streamAllocations(context, splitAgencyCoding(legacy.data.lines, context.amount)), policy: legacy.data }
+    if (!retained.success || retained.data.currency !== context.currency || retained.data.effectiveDate !== effectiveDate) throw invalid()
+    return { lines: streamAllocations(context, splitWeights(retained.data.lines, amount)), policy: retained.data }
+
   }
 
   const config = AgencyCodingSchema.safeParse(context.agencyConfig)
@@ -102,23 +91,24 @@ export const allocateCreditMemo = async (context: GcsCodingAllocatorContext): Pr
     .where('status', 'in', ['active', 'inactive']).executeTakeFirst()
   if (!version) throw missingMatrix()
   const rows = await db.selectFrom('extensions.gcs_outcome_cost_allocation_allocations')
-    .select(['stream_commitment_id', databaseNumericText(sql.ref('resolved_amount')).as('amount')])
+    .select(['stream_commitment_id', databaseMinorUnitsText(sql.ref('resolved_amount')).as('amount')])
     .where('allocation_version_id', '=', String(version.id)).where('agreement_id', '=', context.agreementId)
     .where('commitment_type', '=', commitment.commitmentTypeId).where('_deleted', '=', false)
     .orderBy('stream_commitment_id').execute()
-  const sources = new Map<string, bigint>()
+  const sources = new Map<string, Money>()
   for (const row of rows) {
     if (row.amount === null) throw missingMatrix()
-    let weight: bigint
+    let weight: Money
     try {
-      weight = toCents(parseDatabaseMoney(row.amount))
+      weight = parseDatabaseMoney(row.amount, context.currency)
     } catch {
       throw missingMatrix()
     }
-    if (weight === BigInt(0)) continue
+    if (compareMoney(weight, zero) < 0) throw missingMatrix()
+    if (compareMoney(weight, zero) === 0) continue
     const source = context.commitmentCodingLines.find(account => account.codingLineId === String(row.stream_commitment_id))
     if (!source) throw missingMatrix()
-    sources.set(source.agencyChartOfAccountId, (sources.get(source.agencyChartOfAccountId) ?? BigInt(0)) + weight)
+    sources.set(source.agencyChartOfAccountId, addMoney(sources.get(source.agencyChartOfAccountId) ?? zero, weight))
   }
   if (!sources.size) throw missingMatrix()
   const weights = new Map<string, bigint>()
@@ -128,12 +118,12 @@ export const allocateCreditMemo = async (context: GcsCodingAllocatorContext): Pr
     const rule = rules[0]
     const linked = rule ? [] : context.codingLines.filter(account => account.commitmentChartOfAccountId === agencyChartOfAccountId)
     if (!rule && linked.length !== 1) throw missingLink(agencyChartOfAccountId, linked.length > 1)
-    // v1/v2 retained policies keep Agency account IDs, independent of Stream selection identities.
+    // Retained policy uses Agency account IDs, independent of Stream selection identities.
     const targets = rule?.lines ?? [{ codingLineId: linked[0]!.agencyChartOfAccountId, percentage: '100' }]
     for (const target of targets) {
       // AgencyCodingSchema already validates exact positive percentages totaling 100%.
-      const percentage = toExactNumeric19Scale4Units(target.percentage)!
-      weights.set(target.codingLineId, (weights.get(target.codingLineId) ?? BigInt(0)) + sourceWeight * percentage)
+      const percentage = percentageToScaledUnits(target.percentage)!
+      weights.set(target.codingLineId, calculator.add(weights.get(target.codingLineId) ?? BigInt(0), calculator.multiply(moneyToMinorUnits(sourceWeight), percentage)))
     }
   }
   const policy = { version: 2 as const, kind: 'credit-memo' as const, currency: context.currency, effectiveDate,
@@ -141,5 +131,5 @@ export const allocateCreditMemo = async (context: GcsCodingAllocatorContext): Pr
     lines: [...weights].sort(([a], [b]) => a.localeCompare(b)).map(([codingLineId, weight]) => ({ codingLineId, weight: weight.toString() })) }
   const checked = RetainedCreditMemoCodingSchema.safeParse(policy)
   if (!checked.success) throw invalid()
-  return { lines: streamAllocations(context, splitWeights(checked.data.lines, context.amount)), policy: checked.data }
+  return { lines: streamAllocations(context, splitWeights(checked.data.lines, amount)), policy: checked.data }
 }

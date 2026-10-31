@@ -1,6 +1,6 @@
 import type { GcsExtensionAgreementFinancials } from '@gcs-ssc/extensions/server'
 import type { Transaction } from 'kysely'
-import { fromCents, sumMoney, toCents } from '../shared/allocation.ts'
+import { maxMoney, subtractMoney, sumMoney, zeroMoney } from '@gcs-ssc/extensions/money'
 import type { AgreementBudgetYear } from './allocation-data.ts'
 import { createOutcomeCostAllocationUserError } from './errors.ts'
 
@@ -14,9 +14,9 @@ export const applyRemainingFunding = (
 ): AgreementBudgetYear[] => years.map(year => {
   const paid = sumMoney(context.codingPaidAmounts
     .filter(line => line.agencyFiscalYearId === String(year.fiscal_year_id))
-    .map(line => line.paidAmount))
-  const remaining = toCents(year.program_funding) - toCents(paid)
-  return { ...year, paid_amount: paid, remaining_funding: fromCents(remaining > BigInt(0) ? remaining : BigInt(0)) }
+    .map(line => line.paidAmount), year.program_funding.currency)
+  const remaining = subtractMoney(year.program_funding, paid)
+  return { ...year, paid_amount: paid, remaining_funding: maxMoney([remaining, zeroMoney(year.program_funding.currency)], year.program_funding.currency) }
 })
 
 export const getAllocationFinancialContext = async (

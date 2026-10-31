@@ -12,8 +12,8 @@ it('loads native server modules and rejects a Payment without a matrix-backed Co
       output: { kind: 'payment', commitmentTypeId: '1' },
       config: { enabledCommitmentTypes: ['1'], mappings: [] },
       codingLines: [{ codingLineId: '10' }],
-      codingAvailableAmounts: [{ codingLineId: '10', amount: '100.00' }],
-      amount: '25.00', currency: 'cad'
+      codingAvailableAmounts: [{ codingLineId: '10', amount: { amount: '10000', currency: 'CAD' } }],
+      amount: { amount: '2500', currency: 'CAD' }, currency: 'cad'
     }), { code: 'GCS_OUTCOME_COST_ALLOCATION_PAYMENT_MATRIX_REQUIRED' });
     console.log('matrix required');
   `

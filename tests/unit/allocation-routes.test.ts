@@ -1,3 +1,4 @@
+import { parseCurrencyMoney } from '@gcs-ssc/extensions/money'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type {
   GcsExtensionRawRouteHandler,
@@ -14,7 +15,7 @@ const validSaveBody = () => ({
     agreementBudgetFiscalYearId: BUDGET_YEAR_ID,
     outcomeId: '5',
     allocationMethod: 'percentage' as const,
-    allocationValue: 25.5
+    allocationValue: '25.5'
   }]
 })
 
@@ -189,14 +190,14 @@ describe('outcome allocation routes', () => {
     }]
     routeMocks.getAllocationVersions.mockResolvedValue(versions)
     routeMocks.getAgreementOutcomes.mockResolvedValue([{ id: 'outcome-1' }])
-    routeMocks.getAgreementBudgetYears.mockResolvedValue([{ id: 'year-1', fiscal_year_id: '2025', program_funding: '1000.00' }])
+    routeMocks.getAgreementBudgetYears.mockResolvedValue([{ id: 'year-1', fiscal_year_id: '2025', program_funding: parseCurrencyMoney('1000.00', 'CAD') }])
     routeMocks.getSavedAllocations.mockResolvedValue([{ outcomeId: 'outcome-1' }])
     routeMocks.getStreamCommitmentLines.mockResolvedValue([{ id: 'line-1' }])
 
     await expect(invokeRoute(route, createRouteContext())).resolves.toEqual({
       currency: 'cad',
       outcomes: [{ id: 'outcome-1' }],
-      budgetYears: [{ id: 'year-1', fiscal_year_id: '2025', program_funding: '1000.00', paid_amount: '0.00', remaining_funding: '1000.00' }],
+      budgetYears: [{ id: 'year-1', fiscal_year_id: '2025', program_funding: parseCurrencyMoney('1000.00', 'CAD'), paid_amount: parseCurrencyMoney('0.00', 'CAD'), remaining_funding: parseCurrencyMoney('1000.00', 'CAD') }],
       codingPaidAmounts: [],
       hasPendingEffects: false,
       commitmentTypes: [],
@@ -215,18 +216,18 @@ describe('outcome allocation routes', () => {
   it('publishes the unpaid pool and effective paid coding without changing gross funding', async () => {
     const route = (await import('../../server/api/allocations.get')).default
     routeMocks.getAgreementBudgetYears.mockResolvedValue([{
-      id: '3', fiscal_year_id: '2025', fiscal_year_display: '2025–2026', program_funding: '1000.00'
+      id: '3', fiscal_year_id: '2025', fiscal_year_display: '2025–2026', program_funding: parseCurrencyMoney('1000.00', 'CAD')
     }])
     const financials = {
       getCostAllocationContext: vi.fn(async () => ({
         agreementId: '1', hasPendingEffects: false,
-        codingPaidAmounts: [{ agencyChartOfAccountId: '10', agencyFiscalYearId: '2025', paidAmount: '200.00' }]
+        codingPaidAmounts: [{ agencyChartOfAccountId: '10', agencyFiscalYearId: '2025', paidAmount: parseCurrencyMoney('200.00', 'CAD') }]
       }))
     }
     const result = await invokeRoute(route, createRouteContext({ agreementFinancials: financials as never }))
     expect(result).toMatchObject({
-      budgetYears: [{ program_funding: '1000.00', paid_amount: '200.00', remaining_funding: '800.00' }],
-      codingPaidAmounts: [{ agencyChartOfAccountId: '10', agencyFiscalYearId: '2025', paidAmount: '200.00' }],
+      budgetYears: [{ program_funding: parseCurrencyMoney('1000.00', 'CAD'), paid_amount: parseCurrencyMoney('200.00', 'CAD'), remaining_funding: parseCurrencyMoney('800.00', 'CAD') }],
+      codingPaidAmounts: [{ agencyChartOfAccountId: '10', agencyFiscalYearId: '2025', paidAmount: parseCurrencyMoney('200.00', 'CAD') }],
       hasPendingEffects: false
     })
   })
@@ -267,7 +268,7 @@ describe('outcome allocation routes', () => {
         agreementBudgetFiscalYearId: BUDGET_YEAR_ID,
         outcomeId: '5',
         allocationMethod: 'percentage',
-        allocationValue: '25.5000'
+        allocationValue: '25.5'
       }],
       expect.objectContaining({ agencyId: 'agency-1', streamId: 'stream-1' }),
       expect.objectContaining({
@@ -290,7 +291,7 @@ describe('outcome allocation routes', () => {
           agreementBudgetFiscalYearId: 3,
           outcomeId: 4,
           allocationMethod: 'amount',
-          allocationValue: '25.0000'
+          allocationValue: parseCurrencyMoney('25', 'CAD')
         }]
       })
     })
@@ -306,7 +307,7 @@ describe('outcome allocation routes', () => {
         agreementBudgetFiscalYearId: BUDGET_YEAR_ID,
         outcomeId: '4',
         allocationMethod: 'amount',
-        allocationValue: '25.0000'
+        allocationValue: parseCurrencyMoney('25', 'CAD')
       }],
       expect.objectContaining({ agencyId: 'agency-1', streamId: 'stream-1' }),
       expect.objectContaining({

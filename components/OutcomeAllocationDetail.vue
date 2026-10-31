@@ -2,6 +2,7 @@
 import { AgreementOutcomeCostAllocationTabErrorMessages, AgreementOutcomeCostAllocationTabStatusMessages, AgreementOutcomeCostAllocationTabMessages } from '../i18n/AgreementOutcomeCostAllocationTab'
 
 import { h, type VNode, computed, ref, watch, type Ref } from 'vue'
+import { compareMoney, isCanonicalMoney, majorMoneyText, parseMoney, parseCurrencyMoney, subtractMoney, sumMoney, zeroMoney, type MoneyInput } from '@gcs-ssc/extensions/money'
 import type {
   ExtensionEntityTabContext,
   GcsExtensionJsonConfig,
@@ -37,18 +38,11 @@ import {
   type CommitmentType,
   type CostAllocationVersion,
   type VersionedOutcomeAllocationInput,
-  compareMoney,
-  fromCents,
   moneyForPercentage,
-  parseAllocationMoney,
-  parseExactNumeric19Scale4,
+  parseAllocationPercentage,
   percentageForMoney,
   parseOutcomeCostAllocationConfig,
   resolveAllocationAmounts,
-  subtractMoney,
-  sumMoney,
-  toExactNumeric19Scale4Units,
-  toMoney
 } from '../shared/allocation'
 import {
   buildOutcomeAllocationRows,
@@ -115,6 +109,10 @@ const hostApi = useHostApi()
 
 const endpoint = computed(() => `/agreements/${context.agreementId}/allocations`)
 const data: Ref<AllocationResponse | null> = ref(null)
+const currency = (): string => {
+  if (!data.value) throw new Error('Allocation money requires its owning Agreement currency.')
+  return data.value.currency
+}
 const selectedVersionHasCompletion: Ref<boolean> = ref(false)
 const completionLoading = ref(true)
 const completionLoadFailed = ref(false)
@@ -226,7 +224,7 @@ const commitmentTypeOptions = computed(() => streamConfig.value.enabledCommitmen
 })))
 
 const fundedBudgetYears = computed(() => budgetYears.value.filter(
-  (year: AllocationBudgetYear) => compareMoney((year.remaining_funding ?? year.program_funding), '0') > 0
+  (year: AllocationBudgetYear) => compareMoney((year.remaining_funding ?? year.program_funding), zero()) > 0
 ))
 
 const generationYearOptions = computed(() => fundedBudgetYears.value.map((year: AllocationBudgetYear) => ({
@@ -258,21 +256,10 @@ const allocationColumns = computed(() => [
   }
 ])
 
-const ZERO_MONEY = parseAllocationMoney('0')!
+const zero = () => zeroMoney(currency())
 const formatMoney = (value: AllocationMoney) => data.value?.currency
-  ? formatCurrencyAmount(value, locale.value, data.value.currency)
+  ? formatCurrencyAmount(value, locale.value)
   : '—'
-/**
- * Displays existing scale-four allocation drafts using the allocation's exact cent rounding.
- * @param value - Unmodified numeric(19,4) draft text.
- * @param language - Current interface locale.
- * @param currency - Owning Agreement denomination.
- * @returns Formatted cents, or null to retain invalid draft text.
- */
-const formatAllocationInput = (value: string, language: string, currency: string): string | null => {
-  const units = toExactNumeric19Scale4Units(value)
-  return units === null ? null : formatCurrencyAmount(fromCents((units + BigInt(50)) / BigInt(100)), language, currency)
-}
 
 const getStatusLabel = (statusValue: AllocationVersionStatus) => statusText(statusValue)
 
@@ -305,7 +292,7 @@ const configuredAssociationRows = computed<ConfiguredAssociationRow[]>(() => str
   if (
     !streamConfig.value.enabledCommitmentTypes.includes(mapping.commitmentType)
     || !year
-    || compareMoney((year.remaining_funding ?? year.program_funding), ZERO_MONEY) <= 0
+    || compareMoney((year.remaining_funding ?? year.program_funding), zero()) <= 0
     || !hasOutcome
     || !streamCommitment
     || String(streamCommitment.stream_budget_id) !== mapping.streamBudgetId
@@ -407,7 +394,7 @@ const createHistoricalAssociationRow = (
       ? allocation.fundingBasisAmount
       : year
         ? (year.remaining_funding ?? year.program_funding)
-        : ZERO_MONEY,
+        : zero(),
     streamBudgetId: year && year.stream_budget_id ? String(year.stream_budget_id) : '',
     streamCommitmentId: allocation.streamCommitmentId,
     commitmentLineLabel: commitmentLabel || getCommitmentLineLabel(allocation.streamCommitmentId),
@@ -453,7 +440,7 @@ const createAllocation = (association: ConfiguredAssociationRow): VersionedOutco
   agreementBudgetFiscalYearId: association.yearId,
   outcomeId: association.outcomeId,
   allocationMethod: 'amount',
-  allocationValue: '0'
+  allocationValue: zero()
 })
 
 const ensureAllocation = (association: ConfiguredAssociationRow) => {
@@ -467,7 +454,8 @@ const ensureAllocation = (association: ConfiguredAssociationRow) => {
   return created
 }
 
-const allocationEditor: Ref<{ association: ConfiguredAssociationRow; allocation: VersionedOutcomeAllocationInput } | null> = ref(null)
+type AllocationEditorDraft = Omit<VersionedOutcomeAllocationInput, 'allocationMethod' | 'allocationValue'> & { allocationMethod: 'amount' | 'percentage'; allocationValue: string }
+const allocationEditor: Ref<{ association: ConfiguredAssociationRow; allocation: AllocationEditorDraft } | null> = ref(null)
 const isAllocationModalOpen = ref(false)
 const allocationEditorFailure: Ref<'invalidValue' | 'yearTotalExceeded' | null> = ref(null)
 const allocationEditorError = computed(() => allocationEditorFailure.value === 'invalidValue'
@@ -483,38 +471,80 @@ const closeAllocationEditor = () => {
 const openAllocationEditor = (association: ConfiguredAssociationRow) => {
   if (warnEditingBlocked()) return
   if (warnPendingEffects() || !canEditSelectedVersion.value || hasPendingDraftMutation.value) return
-  allocationEditor.value = { association, allocation: { ...(getAllocation(association) ?? createAllocation(association)) } }
+  const allocation = getAllocation(association) ?? createAllocation(association)
+  allocationEditor.value = { association, allocation: { ...allocation, allocationValue: allocation.allocationMethod === 'amount' ? majorMoneyText(allocation.allocationValue) : allocation.allocationValue } }
   allocationEditorFailure.value = null
   isAllocationModalOpen.value = true
+}
+
+const editorMoneyInput = computed<MoneyInput>({
+  get: () => {
+    const editor = allocationEditor.value
+    if (!editor || editor.allocation.allocationMethod !== 'amount') return undefined
+    const draft = editor.allocation.allocationValue
+    if (draft === '') return null
+    try { return parseCurrencyMoney(draft, currency()) } catch { return { draft } }
+  },
+  set: value => {
+    const editor = allocationEditor.value
+    if (!editor || editor.allocation.allocationMethod !== 'amount') return
+    editor.allocation.allocationValue = isCanonicalMoney(value)
+      ? majorMoneyText(value)
+      : value && 'draft' in value ? value.draft : ''
+  }
+})
+
+const parseEditorAllocation = (draft: AllocationEditorDraft): VersionedOutcomeAllocationInput => {
+  if (draft.allocationMethod === 'percentage') {
+    const percentage = parseAllocationPercentage(draft.allocationValue)
+    if (percentage === null) throw new TypeError('Invalid allocation percentage.')
+    return { ...draft, allocationMethod: 'percentage', allocationValue: percentage }
+  }
+  const amount = parseCurrencyMoney(draft.allocationValue, currency())
+  if (compareMoney(amount, zero()) < 0) throw new TypeError('Allocation amount must be nonnegative.')
+  return { ...draft, allocationMethod: 'amount', allocationValue: amount }
 }
 
 const editorResolvedAllocations = computed(() => {
   const editor = allocationEditor.value
   if (!editor) return []
-  return resolveAllocationAmounts(activeAllocations.value.map(allocation =>
-    getAllocationKey(allocation) === getAssociationKey(editor.association) ? editor.allocation : allocation
-  ), allocationYearTotals.value)
+  try {
+    return resolveAllocationAmounts([
+      ...activeAllocations.value.filter(allocation => getAllocationKey(allocation) !== getAssociationKey(editor.association)),
+      parseEditorAllocation(editor.allocation)
+    ], allocationYearTotals.value, currency())
+  } catch {
+    return null
+  }
 })
-const editorAmount = computed(() => editorResolvedAllocations.value.find(allocation =>
-  allocationEditor.value && getAllocationKey(allocation) === getAssociationKey(allocationEditor.value.association)
-)?.amount ?? ZERO_MONEY)
-const editorUnallocated = computed(() => allocationEditor.value
-  ? subtractMoney(
-      allocationEditor.value.association.programFunding,
-      sumMoney(editorResolvedAllocations.value.filter(allocation =>
-        allocation.agreementBudgetFiscalYearId === allocationEditor.value?.association.yearId
-      ).map(allocation => allocation.amount))
-    )
-  : ZERO_MONEY)
+const editorAmount = computed(() => editorResolvedAllocations.value === null
+  ? null
+  : editorResolvedAllocations.value.find(allocation =>
+      allocationEditor.value && getAllocationKey(allocation) === getAssociationKey(allocationEditor.value.association)
+    )?.amount ?? zero())
+const editorUnallocated = computed(() => {
+  if (!allocationEditor.value) return zero()
+  if (editorResolvedAllocations.value === null) return null
+  return subtractMoney(
+    allocationEditor.value.association.programFunding,
+    sumMoney(editorResolvedAllocations.value.filter(allocation =>
+      allocation.agreementBudgetFiscalYearId === allocationEditor.value?.association.yearId
+    ).map(allocation => allocation.amount), currency())
+  )
+})
 
 const updateEditorMethod = (value: string | number) => {
   const editor = allocationEditor.value
   if (!editor || (value !== 'amount' && value !== 'percentage') || value === editor.allocation.allocationMethod) return
   const amount = editorAmount.value
+  if (amount === null) {
+    allocationEditorFailure.value = 'invalidValue'
+    return
+  }
   editor.allocation.allocationMethod = value
   editor.allocation.allocationValue = value === 'percentage'
     ? percentageForMoney(amount, editor.association.programFunding)
-    : amount
+    : majorMoneyText(amount)
   allocationEditorFailure.value = null
 }
 
@@ -522,16 +552,18 @@ const applyAllocationEditor = () => {
   if (warnEditingBlocked()) return
   const editor = allocationEditor.value
   if (!editor || warnPendingEffects() || !canEditSelectedVersion.value || hasPendingDraftMutation.value) return
-  const parsed = parseExactNumeric19Scale4(editor.allocation.allocationValue)
-  if (parsed === null || (editor.allocation.allocationMethod === 'percentage' && toExactNumeric19Scale4Units(parsed)! > BigInt(1_000_000))) {
+  let parsed: VersionedOutcomeAllocationInput
+  try {
+    parsed = parseEditorAllocation(editor.allocation)
+  } catch {
     allocationEditorFailure.value = 'invalidValue'
     return
   }
-  if (compareMoney(editorUnallocated.value, ZERO_MONEY) < 0) {
+  if (editorUnallocated.value === null || compareMoney(editorUnallocated.value, zero()) < 0) {
     allocationEditorFailure.value = 'yearTotalExceeded'
     return
   }
-  Object.assign(ensureAllocation(editor.association), editor.allocation, { allocationValue: parsed })
+  Object.assign(ensureAllocation(editor.association), parsed)
   closeAllocationEditor()
 }
 
@@ -584,7 +616,8 @@ const selectedDraftResolvedAmountByKey = computed(() => {
 
   return new Map(resolveAllocationAmounts(
     activeAllocations.value,
-    allocationYearTotals.value
+    allocationYearTotals.value,
+    currency()
   ).map(allocation => [
     getAllocationKey(allocation),
     allocation.amount
@@ -592,29 +625,36 @@ const selectedDraftResolvedAmountByKey = computed(() => {
 })
 
 const getProgramFunding = (yearId: string) =>
-  budgetYears.value.find((year: AllocationBudgetYear) => String(year.id) === yearId)?.remaining_funding ?? budgetYears.value.find((year: AllocationBudgetYear) => String(year.id) === yearId)?.program_funding ?? ZERO_MONEY
+  budgetYears.value.find((year: AllocationBudgetYear) => String(year.id) === yearId)?.remaining_funding ?? budgetYears.value.find((year: AllocationBudgetYear) => String(year.id) === yearId)?.program_funding ?? zero()
 
 const getAllocationInputAmount = (allocation: VersionedOutcomeAllocationInput) =>
   allocation.resolvedAmount !== null && allocation.resolvedAmount !== undefined
-    ? toMoney(allocation.resolvedAmount)
+    ? parseMoney(allocation.resolvedAmount)
     : allocation.allocationVersionId === selectedVersionId.value
       && selectedVersion.value?.status === 'draft'
-      ? selectedDraftResolvedAmountByKey.value.get(getAllocationKey(allocation)) ?? ZERO_MONEY
+      ? selectedDraftResolvedAmountByKey.value.get(getAllocationKey(allocation)) ?? zero()
       : allocation.allocationMethod === 'percentage'
         ? moneyForPercentage(getProgramFunding(allocation.agreementBudgetFiscalYearId), allocation.allocationValue)
-        : toMoney(allocation.allocationValue)
+        : parseMoney(allocation.allocationValue)
 
 const getAllocationAmount = (association: ConfiguredAssociationRow) => {
   const allocation = getAllocation(association)
-  return allocation ? getAllocationInputAmount(allocation) : ZERO_MONEY
+  return allocation ? getAllocationInputAmount(allocation) : zero()
 }
+
+const currencyConflictAllocations = computed(() => allocations.value.filter(allocation =>
+  allocation.allocationVersionId === selectedVersionId.value && allocation.coordinateCurrencyMismatch === true))
+const currencyConflictAmount = (allocation: VersionedOutcomeAllocationInput): string => allocation.resolvedAmount
+  ? formatMoney(allocation.resolvedAmount)
+  : allocation.allocationMethod === 'amount' ? formatMoney(allocation.allocationValue) : `${allocation.allocationValue}%`
 
 const getVersionAllocations = (versionId: string) => allocations.value.filter((allocation: VersionedOutcomeAllocationInput) =>
   allocation.allocationVersionId === versionId
 )
 
 const getVersionTotal = (versionId: string) => sumMoney(
-  getVersionAllocations(versionId).map(getAllocationInputAmount)
+  getVersionAllocations(versionId).map(getAllocationInputAmount),
+  currency()
 )
 
 const getVersionProgramFundingTotal = (versionId: string) => {
@@ -623,14 +663,14 @@ const getVersionProgramFundingTotal = (versionId: string) => {
     return version.fundingBasisAmount
   }
 
-  return sumMoney(budgetYears.value.map(year => (year.remaining_funding ?? year.program_funding)))
+  return sumMoney(budgetYears.value.map(year => (year.remaining_funding ?? year.program_funding)), currency())
 }
 
 const getVersionUnallocated = (versionId: string) =>
   subtractMoney(getVersionProgramFundingTotal(versionId), getVersionTotal(versionId))
 
 const getGroupAmountTotal = (rows: ConfiguredAssociationRow[]) =>
-  sumMoney(rows.map(getAllocationAmount))
+  sumMoney(rows.map(getAllocationAmount), currency())
 
 const getCommitmentTypeAmountTotal = (commitmentType: CommitmentType) =>
   getGroupAmountTotal(displayedAssociationRows.value.filter((row: ConfiguredAssociationRow) => row.commitmentType === commitmentType))
@@ -656,7 +696,7 @@ const getAmountForRow = (row: AllocationTableRow) => {
     return getFiscalYearAmountTotal(row.commitmentType, row.yearId)
   }
 
-  return row.association ? getAllocationAmount(row.association) : ZERO_MONEY
+  return row.association ? getAllocationAmount(row.association) : zero()
 }
 
 const getUnallocatedForRow = (row: AllocationTableRow): AllocationMoney | null => {
@@ -671,7 +711,7 @@ const getUnallocatedForRow = (row: AllocationTableRow): AllocationMoney | null =
   return null
 }
 
-const isOverAllocated = (value: AllocationMoney | null) => value !== null && compareMoney(value, ZERO_MONEY) < 0
+const isOverAllocated = (value: AllocationMoney | null) => value !== null && compareMoney(value, zero()) < 0
 
 const getUnallocatedClass = (value: AllocationMoney | null) => [
   'text-sm font-medium',
@@ -835,6 +875,14 @@ watch(() => recordId, () => {
             </template>
           </template>
           <template #notices>
+            <div v-if="currencyConflictAllocations.length" role="alert" class="space-y-2 text-sm text-error">
+              <p>{{ tLocal('coordinateCurrencyMismatch') }}</p>
+              <ul class="list-disc pl-5">
+                <li v-for="allocation in currencyConflictAllocations" :key="`${allocation.streamCommitmentId}:${allocation.outcomeId}:${allocation.agreementBudgetFiscalYearId}`">
+                  {{ getCommitmentLineLabel(allocation.streamCommitmentId) }} · {{ currencyConflictAmount(allocation) }}
+                </li>
+              </ul>
+            </div>
             <div v-if="completionLoadFailed" role="alert" class="space-y-2">
               <p class="text-sm text-error">
                 {{ tLocal('completionLoadError') }}
@@ -888,7 +936,7 @@ watch(() => recordId, () => {
                       {{ formatMoney(year.program_funding) }}
                     </td>
                     <td class="px-3 py-2">
-                      {{ formatMoney(year.paid_amount ?? ZERO_MONEY) }}
+                      {{ formatMoney(year.paid_amount ?? zero()) }}
                     </td>
                     <td class="px-3 py-2">
                       {{ formatMoney(year.remaining_funding ?? year.program_funding) }}
@@ -992,7 +1040,7 @@ watch(() => recordId, () => {
                     <span
                       v-if="getUnallocatedForRow(row.original) !== null"
                       :class="getUnallocatedClass(getUnallocatedForRow(row.original))">
-                      {{ formatMoney(getUnallocatedForRow(row.original) ?? ZERO_MONEY) }}
+                      {{ formatMoney(getUnallocatedForRow(row.original) ?? zero()) }}
                     </span>
                   </template>
 
@@ -1090,12 +1138,17 @@ watch(() => recordId, () => {
                   name="allocationValue"
                   :error="allocationEditorError"
                   required>
-                  <component
-                    :is="allocationEditor.allocation.allocationMethod === 'percentage' ? ExtensionInput : ExtensionCurrencyInput"
+                  <ExtensionInput
+                    v-if="allocationEditor.allocation.allocationMethod === 'percentage'"
                     v-model="allocationEditor.allocation.allocationValue"
-                    :currency="allocationEditor.allocation.allocationMethod === 'percentage' ? undefined : data?.currency"
-                    :format-value="allocationEditor.allocation.allocationMethod === 'percentage' ? undefined : formatAllocationInput"
                     inputmode="decimal"
+                    required
+                    :disabled="hasPendingDraftMutation"
+                    class="w-full" />
+                  <ExtensionCurrencyInput
+                    v-else
+                    v-model="editorMoneyInput"
+                    :currency="data?.currency"
                     required
                     :disabled="hasPendingDraftMutation"
                     class="w-full" />
@@ -1106,21 +1159,21 @@ watch(() => recordId, () => {
                   <dt class="text-sm text-muted">
                     {{ tLocal('remaining') }}
                   </dt><dd class="font-medium">
-                    {{ formatMoney(toMoney(allocationEditor.association.programFunding)) }}
+                    {{ formatMoney(allocationEditor.association.programFunding) }}
                   </dd>
                 </div>
                 <div>
                   <dt class="text-sm text-muted">
                     {{ tLocal('amount') }}
                   </dt><dd class="font-medium">
-                    {{ formatMoney(editorAmount) }}
+                    {{ editorAmount === null ? '—' : formatMoney(editorAmount) }}
                   </dd>
                 </div>
                 <div>
                   <dt class="text-sm text-muted">
                     {{ tLocal('unallocated') }}
                   </dt><dd :class="getUnallocatedClass(editorUnallocated)">
-                    {{ formatMoney(editorUnallocated) }}
+                    {{ editorUnallocated === null ? '—' : formatMoney(editorUnallocated) }}
                   </dd>
                 </div>
               </dl>

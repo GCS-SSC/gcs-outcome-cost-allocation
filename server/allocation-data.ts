@@ -1,3 +1,4 @@
+import { getCurrency, parseDecimalText, parseMoney, sumMoney } from '@gcs-ssc/extensions/money'
 import { sql, type Transaction } from 'kysely'
 import {
   lockGcsExtensionLifecycleScope,
@@ -14,13 +15,9 @@ import {
   type VersionedOutcomeAllocationInput,
   type YearFundingTotal,
   EXTENSION_KEY,
-  fromCents,
   isCommitmentType,
-  parseExactNumeric19Scale4,
   parseOutcomeCostAllocationConfig,
   resolveAllocationAmounts,
-  toCents,
-  toMoney,
   validateAllocationReferences,
   validateAllocationTotals,
   validateAllocationYearLimits,
@@ -37,7 +34,7 @@ import {
 import {
   databaseAggregateMoneyValue,
   databaseMoneyValue,
-  databaseNumericText,
+  databaseMinorUnitsText,
   databaseScale4Value,
   parseDatabaseAggregateMoney,
   parseDatabaseMoney,
@@ -138,18 +135,19 @@ const allocationCoordinateKey = (allocation: {
 
 const resolveStoredAllocationAmounts = (
   allocations: OutcomeAllocationInput[],
-  yearTotals: YearFundingTotal[]
+  yearTotals: YearFundingTotal[],
+  currency: string
 ): OutcomeAllocationResolved[] => allocations.every((allocation): allocation is OutcomeAllocationInput & {
   resolvedAmount: AllocationMoney
 } => 'resolvedAmount' in allocation
-  && typeof allocation.resolvedAmount === 'string')
+  && allocation.resolvedAmount !== null && allocation.resolvedAmount !== undefined)
   ? allocations.map(allocation => ({
       ...allocation,
-      amount: toMoney(allocation.resolvedAmount)
+      amount: parseMoney(allocation.resolvedAmount)
     }))
-  : resolveAllocationAmounts(allocations, yearTotals)
+  : resolveAllocationAmounts(allocations, yearTotals, currency)
 
-const mapAllocationVersion = (row: AllocationVersionRow): CostAllocationVersion => ({
+const mapAllocationVersion = (row: AllocationVersionRow, currency: string): CostAllocationVersion => ({
   id: String(row.id),
   agreementId: String(row.agreement_id),
   versionNumber: Number(row.version_number),
@@ -158,7 +156,7 @@ const mapAllocationVersion = (row: AllocationVersionRow): CostAllocationVersion 
   completedAt: row.completed_at ? new Date(row.completed_at).toISOString() : null,
   ...(row.funding_basis_amount === null || row.funding_basis_amount === undefined
     ? {}
-    : { fundingBasisAmount: parseDatabaseAggregateMoney(row.funding_basis_amount) as AllocationMoney })
+    : { fundingBasisAmount: parseDatabaseAggregateMoney(row.funding_basis_amount, currency) })
 })
 
 /**
@@ -182,7 +180,7 @@ const getAllocationVersionRow = async (
       'status',
       'created_at',
       'completed_at',
-      databaseNumericText(sql.ref('funding_basis_amount')).as('funding_basis_amount')
+      databaseMinorUnitsText(sql.ref('funding_basis_amount')).as('funding_basis_amount')
     ])
 
   if (lockForUpdate) {
@@ -601,7 +599,7 @@ export const getAgreementBudgetYears = async (
     'Agency_Fiscal_Year.egcs_ay_fiscalyeardisplay as fiscal_year_display',
     'Transfer_Payment_Stream_Budget.id as stream_budget_id',
     'Funding_Case_Agreement_Budget_Line_Item.egcs_fc_currency as currency',
-    databaseNumericText(sql`COALESCE(SUM("Funding_Case_Agreement_Budget_Line_Item"."egcs_fc_programfunding"), 0.00::numeric)`).as('program_funding')
+    databaseMinorUnitsText(sql`COALESCE(SUM("Funding_Case_Agreement_Budget_Line_Item"."egcs_fc_programfunding"), 0::numeric)`).as('program_funding')
   ])
   .groupBy([
     'Funding_Case_Agreement_Budget_Fiscal_Year.id',
@@ -638,7 +636,7 @@ export const getAgreementBudgetYears = async (
     .execute() : []
   const emptyYearBudgetByFiscalYearId = new Map(emptyYearBudgets.map(budget => [String(budget.fiscal_year_id), budget.stream_budget_id]))
   return rows.map(row => {
-    const programFunding = parseDatabaseAggregateMoney(row.program_funding) as AllocationMoney
+    const programFunding = parseDatabaseAggregateMoney(row.program_funding, currency)
 
     return {
       ...row,
@@ -752,12 +750,13 @@ export const getAllocationVersions = async (
       'status',
       'created_at',
       'completed_at',
-      databaseNumericText(sql.ref('funding_basis_amount')).as('funding_basis_amount')
+      databaseMinorUnitsText(sql.ref('funding_basis_amount')).as('funding_basis_amount')
     ])
     .orderBy('version_number', 'desc')
     .execute()
 
-  return rows.map(mapAllocationVersion)
+  const currency = await getAgreementCurrency(db, agreementId)
+  return rows.map(row => mapAllocationVersion(row, currency))
 }
 
 /**
@@ -788,13 +787,13 @@ export const createDraftAllocationVersion = async (
       'status',
       'created_at',
       'completed_at',
-      databaseNumericText(sql.ref('funding_basis_amount')).as('funding_basis_amount')
+      databaseMinorUnitsText(sql.ref('funding_basis_amount')).as('funding_basis_amount')
     ])
     .orderBy('version_number', 'desc')
     .executeTakeFirst()
 
   if (existingDraft) {
-    return mapAllocationVersion(existingDraft)
+    return mapAllocationVersion(existingDraft, await getAgreementCurrency(trx, agreementId))
   }
 
   const maxVersion = await trx
@@ -818,11 +817,11 @@ export const createDraftAllocationVersion = async (
       'status',
       'created_at',
       'completed_at',
-      databaseNumericText(sql.ref('funding_basis_amount')).as('funding_basis_amount')
+      databaseMinorUnitsText(sql.ref('funding_basis_amount')).as('funding_basis_amount')
     ])
     .executeTakeFirstOrThrow()
 
-  return mapAllocationVersion(inserted)
+  return mapAllocationVersion(inserted, await getAgreementCurrency(trx, agreementId))
 })
 
 /**
@@ -887,7 +886,7 @@ export const getAllocationVersion = async (
 ): Promise<CostAllocationVersion | null> => {
   const row = await getAllocationVersionRow(db, agreementId, allocationVersionId, false)
 
-  return row ? mapAllocationVersion(row) : null
+  return row ? mapAllocationVersion(row, await getAgreementCurrency(db, agreementId)) : null
 }
 
 /**
@@ -909,11 +908,11 @@ export const getActiveAllocationVersion = async (
       'status',
       'created_at',
       'completed_at',
-      databaseNumericText(sql.ref('funding_basis_amount')).as('funding_basis_amount')
+      databaseMinorUnitsText(sql.ref('funding_basis_amount')).as('funding_basis_amount')
     ])
     .executeTakeFirst()
 
-  return row ? mapAllocationVersion(row) : null
+  return row ? mapAllocationVersion(row, await getAgreementCurrency(db, agreementId)) : null
 }
 
 /**
@@ -924,10 +923,11 @@ export const getSavedAllocations = async (
   agreementId: string,
   allocationVersionId?: string
 ): Promise<VersionedOutcomeAllocationInput[]> => {
+  const currency = await getAgreementCurrency(db, agreementId)
   let query = db
     .selectFrom('extensions.gcs_outcome_cost_allocation_allocations')
-    .innerJoin('Transfer_Payment_Stream_Chart_of_Account', 'Transfer_Payment_Stream_Chart_of_Account.id', 'extensions.gcs_outcome_cost_allocation_allocations.stream_commitment_id')
-    .innerJoin('Agency_Chart_of_Account', 'Agency_Chart_of_Account.id', 'Transfer_Payment_Stream_Chart_of_Account.egcs_tp_agencychartofaccount')
+    .leftJoin('Transfer_Payment_Stream_Chart_of_Account', 'Transfer_Payment_Stream_Chart_of_Account.id', 'extensions.gcs_outcome_cost_allocation_allocations.stream_commitment_id')
+    .leftJoin('Agency_Chart_of_Account', 'Agency_Chart_of_Account.id', 'Transfer_Payment_Stream_Chart_of_Account.egcs_tp_agencychartofaccount')
     .innerJoin(
       'extensions.gcs_outcome_cost_allocation_versions',
       join => join
@@ -962,9 +962,9 @@ export const getSavedAllocations = async (
       'extensions.gcs_outcome_cost_allocation_allocations.agreement_budget_fiscal_year_id',
       'extensions.gcs_outcome_cost_allocation_allocations.outcome_id',
       'extensions.gcs_outcome_cost_allocation_allocations.allocation_method',
-      databaseNumericText(sql.ref('extensions.gcs_outcome_cost_allocation_allocations.allocation_value')).as('allocation_value'),
-      databaseNumericText(sql.ref('extensions.gcs_outcome_cost_allocation_allocations.resolved_amount')).as('resolved_amount'),
-      databaseNumericText(sql.ref('extensions.gcs_outcome_cost_allocation_allocations.funding_basis_amount')).as('funding_basis_amount'),
+      sql<string>`allocation_value::text`.as('allocation_value'),
+      databaseMinorUnitsText(sql.ref('extensions.gcs_outcome_cost_allocation_allocations.resolved_amount')).as('resolved_amount'),
+      databaseMinorUnitsText(sql.ref('extensions.gcs_outcome_cost_allocation_allocations.funding_basis_amount')).as('funding_basis_amount'),
       'extensions.gcs_outcome_cost_allocation_allocations.outcome_label_en',
       'extensions.gcs_outcome_cost_allocation_allocations.outcome_label_fr',
       'extensions.gcs_outcome_cost_allocation_allocations.commitment_label_en',
@@ -977,19 +977,20 @@ export const getSavedAllocations = async (
 
   return rows.map(row => ({
     allocationVersionId: String(row.allocation_version_id),
-    currency: row.currency ?? 'cad',
+    ...(row.currency !== currency ? { coordinateCurrencyMismatch: true } : {}),
     commitmentType: String(row.commitment_type),
     streamCommitmentId: String(row.stream_commitment_id),
     agreementBudgetFiscalYearId: String(row.agreement_budget_fiscal_year_id),
     outcomeId: String(row.outcome_id),
-    allocationMethod: row.allocation_method,
-    allocationValue: parseDatabaseScale4(row.allocation_value),
+    ...(row.allocation_method === 'amount'
+      ? { allocationMethod: 'amount' as const, allocationValue: parseDatabaseMoney(row.allocation_value, currency) }
+      : { allocationMethod: 'percentage' as const, allocationValue: parseDecimalText(parseDatabaseScale4(row.allocation_value)) }),
     ...(row.resolved_amount === null || row.resolved_amount === undefined
       ? {}
-      : { resolvedAmount: parseDatabaseMoney(row.resolved_amount) as AllocationMoney }),
+      : { resolvedAmount: parseDatabaseMoney(row.resolved_amount, currency) }),
     ...(row.funding_basis_amount === null || row.funding_basis_amount === undefined
       ? {}
-      : { fundingBasisAmount: parseDatabaseMoney(row.funding_basis_amount) as AllocationMoney }),
+      : { fundingBasisAmount: parseDatabaseAggregateMoney(row.funding_basis_amount, currency) }),
     ...(row.outcome_label_en === null || row.outcome_label_en === undefined ? {} : { outcomeLabelEn: row.outcome_label_en }),
     ...(row.outcome_label_fr === null || row.outcome_label_fr === undefined ? {} : { outcomeLabelFr: row.outcome_label_fr }),
     ...(row.commitment_label_en === null || row.commitment_label_en === undefined ? {} : { commitmentLabelEn: row.commitment_label_en }),
@@ -1094,11 +1095,47 @@ const replaceDraftAllocations = async (
         agreement_budget_fiscal_year_id: allocation.agreementBudgetFiscalYearId,
         outcome_id: allocation.outcomeId,
         allocation_method: allocation.allocationMethod,
-        allocation_value: databaseScale4Value(parseExactNumeric19Scale4(allocation.allocationValue)!),
+        allocation_value: allocation.allocationMethod === 'amount' ? databaseMoneyValue(allocation.allocationValue) : databaseScale4Value(allocation.allocationValue),
         resolved_amount: null,
         funding_basis_amount: null
       })))
       .execute()
+  }
+}
+
+/** Checks every selectable coordinate under the same fresh owner transaction as its mutation. */
+export const assertAllocationCoordinates = async (
+  db: OutcomeCostAllocationDb, agreementId: string, allocations: OutcomeAllocationInput[]
+): Promise<void> => {
+  for (const allocation of allocations) {
+    const eligible = await db.selectFrom('Funding_Case_Agreement_Profile')
+      .innerJoin('Transfer_Payment_Stream', join => join.onRef('Transfer_Payment_Stream.id', '=', 'Funding_Case_Agreement_Profile.egcs_fc_transferpaymentstream').on('Transfer_Payment_Stream._deleted', '=', false))
+      .innerJoin('Transfer_Payment_Profile', join => join.onRef('Transfer_Payment_Profile.id', '=', 'Transfer_Payment_Stream.egcs_tp_transferpaymentprofile').on('Transfer_Payment_Profile._deleted', '=', false))
+      .innerJoin('Funding_Case_Agreement_Budget_Fiscal_Year', join => join
+        .on(sql<boolean>`COALESCE("Funding_Case_Agreement_Budget_Fiscal_Year".egcs_fc_originalbudgetfiscalyear, "Funding_Case_Agreement_Budget_Fiscal_Year".id) = ${allocation.agreementBudgetFiscalYearId}::bigint`)
+        .onRef('Funding_Case_Agreement_Budget_Fiscal_Year.egcs_fc_fundingagreement', '=', 'Funding_Case_Agreement_Profile.id').on('Funding_Case_Agreement_Budget_Fiscal_Year._deleted', '=', false))
+      .innerJoin('Funding_Case_Agreement_Budget_Version', join => join.onRef('Funding_Case_Agreement_Budget_Version.id', '=', 'Funding_Case_Agreement_Budget_Fiscal_Year.egcs_fc_budgetversion')
+        .onRef('Funding_Case_Agreement_Budget_Version.egcs_fc_fundingagreement', '=', 'Funding_Case_Agreement_Profile.id').on('Funding_Case_Agreement_Budget_Version.egcs_fc_iscurrent', '=', true).on('Funding_Case_Agreement_Budget_Version._deleted', '=', false))
+      .innerJoin('Transfer_Payment_Outcome', join => join.on('Transfer_Payment_Outcome.id', '=', allocation.outcomeId)
+        .onRef('Transfer_Payment_Outcome.egcs_tp_transferpaymentprofile', '=', 'Transfer_Payment_Profile.id').on('Transfer_Payment_Outcome._deleted', '=', false))
+      .innerJoin('Transfer_Payment_Stream_Chart_of_Account', join => join.on('Transfer_Payment_Stream_Chart_of_Account.id', '=', allocation.streamCommitmentId)
+        .onRef('Transfer_Payment_Stream_Chart_of_Account.egcs_tp_transferpaymentstream', '=', 'Transfer_Payment_Stream.id').on('Transfer_Payment_Stream_Chart_of_Account._deleted', '=', false))
+      .innerJoin('Agency_Chart_of_Account', join => join.onRef('Agency_Chart_of_Account.id', '=', 'Transfer_Payment_Stream_Chart_of_Account.egcs_tp_agencychartofaccount')
+        .onRef('Agency_Chart_of_Account.egcs_ay_fiscalyear', '=', 'Funding_Case_Agreement_Budget_Fiscal_Year.egcs_fc_fiscalyear')
+        .onRef('Agency_Chart_of_Account.egcs_ay_organizationagency', '=', 'Transfer_Payment_Profile.egcs_tp_agency')
+        .onRef('Agency_Chart_of_Account.egcs_ay_currency', '=', 'Funding_Case_Agreement_Profile.egcs_fc_currency')
+        .on('Agency_Chart_of_Account.egcs_ay_kind', '=', 'commitment').on('Agency_Chart_of_Account._deleted', '=', false))
+      .innerJoin('Transfer_Payment_Stream_Commitment_Type', join => join.on('Transfer_Payment_Stream_Commitment_Type.id', '=', allocation.commitmentType ?? '')
+        .onRef('Transfer_Payment_Stream_Commitment_Type.egcs_tp_transferpaymentstream', '=', 'Transfer_Payment_Stream.id').on('Transfer_Payment_Stream_Commitment_Type._deleted', '=', false))
+      .innerJoin('Agency_Commitment_Type', join => join.onRef('Agency_Commitment_Type.id', '=', 'Transfer_Payment_Stream_Commitment_Type.egcs_tp_agencycommitmenttype').on('Agency_Commitment_Type._deleted', '=', false))
+      .innerJoin('Transfer_Payment_Stream_Budget', join => join.onRef('Transfer_Payment_Stream_Budget.egcs_tp_transferpaymentstream', '=', 'Transfer_Payment_Stream.id').on('Transfer_Payment_Stream_Budget._deleted', '=', false))
+      .innerJoin('Transfer_Payment_Fiscal_Year_Budget', join => join.onRef('Transfer_Payment_Fiscal_Year_Budget.id', '=', 'Transfer_Payment_Stream_Budget.egcs_tp_transferpaymentbudget')
+        .onRef('Transfer_Payment_Fiscal_Year_Budget.egcs_tp_transferpaymentprofile', '=', 'Transfer_Payment_Profile.id')
+        .onRef('Transfer_Payment_Fiscal_Year_Budget.egcs_tp_fiscalyear', '=', 'Funding_Case_Agreement_Budget_Fiscal_Year.egcs_fc_fiscalyear')
+        .onRef('Transfer_Payment_Fiscal_Year_Budget.egcs_tp_currency', '=', 'Funding_Case_Agreement_Profile.egcs_fc_currency').on('Transfer_Payment_Fiscal_Year_Budget._deleted', '=', false))
+      .where('Funding_Case_Agreement_Profile.id', '=', agreementId).where('Funding_Case_Agreement_Profile._deleted', '=', false)
+      .select('Funding_Case_Agreement_Profile.id').executeTakeFirst()
+    if (!eligible) throw createOutcomeCostAllocationUserError('GCS_OUTCOME_COST_ALLOCATION_STALE_COORDINATE', 'allocations')
   }
 }
 
@@ -1121,14 +1158,22 @@ const saveAllocationsInTransaction = async (
   if (enforceYearLimits) {
     const currentYears = await getAgreementBudgetYears(db, agreementId, expectedScope.streamId)
     const budgetYears = financialContext ? applyRemainingFunding(currentYears, financialContext) : currentYears
+    const currency = await getAgreementCurrency(db, agreementId)
     const yearLimitIssues = validateAllocationYearLimits(allocations, budgetYears.map(year => ({
       agreementBudgetFiscalYearId: String(year.id),
       programFunding: year.remaining_funding ?? year.program_funding
-    })))
+    })), currency)
     if (yearLimitIssues[0]) {
       throw createOutcomeCostAllocationUserError(yearLimitIssues[0].code, yearLimitIssues[0].path)
     }
   }
+  const currency = await getAgreementCurrency(db, agreementId)
+  for (const allocation of allocations) {
+    if (allocation.allocationMethod === 'amount' && allocation.allocationValue.currency !== getCurrency(currency).code) {
+      throw createOutcomeCostAllocationUserError('GCS_OUTCOME_COST_ALLOCATION_CURRENCY_MISMATCH', 'allocationValue')
+    }
+  }
+  await assertAllocationCoordinates(db, agreementId, allocations)
   await replaceDraftAllocations(db, agreementId, allocationVersionId, allocations)
 }
 
@@ -1175,7 +1220,7 @@ export const validateAgreementAllocations = async (
   }))
   const activeOutcomeIds = new Set(outcomes.map(outcome => String(outcome.id)))
 
-  return validateAllocationTotals(allocations, yearTotals, activeOutcomeIds)
+  return validateAllocationTotals(allocations, yearTotals, activeOutcomeIds, await getAgreementCurrency(db, agreementId))
 }
 
 /**
@@ -1197,7 +1242,7 @@ export const generatedPaymentStatusResurrectionExceedsCoverage = async (
     .where('_deleted', '=', false)
     .select([
       'egcs_fc_fundingagreementcommitmentline as commitment_line_id',
-      databaseNumericText(sql.ref('egcs_fc_amount')).as('payment_amount')
+      databaseMinorUnitsText(sql.ref('egcs_fc_amount')).as('payment_amount')
     ])
     .execute()
   return !await financials.validatePaymentAllocations({
@@ -1205,7 +1250,7 @@ export const generatedPaymentStatusResurrectionExceedsCoverage = async (
     excludePaymentId: paymentId,
     allocations: targetLines.map(line => ({
       commitmentLineId: String(line.commitment_line_id),
-      amount: parseDatabaseMoney(line.payment_amount)
+      amount: parseDatabaseMoney(line.payment_amount, payment.egcs_fc_currency)
     }))
   })
 }
@@ -1251,9 +1296,9 @@ const validateAllocationCommitmentMappings = async (
     String(year.id),
     String(year.stream_budget_id ?? '')
   ]))
-  const resolvedAllocations = resolveStoredAllocationAmounts(allocations, yearTotals)
+  const resolvedAllocations = resolveStoredAllocationAmounts(allocations, yearTotals, await getAgreementCurrency(db, agreementId))
 
-  return parsedConfig.enabledCommitmentTypes.flatMap(commitmentType =>
+  const issues = parsedConfig.enabledCommitmentTypes.flatMap(commitmentType =>
     validateCommitmentMappings(
       commitmentType,
       resolvedAllocations.filter(allocation => allocation.commitmentType === commitmentType),
@@ -1262,6 +1307,8 @@ const validateAllocationCommitmentMappings = async (
       activeStreamCommitmentBudgetIds
     )
   )
+  if (!issues.length) await assertAllocationCoordinates(db, agreementId, allocations)
+  return issues
 }
 
 /**
@@ -1274,15 +1321,16 @@ const snapshotAllocationEconomics = async (
   allocations: VersionedOutcomeAllocationInput[],
   budgetYears: AgreementBudgetYear[]
 ): Promise<AllocationMoney> => {
+  const currency = await getAgreementCurrency(db, agreementId)
   const yearTotals: YearFundingTotal[] = budgetYears.map(year => ({
     agreementBudgetFiscalYearId: String(year.id),
     programFunding: year.remaining_funding ?? year.program_funding
   }))
   const fundingBasisByYearId = new Map(yearTotals.map(year => [
     year.agreementBudgetFiscalYearId,
-    toMoney(year.programFunding)
+    parseMoney(year.programFunding)
   ]))
-  const resolvedAmountByCoordinate = new Map(resolveAllocationAmounts(allocations, yearTotals).map(allocation => [
+  const resolvedAmountByCoordinate = new Map(resolveAllocationAmounts(allocations, yearTotals, currency).map(allocation => [
     allocationCoordinateKey(allocation),
     allocation.amount
   ]))
@@ -1355,7 +1403,7 @@ const snapshotAllocationEconomics = async (
         commitment_label_fr: row.commitment_label_fr,
         fiscal_year_display: row.fiscal_year_display,
         resolved_amount: resolvedAmount === undefined ? null : databaseMoneyValue(resolvedAmount),
-        funding_basis_amount: fundingBasisAmount === undefined ? null : databaseMoneyValue(fundingBasisAmount)
+        funding_basis_amount: fundingBasisAmount === undefined ? null : databaseAggregateMoneyValue(fundingBasisAmount)
       })
       .where('id', '=', String(row.allocation_id))
       .where('agreement_id', '=', agreementId)
@@ -1364,7 +1412,7 @@ const snapshotAllocationEconomics = async (
       .execute()
   }
 
-  return fromCents(yearTotals.reduce((sum, year) => sum + toCents(year.programFunding), BigInt(0)))
+  return sumMoney(yearTotals.map(year => year.programFunding), currency)
 }
 
 /**
@@ -1448,10 +1496,10 @@ export const completeAllocationVersionInTransaction = async (
       .where('_deleted', '=', false)
       .returning([
         'id', 'agreement_id', 'version_number', 'status', 'created_at', 'completed_at',
-        databaseNumericText(sql.ref('funding_basis_amount')).as('funding_basis_amount')
+        databaseMinorUnitsText(sql.ref('funding_basis_amount')).as('funding_basis_amount')
       ])
       .executeTakeFirstOrThrow()
-    return mapAllocationVersion(prepared)
+    return mapAllocationVersion(prepared, await getAgreementCurrency(db, agreementId))
   }
 
   await db
@@ -1483,11 +1531,11 @@ export const completeAllocationVersionInTransaction = async (
       'status',
       'created_at',
       'completed_at',
-      databaseNumericText(sql.ref('funding_basis_amount')).as('funding_basis_amount')
+      databaseMinorUnitsText(sql.ref('funding_basis_amount')).as('funding_basis_amount')
     ])
     .executeTakeFirstOrThrow()
 
-  return mapAllocationVersion(completed)
+  return mapAllocationVersion(completed, await getAgreementCurrency(db, agreementId))
 }
 
 /** Promotes a completion-validated allocation version after host Workflow success. */

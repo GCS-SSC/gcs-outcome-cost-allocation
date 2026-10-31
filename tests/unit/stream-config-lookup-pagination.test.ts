@@ -25,7 +25,7 @@ it.each(['en', 'fr'])('loads and selects labels past the first page (%s)', async
         id,
         egcs_tp_name_en: `English ${id}`, egcs_tp_name_fr: `Français ${id}`,
         egcs_ay_name_en: `English ${id}`, egcs_ay_name_fr: `Français ${id}`,
-        fiscal_year_display: `Year ${id}`, egcs_tp_fiscalyear: id, egcs_ay_fiscalyear: id,
+        fiscal_year_display: `Year ${id}`, egcs_tp_fiscalyear: id, egcs_ay_fiscalyear: id, egcs_tp_currency: 'cad', egcs_ay_currency: 'cad',
         egcs_ay_accountingdimensions: [{ label_en: 'Account', label_fr: 'Compte', value: id }]
       }
     })
@@ -58,5 +58,40 @@ it.each(['en', 'fr'])('loads and selects labels past the first page (%s)', async
   expect(wrapper.findAll('select').every(select => (select.element as HTMLSelectElement).value === '101')).toBe(true)
   expect(requestedPages).toHaveLength(8)
   expect(requestedPages.filter(path => path.endsWith(':2'))).toHaveLength(4)
+  wrapper.unmount()
+})
+
+
+it('authors the matching currency budget when two currencies share the same fiscal year', async () => {
+  vi.stubGlobal('computed', computed); vi.stubGlobal('ref', ref); vi.stubGlobal('watch', watch)
+  vi.stubGlobal('useI18n', () => ({ locale: ref('en'), n: (value: number) => String(value) }))
+  const runtime = installExtensionTestUiRuntime()
+  runtime.components.UTable = defineComponent({ inheritAttrs: false, setup: (_, { attrs }) => () => h('div', attrs, h('table')) })
+  vi.stubGlobal('fetch', vi.fn(async (input: string) => {
+    const path = new URL(String(input), 'http://localhost').pathname
+    const items = path.endsWith('/budgets')
+      ? [{ id: '10', egcs_tp_fiscalyear: '5', egcs_tp_currency: 'cad', fiscal_year_display: '2026–2027' },
+          { id: '11', egcs_tp_fiscalyear: '5', egcs_tp_currency: 'jpy', fiscal_year_display: '2026–2027' }]
+      : path.endsWith('/chart-of-accounts')
+        ? [{ id: '19', egcs_ay_fiscalyear: '5', egcs_ay_currency: 'cad', fiscal_year_display: '2026–2027', egcs_ay_accountingdimensions: [{ label_en: 'Account', label_fr: 'Compte', value: '100' }] },
+          { id: '20', egcs_ay_fiscalyear: '5', egcs_ay_currency: 'jpy', fiscal_year_display: '2026–2027', egcs_ay_accountingdimensions: [{ label_en: 'Account', label_fr: 'Compte', value: '100' }] }]
+        : [{ id: '1', egcs_tp_name_en: 'Outcome', egcs_tp_name_fr: 'Résultat', egcs_ay_name_en: 'Grant', egcs_ay_name_fr: 'Subvention' }]
+    return new Response(JSON.stringify({ items, total: items.length }), { headers: { 'content-type': 'application/json' } })
+  }))
+  const wrapper = mount(defineComponent({ setup: () => () => h(Suspense, null, { default: () => h(StreamConfig, {
+    extension: {} as never, streamId: 'stream', transferPaymentId: 'program', modelValue: { enabledCommitmentTypes: [], mappings: [] }
+  }) }) }))
+  await flushPromises()
+  const component = wrapper.findComponent(StreamConfig)
+  const state = (component.vm.$ as unknown as { setupState: { openCreateAssociation: (id?: string) => void } }).setupState
+  state.openCreateAssociation('20')
+  await nextTick()
+  const options = wrapper.findAllComponents(runtime.components.USelect)[0]!.vm.$attrs.items as Array<{ value: string; label: string }>
+  expect(options.find(option => option.value === '19')?.label).toBe('Account: 100 · CAD')
+  expect(options.find(option => option.value === '20')?.label).toBe('Account: 100 · JPY')
+  const add = wrapper.findAll('button').find(button => button.text() === 'Add')
+  expect(add, 'The association modal exposes its ordinary Add action').toBeDefined()
+  await add!.trigger('click')
+  expect(component.emitted('update:modelValue')?.at(-1)?.[0]).toMatchObject({ mappings: [{ streamCommitmentId: '20', streamBudgetId: '11' }] })
   wrapper.unmount()
 })

@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { Kysely, PostgresDialect, sql } from 'kysely'
+import { moneyFromMinorUnits } from '@gcs-ssc/extensions/money'
 import { Pool } from 'pg'
 import { getActiveStreamCommitmentBudgetIds, getAgreementBudgetYears, getStreamCommitmentLines } from '../../server/allocation-data'
 import { asOutcomeCostAllocationDb } from '../../server/db'
@@ -52,7 +53,7 @@ describe('Outcome allocation PostgreSQL native source contracts', () => {
     await sql`UPDATE "Funding_Case_Agreement_Budget_Line_Item" SET egcs_fc_currency=${currency}`.execute(db)
     const result = await getAgreementBudgetYears(asOutcomeCostAllocationDb(db), '1', '2')
     expect(result).toHaveLength(1)
-    expect(result[0]).toMatchObject({ program_funding: '125.55', currency, stream_budget_id: currency === 'cad' ? '301' : '302' })
+    expect(result[0]).toMatchObject({ program_funding: moneyFromMinorUnits('12555', currency), currency, stream_budget_id: currency === 'cad' ? '301' : '302' })
     await capture(`${currency} funding and native fiscal budget`, `${currency.toUpperCase()}125.55, one native Stream budget`, result)
   })
 
@@ -66,7 +67,7 @@ describe('Outcome allocation PostgreSQL native source contracts', () => {
   })
 
   it('rejects unsupported mixed funding without producing a scalar allocation basis', async () => {
-    await sql`INSERT INTO "Funding_Case_Agreement_Budget_Line_Item" VALUES (102,10,84.46,'usd',false)`.execute(db)
+    await sql`INSERT INTO "Funding_Case_Agreement_Budget_Line_Item" VALUES (102,10,8446,'usd',false)`.execute(db)
     const result = await getAgreementBudgetYears(asOutcomeCostAllocationDb(db), '1', '2').then(
       years => ({ years }), error => ({ code: error.code, statusCode: error.statusCode })
     )
@@ -87,7 +88,7 @@ describe('Outcome allocation PostgreSQL native source contracts', () => {
     await sql`UPDATE "Funding_Case_Agreement_Profile" SET egcs_fc_currency='usd'`.execute(db)
     await sql`DELETE FROM "Funding_Case_Agreement_Budget_Line_Item"`.execute(db)
     const result = await getAgreementBudgetYears(asOutcomeCostAllocationDb(db), '1', '2')
-    expect(result).toMatchObject([{ id: '10', program_funding: '0.00', currency: 'usd', stream_budget_id: '302' }])
+    expect(result).toMatchObject([{ id: '10', program_funding: moneyFromMinorUnits('0', 'USD'), currency: 'usd', stream_budget_id: '302' }])
     await capture('USD Agreement with no funding lines', 'USD0.00 and matching Stream budget302, never default CAD', result)
   })
 
@@ -108,8 +109,30 @@ describe('Outcome allocation PostgreSQL native source contracts', () => {
     await sql`INSERT INTO "Transfer_Payment_Fiscal_Year_Budget" VALUES (203,1,2,'cad',false),(204,1,2,'usd',false)`.execute(db)
     await sql`INSERT INTO "Transfer_Payment_Stream_Budget" VALUES (303,203,2,false),(304,204,2,false)`.execute(db)
     const result = await getAgreementBudgetYears(asOutcomeCostAllocationDb(db), '1', '2')
-    expect(result).toMatchObject([{ id: '10', program_funding: '125.55', currency: 'usd', stream_budget_id: '302' },
-      { id: '11', program_funding: '0.00', currency: 'usd', stream_budget_id: '304' }])
+    expect(result).toMatchObject([{ id: '10', program_funding: moneyFromMinorUnits('12555', 'USD'), currency: 'usd', stream_budget_id: '302' },
+      { id: '11', program_funding: moneyFromMinorUnits('0', 'USD'), currency: 'usd', stream_budget_id: '304' }])
     await capture('USD funded year plus empty future fiscal year', 'USD125.55 + USD0.00; budgets302/304', result)
   })
+
+  it.each(['jpy', 'kwd', 'clf', 'mga'])('retains exact %s minor units above the safe number range', async currency => {
+    await sql`UPDATE "Funding_Case_Agreement_Profile" SET egcs_fc_currency=${currency}`.execute(db)
+    await sql`UPDATE "Funding_Case_Agreement_Budget_Line_Item"
+      SET egcs_fc_currency=${currency}, egcs_fc_programfunding=9007199254740993`.execute(db)
+    await sql`INSERT INTO "Funding_Case_Agreement_Budget_Line_Item"
+      VALUES (102,10,1,${currency},false)`.execute(db)
+    await sql`INSERT INTO "Transfer_Payment_Fiscal_Year_Budget"
+      VALUES (205,1,1,${currency},false)`.execute(db)
+    await sql`INSERT INTO "Transfer_Payment_Stream_Budget" VALUES (305,205,2,false)`.execute(db)
+    const years = await getAgreementBudgetYears(asOutcomeCostAllocationDb(db), '1', '2')
+    expect(years).toMatchObject([{ id: '10', currency, stream_budget_id: '305',
+      program_funding: moneyFromMinorUnits('9007199254740994', currency) }])
+  })
+
+  it('rejects fractional and noncanonical minor units at the source database boundary', async () => {
+    for (const invalid of ['0.1', '1.0', '1.001']) {
+      await expect(sql`UPDATE "Funding_Case_Agreement_Budget_Line_Item"
+        SET egcs_fc_programfunding=CAST(${invalid} AS numeric)`.execute(db)).rejects.toMatchObject({ code: '23514' })
+    }
+  })
+
 })

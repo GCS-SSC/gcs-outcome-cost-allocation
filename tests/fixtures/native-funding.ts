@@ -8,7 +8,7 @@ export const createNativeFundingSourceFixture = async (db: Kysely<Record<string,
     CREATE TABLE "Agency_Fiscal_Year" (id bigint PRIMARY KEY, egcs_ay_fiscalyear integer, egcs_ay_fiscalyeardisplay text, _deleted boolean DEFAULT false);
     CREATE TABLE "Funding_Case_Agreement_Budget_Version" (id bigint PRIMARY KEY, egcs_fc_fundingagreement bigint, egcs_fc_iscurrent boolean, _deleted boolean DEFAULT false);
     CREATE TABLE "Funding_Case_Agreement_Budget_Fiscal_Year" (id bigint PRIMARY KEY, egcs_fc_originalbudgetfiscalyear bigint, egcs_fc_fundingagreement bigint, egcs_fc_budgetversion bigint, egcs_fc_fiscalyear bigint, _deleted boolean DEFAULT false);
-    CREATE TABLE "Funding_Case_Agreement_Budget_Line_Item" (id bigint PRIMARY KEY, egcs_fc_fundingagreementbudgetfiscalyear bigint, egcs_fc_programfunding numeric(19,2), egcs_fc_currency text, _deleted boolean DEFAULT false);
+    CREATE TABLE "Funding_Case_Agreement_Budget_Line_Item" (id bigint PRIMARY KEY, egcs_fc_fundingagreementbudgetfiscalyear bigint, egcs_fc_programfunding numeric CHECK (egcs_fc_programfunding = trunc(egcs_fc_programfunding) AND scale(egcs_fc_programfunding) = 0 AND abs(egcs_fc_programfunding) < 1e38), egcs_fc_currency text, _deleted boolean DEFAULT false);
     CREATE TABLE "Transfer_Payment_Stream" (id bigint PRIMARY KEY, egcs_tp_transferpaymentprofile bigint, _deleted boolean DEFAULT false);
     CREATE TABLE "Transfer_Payment_Fiscal_Year_Budget" (id bigint PRIMARY KEY, egcs_tp_transferpaymentprofile bigint, egcs_tp_fiscalyear bigint, egcs_tp_currency text, _deleted boolean DEFAULT false);
     CREATE TABLE "Transfer_Payment_Stream_Budget" (id bigint PRIMARY KEY, egcs_tp_transferpaymentbudget bigint, egcs_tp_transferpaymentstream bigint, _deleted boolean DEFAULT false);
@@ -18,7 +18,7 @@ export const createNativeFundingSourceFixture = async (db: Kysely<Record<string,
     INSERT INTO "Agency_Fiscal_Year" VALUES (1,2026,'2026–2027',false);
     INSERT INTO "Funding_Case_Agreement_Budget_Version" VALUES (1,1,true,false);
     INSERT INTO "Funding_Case_Agreement_Budget_Fiscal_Year" VALUES (10,NULL,1,1,1,false);
-    INSERT INTO "Funding_Case_Agreement_Budget_Line_Item" VALUES (101,10,125.55,'cad',false);
+    INSERT INTO "Funding_Case_Agreement_Budget_Line_Item" VALUES (101,10,12555,'cad',false);
     INSERT INTO "Transfer_Payment_Stream" VALUES (2,1,false);
     INSERT INTO "Transfer_Payment_Fiscal_Year_Budget" VALUES (201,1,1,'cad',false),(202,1,1,'usd',false);
     INSERT INTO "Transfer_Payment_Stream_Budget" VALUES (301,201,2,false),(302,202,2,false);

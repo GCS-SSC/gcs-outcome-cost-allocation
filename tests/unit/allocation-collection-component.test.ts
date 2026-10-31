@@ -1,3 +1,4 @@
+import { parseCurrencyMoney } from '@gcs-ssc/extensions/money'
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
@@ -25,13 +26,13 @@ const LinkButton = defineComponent({
 const version = { id: '1', agreementId: 'agreement-1', versionNumber: 1, status: 'draft', createdAt: '2026-10-01T00:00:00Z' }
 const response = {
   currency: 'cad', outcomes: [], commitmentTypes: [], streamCommitments: [], codingPaidAmounts: [], hasPendingEffects: false,
-  budgetYears: [{ id: 'year-1', fiscal_year_id: 'fy-1', fiscal_year_display: '2026-2027', program_funding: '1000.00', paid_amount: '200.00', remaining_funding: '800.00' }],
-  versions: [version, { ...version, id: '2', status: 'inactive', versionNumber: 2, fundingBasisAmount: '0.05' }],
+  budgetYears: [{ id: 'year-1', fiscal_year_id: 'fy-1', fiscal_year_display: '2026-2027', program_funding: parseCurrencyMoney("1000.00", 'cad'), paid_amount: parseCurrencyMoney("200.00", 'cad'), remaining_funding: parseCurrencyMoney("800.00", 'cad') }],
+  versions: [version, { ...version, id: '2', status: 'inactive', versionNumber: 2, fundingBasisAmount: parseCurrencyMoney("0.05", 'cad') }],
   allocations: [
     { allocationVersionId: '1', commitmentType: '1', streamCommitmentId: 'line-1', agreementBudgetFiscalYearId: 'year-1', outcomeId: 'one', allocationMethod: 'percentage', allocationValue: '50' },
     { allocationVersionId: '1', commitmentType: '1', streamCommitmentId: 'line-1', agreementBudgetFiscalYearId: 'year-1', outcomeId: 'two', allocationMethod: 'percentage', allocationValue: '50' },
-    { allocationVersionId: '2', commitmentType: '1', streamCommitmentId: 'line-1', agreementBudgetFiscalYearId: 'year-1', outcomeId: 'one', allocationMethod: 'percentage', allocationValue: '50', resolvedAmount: '0.03' },
-    { allocationVersionId: '2', commitmentType: '1', streamCommitmentId: 'line-1', agreementBudgetFiscalYearId: 'year-1', outcomeId: 'two', allocationMethod: 'percentage', allocationValue: '50', resolvedAmount: '0.02' }
+    { allocationVersionId: '2', commitmentType: '1', streamCommitmentId: 'line-1', agreementBudgetFiscalYearId: 'year-1', outcomeId: 'one', allocationMethod: 'percentage', allocationValue: '50', resolvedAmount: parseCurrencyMoney("0.03", 'cad') },
+    { allocationVersionId: '2', commitmentType: '1', streamCommitmentId: 'line-1', agreementBudgetFiscalYearId: 'year-1', outcomeId: 'two', allocationMethod: 'percentage', allocationValue: '50', resolvedAmount: parseCurrencyMoney("0.02", 'cad') }
   ]
 }
 const jsonResponse = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } })

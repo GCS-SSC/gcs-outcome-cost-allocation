@@ -1,3 +1,4 @@
+import { parseCurrencyMoney, parseDecimalText } from '@gcs-ssc/extensions/money'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const lockGcsExtensionLifecycleScopeMock = vi.hoisted(() => vi.fn(async () => undefined))
@@ -396,11 +397,12 @@ class ScriptedDb {
 }
 
 afterEach(() => {
-  for (const db of scriptedDbs) {
-    db.assertResponsesConsumed()
+  try {
+    for (const db of scriptedDbs) db.assertResponsesConsumed()
+  } finally {
+    scriptedDbs.length = 0
+    vi.clearAllMocks()
   }
-  scriptedDbs.length = 0
-  vi.clearAllMocks()
 })
 
 const asAllocationDb = (db: ScriptedDb): OutcomeCostAllocationDb =>
@@ -484,10 +486,10 @@ describe('generated payment status resurrection coverage', () => {
   ])('uses the $currency host batch decision $valid with the restored Payment excluded', async ({ valid, currency }) => {
     const db = new ScriptedDb()
     db.enqueue('select', 'Funding_Case_Agreement_Payment', [{ egcs_fc_currency: currency }])
-    db.enqueue('select', 'Funding_Case_Agreement_Payment_Line', [{ commitment_line_id: 'line-1', payment_amount: '60.00' }])
+    db.enqueue('select', 'Funding_Case_Agreement_Payment_Line', [{ commitment_line_id: 'line-1', payment_amount: '6000' }])
     const financials = { validatePaymentAllocations: vi.fn(async () => valid) }
     await expect(generatedPaymentStatusResurrectionExceedsCoverage(asAllocationDb(db), 'payment-1', financials)).resolves.toBe(!valid)
-    expect(financials.validatePaymentAllocations).toHaveBeenCalledWith({ currency, excludePaymentId: 'payment-1', allocations: [{ commitmentLineId: 'line-1', amount: '60.00' }] })
+    expect(financials.validatePaymentAllocations).toHaveBeenCalledWith({ currency, excludePaymentId: 'payment-1', allocations: [{ commitmentLineId: 'line-1', amount: parseCurrencyMoney('60', currency) }] })
     expect(db.records.filter(record => record.table === 'Funding_Case_Agreement_Payment_Line')).toHaveLength(1)
   })
   it('rejects a missing restored Payment denomination rather than asking the SDK for CAD', async () => {
@@ -522,7 +524,7 @@ const budgetYearRow = {
   id: 'year-1',
   fiscal_year_id: 'fiscal-year-1',
   fiscal_year_display: '2026-2027',
-  program_funding: '100.00',
+  program_funding: '10000',
   stream_budget_id: 'stream-budget-1'
 }
 
@@ -539,7 +541,7 @@ const allocationRow = {
   agreement_budget_fiscal_year_id: 'year-1',
   outcome_id: 'outcome-1',
   allocation_method: 'amount',
-  allocation_value: '100.0000'
+  allocation_value: '10000', currency: 'cad'
 }
 
 const allocation: OutcomeAllocationInput = {
@@ -548,7 +550,7 @@ const allocation: OutcomeAllocationInput = {
   agreementBudgetFiscalYearId: 'year-1',
   outcomeId: 'outcome-1',
   allocationMethod: 'amount',
-  allocationValue: '100.0000'
+  allocationValue: parseCurrencyMoney('100', 'cad')
 }
 
 const enqueueAllocationLabelSnapshot = (db: ScriptedDb) => {
@@ -697,7 +699,7 @@ describe('outcome allocation data reads', () => {
     ])
 
     await expect(getAgreementOutcomes(asAllocationDb(db), 'agreement-1')).resolves.toEqual([outcomeRow])
-    await expect(getAgreementBudgetYears(asAllocationDb(db), 'agreement-1', 'stream-1')).resolves.toEqual([{ ...budgetYearRow, currency: 'cad' }])
+    await expect(getAgreementBudgetYears(asAllocationDb(db), 'agreement-1', 'stream-1')).resolves.toEqual([{ ...budgetYearRow, program_funding: parseCurrencyMoney('100', 'cad'), currency: 'cad' }])
     await expect(getStreamCommitmentLines(asAllocationDb(db), 'stream-1')).resolves.toEqual([{
       id: 'stream-commitment-1',
       stream_budget_id: 'stream-budget-1',
@@ -913,7 +915,7 @@ describe('outcome allocation data reads', () => {
       asAllocationDb(db),
       'agreement-1',
       'stream-1'
-    )).rejects.toThrow('Database money aggregate must be canonical scale-two text.')
+    )).rejects.toThrow('Money amount must be canonical signed integer text in minor units.')
   })
 
   it('normalizes allocation versions and nullable timestamps', async () => {
@@ -925,7 +927,7 @@ describe('outcome allocation data reads', () => {
       version_number: '2',
       status: 'active',
       completed_at: new Date('2026-02-03T04:05:06.000Z'),
-      funding_basis_amount: '333.33'
+      funding_basis_amount: '33333'
     }
     db.enqueue('select', 'extensions.gcs_outcome_cost_allocation_versions', [
       versionRow,
@@ -952,7 +954,7 @@ describe('outcome allocation data reads', () => {
         status: 'active',
         createdAt: '2026-01-02T03:04:05.000Z',
         completedAt: '2026-02-03T04:05:06.000Z',
-        fundingBasisAmount: '333.33'
+        fundingBasisAmount: parseCurrencyMoney('333.33', 'cad')
       }
     ])
     await expect(getAllocationVersion(asAllocationDb(db), 'agreement-1', '2')).resolves.toMatchObject({
@@ -994,13 +996,12 @@ describe('outcome allocation data reads', () => {
     await expect(getSavedAllocations(asAllocationDb(db), 'agreement-1', 'version-1')).resolves.toEqual([
       {
         allocationVersionId: 'version-1',
-        currency: 'cad',
         commitmentType: '1',
         streamCommitmentId: 'stream-commitment-1',
         agreementBudgetFiscalYearId: 'year-1',
         outcomeId: 'outcome-1',
         allocationMethod: 'amount',
-        allocationValue: '100.0000',
+        allocationValue: parseCurrencyMoney('100', 'cad'),
         outcomeLabelEn: 'Recorded outcome',
         outcomeLabelFr: 'Résultat enregistré',
         commitmentLabelEn: 'GL 5000 - Recorded commitment',
@@ -1009,13 +1010,12 @@ describe('outcome allocation data reads', () => {
       },
       {
         allocationVersionId: '2',
-        currency: 'cad',
         commitmentType: 'unsupported',
         streamCommitmentId: '5',
         agreementBudgetFiscalYearId: '3',
         outcomeId: '4',
         allocationMethod: 'percentage',
-        allocationValue: '25.0000'
+        allocationValue: parseDecimalText('25')
       }
     ])
     await expect(getSavedAllocations(asAllocationDb(db), 'agreement-1')).resolves.toEqual([])
@@ -1854,7 +1854,9 @@ describe('outcome allocation version lifecycle', () => {
     expect(db.records.filter(record => record.table === 'Transfer_Payment_Stream')).toHaveLength(2)
     expect(db.records.filter(record =>
       record.table === 'Funding_Case_Agreement_Profile'
-    )).toHaveLength(7)
+      && !record.selections.flat().includes('egcs_fc_currency')
+      && !record.selections.flat().includes('Funding_Case_Agreement_Profile.id')
+    )).toHaveLength(6)
     expect(db.committedWrites).toEqual(expect.arrayContaining([
       expect.objectContaining({
         operation: 'insert',
@@ -1945,7 +1947,7 @@ describe('outcome allocation saves and validation', () => {
         agreementBudgetFiscalYearId: 'year-1',
         outcomeId: 'outcome-1',
         allocationMethod: 'amount',
-        allocationValue: '100.0000'
+        allocationValue: parseCurrencyMoney('100', 'cad')
       }]
     )).resolves.toBeUndefined()
 

@@ -40,12 +40,14 @@ interface OutcomeItem {
 interface StreamBudgetItem {
   id: string
   egcs_tp_fiscalyear: string
+  egcs_tp_currency: string
   fiscal_year_display: string
 }
 
 interface StreamCommitmentItem {
   id: string
   egcs_ay_fiscalyear: string
+  egcs_ay_currency: string
   egcs_ay_accountingdimensions: Array<{ label_en: string, label_fr: string, value: string }>
   fiscal_year_display: string
 }
@@ -162,9 +164,9 @@ const mappingColumns = computed(() => [
   }
 ])
 
-const getCommitmentLineLabel = (commitment: StreamCommitmentItem) => commitment.egcs_ay_accountingdimensions
+const getCommitmentLineLabel = (commitment: StreamCommitmentItem) => `${commitment.egcs_ay_accountingdimensions
   .map(dimension => `${isFrench.value ? dimension.label_fr : dimension.label_en}: ${dimension.value}`)
-  .join(' · ')
+  .join(' · ')} · ${commitment.egcs_ay_currency.toUpperCase()}`
 
 const getCommitmentTypeLabel = (typeId: string) => {
   const type = commitmentTypes.value.find(item => String(item.id) === typeId)
@@ -180,11 +182,14 @@ const getOutcomeName = (outcomeId: string) => {
   return outcome ? outcomeLabel(outcome) : outcomeId
 }
 
-const getBudgetDisplay = (streamBudgetId: string) =>
-  budgets.value.find((budget: StreamBudgetItem) => String(budget.id) === streamBudgetId)?.fiscal_year_display ?? streamBudgetId
+const getBudgetDisplay = (streamBudgetId: string) => {
+  const budget = budgets.value.find((item: StreamBudgetItem) => String(item.id) === streamBudgetId)
+  return budget ? `${budget.fiscal_year_display} · ${budget.egcs_tp_currency.toUpperCase()}` : streamBudgetId
+}
 
 const getStreamBudgetIdForChart = (commitment: StreamCommitmentItem) => budgets.value
-  .find(budget => String(budget.egcs_tp_fiscalyear) === String(commitment.egcs_ay_fiscalyear))?.id
+  .find(budget => String(budget.egcs_tp_fiscalyear) === String(commitment.egcs_ay_fiscalyear)
+    && budget.egcs_tp_currency === commitment.egcs_ay_currency)?.id
 
 const associationRows = computed<StreamOutcomeAssociationTableRow[]>(() => localConfig.value.mappings.map(mapping => {
   const commitment = findCommitment(mapping.streamCommitmentId)
