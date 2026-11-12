@@ -477,17 +477,17 @@ const recommendationResponses = (outcome: 'recommended' | 'not_recommended', rev
   responses: [{ questionKey: 'result', value: outcome === 'recommended' ? 'recommended' : 'not-recommended' }]
 })
 
-const currentRecommendationRevision = async (page: Page, entityId: string): Promise<number> => {
+const currentRecommendation = async (page: Page, entityId: string) => {
   const runtime = await readQualifiedWorkflow(page, entityId)
   const recommendation = runtime.recommendations.find(item => item.runtimeState === 'active')
   expect(recommendation).toBeTruthy()
-  return recommendation!.egcs_cn_revision
+  return recommendation!
 }
 
 const recommendationRoute = (
-  entityId: string,
+  recommendationId: string,
   submit = false
-) => `/api/workflows/recommendation${submit ? '/submit' : ''}?entityType=${encodeURIComponent(ALLOCATION_VERSION_ENTITY_TYPE)}&entityId=${entityId}&purpose=standard`
+) => `/api/recommendations/${recommendationId}?submit=${submit}`
 
 const deleteDraftVersion = async (
   page: Page,
@@ -540,9 +540,10 @@ test('saves and submits qualified standard Workflow Recommendations across termi
     response.url().endsWith('/api/workflows/start') && response.request().method() === 'POST')
   await page.getByRole('button', { name: 'Start Workflow' }).click()
   expect((await startResponse).status()).toBe(200)
+  const positiveRecommendation = await currentRecommendation(page, positiveVersionId)
   await page.getByRole('radio', { name: 'Recommended', exact: true }).check()
   const saveResponse = page.waitForResponse(response =>
-    response.url().includes('/api/workflows/recommendation?') && response.request().method() === 'PUT')
+    response.url().endsWith(recommendationRoute(positiveRecommendation.id)) && response.request().method() === 'PUT')
   await page.getByRole('button', { name: 'Submit recommendation' }).locator('..')
     .getByRole('button', { name: 'Save', exact: true }).click()
   const savedRecommendation = await saveResponse
@@ -552,14 +553,14 @@ test('saves and submits qualified standard Workflow Recommendations across termi
   await expect(page).toHaveURL(allocationDetailPath(agreement.agreementId, positiveVersionId, 'workflows'))
   await expect(page.getByRole('radio', { name: 'Recommended', exact: true })).toBeChecked()
   const submitResponse = page.waitForResponse(response =>
-    response.url().includes('/api/workflows/recommendation/submit?') && response.request().method() === 'POST')
+    response.url().endsWith(recommendationRoute(positiveRecommendation.id, true)) && response.request().method() === 'PUT')
   await page.getByRole('button', { name: 'Submit recommendation' }).click()
   expect((await submitResponse).status()).toBe(200)
   await expect(page.getByText('Succeeded', { exact: true }).first()).toBeVisible()
   await page.reload()
   await expect(page.getByText('Succeeded', { exact: true }).first()).toBeVisible()
-  const duplicateAfterTerminal = await page.request.post(
-    recommendationRoute(positiveVersionId, true),
+  const duplicateAfterTerminal = await page.request.put(
+    recommendationRoute(positiveRecommendation.id, true),
     { data: recommendationResponses('recommended', 1) }
   )
   expect([403, 404, 409]).toContain(duplicateAfterTerminal.status())
@@ -569,8 +570,9 @@ test('saves and submits qualified standard Workflow Recommendations across termi
     await startQualifiedWorkflow(page, negativeVersionId, topology.workflowIds.direct),
     'Start qualified negative Workflow'
   )
-  await expectOk(await page.request.post(recommendationRoute(negativeVersionId, true), {
-    data: recommendationResponses('not_recommended', await currentRecommendationRevision(page, negativeVersionId))
+  const negativeRecommendation = await currentRecommendation(page, negativeVersionId)
+  await expectOk(await page.request.put(recommendationRoute(negativeRecommendation.id, true), {
+    data: recommendationResponses('not_recommended', negativeRecommendation.egcs_cn_revision)
   }), 'Submit qualified negative Recommendation')
   expect((await readQualifiedWorkflow(page, negativeVersionId)).current?.runtimeState).toBe('unsuccessful')
   await openAllocationVersion(page, agreement.agreementId, negativeVersionId, 'workflows')
@@ -610,10 +612,10 @@ test('saves and submits qualified standard Workflow Recommendations across termi
     await page.request.delete(`${rosterBase}/${rootAssignment!.user_id}`),
     'Remove current qualified Recommendation actor'
   )
-  expect((await page.request.put(recommendationRoute(unassignedVersionId), {
+  expect((await page.request.put(recommendationRoute(unassignedRecommendation!.id), {
     data: recommendationResponses('recommended', 1)
   })).status()).toBe(403)
-  expect((await page.request.post(recommendationRoute(unassignedVersionId, true), {
+  expect((await page.request.put(recommendationRoute(unassignedRecommendation!.id, true), {
     data: recommendationResponses('recommended', 1)
   })).status()).toBe(403)
   await expectOk(await page.request.post(rosterBase, {
@@ -639,12 +641,13 @@ test('saves and submits qualified standard Workflow Recommendations across termi
     await startQualifiedWorkflow(page, duplicateVersionId, topology.workflowIds.direct),
     'Start duplicate qualified Recommendation Workflow'
   )
+  const duplicateRecommendation = await currentRecommendation(page, duplicateVersionId)
   const duplicateResponses = await Promise.all([
-    page.request.post(recommendationRoute(duplicateVersionId, true), {
-      data: recommendationResponses('recommended', 1)
+    page.request.put(recommendationRoute(duplicateRecommendation.id, true), {
+      data: recommendationResponses('recommended', duplicateRecommendation.egcs_cn_revision)
     }),
-    page.request.post(recommendationRoute(duplicateVersionId, true), {
-      data: recommendationResponses('recommended', 1)
+    page.request.put(recommendationRoute(duplicateRecommendation.id, true), {
+      data: recommendationResponses('recommended', duplicateRecommendation.egcs_cn_revision)
     })
   ])
   expect(duplicateResponses.filter(response => response.ok())).toHaveLength(1)
@@ -656,8 +659,9 @@ test('saves and submits qualified standard Workflow Recommendations across termi
     await startQualifiedWorkflow(page, cancelledVersionId, topology.workflowIds.direct),
     'Start qualified cancellation Workflow'
   )
-  await expectOk(await page.request.put(recommendationRoute(cancelledVersionId), {
-    data: recommendationResponses('recommended', await currentRecommendationRevision(page, cancelledVersionId))
+  const cancelledRecommendation = await currentRecommendation(page, cancelledVersionId)
+  await expectOk(await page.request.put(recommendationRoute(cancelledRecommendation.id), {
+    data: recommendationResponses('recommended', cancelledRecommendation.egcs_cn_revision)
   }), 'Save qualified Recommendation before cancellation')
   const cancellationRuntime = await readQualifiedWorkflow(page, cancelledVersionId)
   await expectOk(await page.request.post('/api/workflows/cancel', { data: {
@@ -666,7 +670,7 @@ test('saves and submits qualified standard Workflow Recommendations across termi
     purpose: 'standard',
     runtimeId: cancellationRuntime.current!.runtimeId
   } }), 'Cancel qualified Recommendation Workflow')
-  const staleSubmit = await page.request.post(recommendationRoute(cancelledVersionId, true), {
+  const staleSubmit = await page.request.put(recommendationRoute(cancelledRecommendation.id, true), {
     data: recommendationResponses('recommended', 1)
   })
   expect([403, 404, 409]).toContain(staleSubmit.status())
@@ -687,8 +691,9 @@ test('saves and submits qualified standard Workflow Recommendations across termi
   await page.getByRole('button', { name: /Flux de repartition qualifie avec approbation imbriquee/ }).click()
   await page.getByRole('button', { name: 'Démarrer le processus' }).click()
   await page.getByRole('radio', { name: 'Recommandé', exact: true }).check()
+  const nestedActiveRecommendation = await currentRecommendation(page, nestedVersionId)
   const nestedSubmitResponse = page.waitForResponse(response =>
-    response.url().includes('/api/workflows/recommendation/submit?') && response.request().method() === 'POST')
+    response.url().endsWith(recommendationRoute(nestedActiveRecommendation.id, true)) && response.request().method() === 'PUT')
   await page.getByRole('button', { name: 'Soumettre la recommandation' }).click()
   expect((await nestedSubmitResponse).status()).toBe(200)
   const nestedRuntime = await readQualifiedWorkflow(page, nestedVersionId)
@@ -703,7 +708,7 @@ test('saves and submits qualified standard Workflow Recommendations across termi
   await expect(page.getByText('Approuvé', { exact: true }).first()).toBeVisible()
   expect((await readQualifiedWorkflow(page, nestedVersionId)).current?.runtimeState).toBe('approved')
 
-  const missing = await page.request.post(
+  const missing = await page.request.put(
     recommendationRoute('9223372036854775807', true),
     { data: recommendationResponses('recommended', 1) }
   )

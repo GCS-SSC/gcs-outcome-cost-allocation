@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, ref, watch, type Ref } from 'vue'
+import { computed, onScopeDispose, ref, shallowRef, watch, type Ref } from 'vue'
 import type { GcsExtensionJsonConfig } from '@gcs-ssc/extensions'
 import { ExtensionAlert, ExtensionButton, ExtensionFormField, ExtensionInput, ExtensionSelectMenu, ExtensionSaveButton, ExtensionModal, ExtensionResourceLayout, useExtensionI18n, useHostApi } from '@gcs-ssc/extensions/ui'
 import { AgencyCodingSchema, emptyAgencyCodingConfig, type AgencyCodingConfig } from '../shared/agency-coding'
 import { AgencyCodingConfigMessages } from '../i18n/AgencyCodingConfig'
+import { useAllocationRequest } from '../composables/useAllocationRequest'
 
 interface Account {
   id: string
@@ -20,13 +21,18 @@ const { t, locale } = useExtensionI18n(AgencyCodingConfigMessages)
 const api = useHostApi()
 const copy = (value: GcsExtensionJsonConfig | AgencyCodingConfig) => JSON.parse(JSON.stringify({ ...emptyAgencyCodingConfig(), ...value })) as AgencyCodingConfig
 const local: Ref<AgencyCodingConfig> = ref(copy(config))
-const accounts: Ref<Account[]> = ref([])
-const fiscalYears: Ref<FiscalYear[]> = ref([])
-const lookupError = ref(false)
-const loading = ref(false)
-const saving = ref(false)
-const saveError = ref('')
-const saved = ref(false)
+const lookup = useAllocationRequest<{ config: AgencyCodingConfig; accounts: Account[]; fiscalYears: FiscalYear[] }>()
+const accounts = computed(() => lookup.data.value?.accounts ?? [])
+const fiscalYears = computed(() => lookup.data.value?.fiscalYears ?? [])
+const lookupError = computed(() => lookup.status.value === 'error')
+const loading = computed(() => lookup.status.value === 'pending')
+type SaveRequest = { kind: 'pending'; agencyId: string; extensionKey: string }
+type SaveState = { kind: 'idle' | 'success' | 'disposed' } | SaveRequest | { kind: 'error'; message: string }
+const saveState = shallowRef<SaveState>({ kind: 'idle' })
+const saving = computed(() => saveState.value.kind === 'pending')
+const saveError = computed(() => saveState.value.kind === 'error' ? saveState.value.message : '')
+const saved = computed(() => saveState.value.kind === 'success')
+const clearSaveFeedback = () => { if (!saving.value && saveState.value.kind !== 'disposed') saveState.value = { kind: 'idle' } }
 const kind = computed(() => section === 'credit-memos' ? 'creditMemoRules' : 'receivableSets')
 const search = ref('')
 const pagination = ref({ pageIndex: 0, pageSize: 10 })
@@ -48,8 +54,7 @@ const openEditor = (index?: number) => {
   editor.value = { config: draft, index: index ?? draft[kind.value].length - 1, isNew: index === undefined }
   selectedCreditMemoAccounts.value = kind.value === 'creditMemoRules' ? draft.creditMemoRules[editor.value.index]!.lines.map(line => line.codingLineId) : []
   attempted.value = false
-  saveError.value = ''
-  saved.value = false
+  clearSaveFeedback()
 }
 const applyEditor = async () => {
   attempted.value = true
@@ -120,76 +125,64 @@ watch(kind, () => { pagination.value.pageIndex = 0; closeEditor(); removing.valu
 watch(() => filteredRows.value.length, count => { pagination.value.pageIndex = Math.min(pagination.value.pageIndex, Math.max(0, Math.ceil(count / pagination.value.pageSize) - 1)) })
 watch(() => readOnly || disabled || loading.value || lookupError.value || !agencyId, value => { if (value) { closeEditor(); removing.value = null } })
 
-let lookupGeneration = 0
 const refresh = async () => {
-  const generation = ++lookupGeneration
-  const contextAgencyId = agencyId
-  const contextExtensionKey = extensionKey
+  if (saveState.value.kind === 'disposed') return
+  saveState.value = { kind: 'idle' }
+  lookup.invalidate()
   closeEditor()
   removing.value = null
   search.value = ''
   pagination.value.pageIndex = 0
-  accounts.value = []
-  fiscalYears.value = []
   local.value = copy(config)
-  saved.value = false
-  saveError.value = ''
-  lookupError.value = false
-  loading.value = false
-  if (!agencyId) return
-  loading.value = true
-  try {
-    const registry = await api.get<{ items: Array<{ extension: { key: string }; config: GcsExtensionJsonConfig }> }>(`/api/extensions/agency/${contextAgencyId}`)
-    if (generation !== lookupGeneration) return
+  const contextAgencyId = agencyId
+  const contextExtensionKey = extensionKey
+  if (!contextAgencyId) return
+  const accepted = await lookup.run(async signal => {
+    const registry = await api.get<{ items: Array<{ extension: { key: string }; config: GcsExtensionJsonConfig }> }>(`/api/extensions/agency/${contextAgencyId}`, { signal })
+    signal.throwIfAborted()
     const entry = registry.items.find(item => item.extension.key === contextExtensionKey)
     if (!entry) throw new Error('Missing extension configuration')
-    if (generation === lookupGeneration) local.value = copy(entry.config)
     const loadedYears: FiscalYear[] = []
     for (let page = 1; ; page += 1) {
-      const response = await api.get<{ items: FiscalYear[]; total: number }>(`/api/agency/${contextAgencyId}/fiscal-years?page=${page}&limit=100`)
+      const response = await api.get<{ items: FiscalYear[]; total: number }>(`/api/agency/${contextAgencyId}/fiscal-years?page=${page}&limit=100`, { signal })
+      signal.throwIfAborted()
       loadedYears.push(...response.items)
       if (response.items.length < 100 || page * 100 >= response.total) break
     }
-    if (generation === lookupGeneration) fiscalYears.value = loadedYears
     const items: Account[] = []
     for (const kind of ['account_receivable', 'credit_memo', 'commitment']) {
       let page = 1
       while (true) {
-        const response = await api.get<{ items: Account[]; total: number }>(`/api/agency/${contextAgencyId}/chart-of-accounts?kind=${kind}&page=${page}&limit=100`)
+        const response = await api.get<{ items: Account[]; total: number }>(`/api/agency/${contextAgencyId}/chart-of-accounts?kind=${kind}&page=${page}&limit=100`, { signal })
+        signal.throwIfAborted()
         items.push(...response.items)
         if (response.items.length < 100 || page * 100 >= response.total) break
         page += 1
       }
     }
-    if (generation === lookupGeneration) accounts.value = items
-  } catch {
-    if (generation === lookupGeneration) lookupError.value = true
-  } finally {
-    if (generation === lookupGeneration) loading.value = false
-  }
+    return { config: copy(entry.config), accounts: items, fiscalYears: loadedYears }
+  })
+  if (accepted && contextAgencyId === agencyId && contextExtensionKey === extensionKey && lookup.data.value) local.value = copy(lookup.data.value.config)
 }
 const persist = async (candidate: AgencyCodingConfig) => {
-  if (locked.value || !AgencyCodingSchema.safeParse(candidate).success) return false
-  const generation = lookupGeneration
-  saving.value = true
-  saveError.value = ''
-  saved.value = false
+  if (locked.value || !agencyId || saveState.value.kind === 'disposed' || !AgencyCodingSchema.safeParse(candidate).success) return false
+  const request: SaveRequest = { kind: 'pending', agencyId, extensionKey }
+  saveState.value = request
   try {
-    await api.patch(`/api/extensions/agency/${agencyId}`, {
-      extensionKey, enabled: true, config: JSON.parse(JSON.stringify(candidate)) as GcsExtensionJsonConfig
+    await api.patch(`/api/extensions/agency/${request.agencyId}`, {
+      extensionKey: request.extensionKey, enabled: true, config: JSON.parse(JSON.stringify(candidate)) as GcsExtensionJsonConfig
     })
-    if (generation !== lookupGeneration) return false
+    if (saveState.value !== request) return false
     local.value = copy(candidate)
-    saved.value = true
+    saveState.value = { kind: 'success' }
     return true
   } catch (error) {
-    if (generation === lookupGeneration) saveError.value = error instanceof Error ? error.message : t('saveError')
+    if (saveState.value === request) saveState.value = { kind: 'error', message: error instanceof Error ? error.message : t('saveError') }
     return false
-  } finally {
-    if (generation === lookupGeneration) saving.value = false
   }
 }
-watch(() => [agencyId, extensionKey], () => { saving.value = false; void refresh() }, { immediate: true })
+watch(() => [agencyId, extensionKey], () => { void refresh() }, { immediate: true, flush: 'sync' })
+onScopeDispose(() => { saveState.value = { kind: 'disposed' } })
 </script>
 
 <template>
@@ -219,7 +212,7 @@ watch(() => [agencyId, extensionKey], () => { saving.value = false; void refresh
       <template #actions-cell="{ row }">
         <div v-if="!readOnly" class="flex justify-end gap-1">
           <ExtensionButton icon="i-lucide-pencil" color="neutral" variant="ghost" :aria-label="`${t('edit')}: ${row.original.label}`" :disabled="locked" @click="openEditor(row.original.index)" />
-          <ExtensionButton icon="i-lucide-trash-2" color="error" variant="ghost" :aria-label="`${t('delete')}: ${row.original.label}`" :disabled="locked" @click="saveError = ''; removing = row.original.key" />
+          <ExtensionButton icon="i-lucide-trash-2" color="error" variant="ghost" :aria-label="`${t('delete')}: ${row.original.label}`" :disabled="locked" @click="clearSaveFeedback(); removing = row.original.key" />
         </div>
       </template>
       <template #empty><p class="py-8 text-center text-muted">{{ t(search ? 'noMatch' : kind === 'creditMemoRules' ? 'emptyExceptions' : 'empty') }}</p></template>

@@ -139,6 +139,7 @@ const WorkflowSection = defineComponent({
     entityType: { type: String, required: true },
     entityId: { type: String, required: true },
     canEdit: { type: Boolean, default: true },
+    mutationRoleAllowed: { type: Boolean, required: true },
     refreshKey: { type: Number, default: 0 }
   },
   emits: ['changed'],
@@ -166,7 +167,7 @@ const DetailWorkspace = defineComponent({
   ])
 })
 const CompletionPanel = defineComponent({
-  props: ['entityType', 'entityId', 'canComplete', 'canWorkWorkflow', 'labels', 'refreshKey'],
+  props: ['entityType', 'entityId', 'canComplete', 'canWorkWorkflow', 'mutationRoleAllowed', 'labels', 'refreshKey'],
   emits: ['changed'],
   setup: props => () => h('div', {
     'data-control': 'approval-submission-workflow',
@@ -282,7 +283,8 @@ const mountTab = async (
   permissions = { canUpdate: true, canDelete: true, canWork: true },
   completionRequest?: () => Promise<Response>,
   localeOverride = ref(initialLocale),
-  toasts: Record<string, unknown>[] = []
+  toasts: Record<string, unknown>[] = [],
+  confirmRequest: () => Promise<boolean> = async () => true
 ) => {
   vi.stubGlobal('fetch', (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (String(input).includes('/api/completions/runtime')) {
@@ -296,6 +298,7 @@ const mountTab = async (
   vi.stubGlobal('watch', watch)
   const runtime = installExtensionTestUiRuntime()
   runtime.composables.useToast = () => ({ add: notification => { toasts.push(notification) } })
+  runtime.composables.useConfirmDialog = () => confirmRequest
   const i18n = runtime.composables.useI18n()
   runtime.composables.useI18n = () => ({
     ...i18n,
@@ -314,11 +317,17 @@ const mountTab = async (
   runtime.composables.useUrlTabState = options => ({ tabs: computed(() => options.tabs as never), selectedTab, selectedTabKey: selectedTab, defaultTab: ref(initialView) })
 
   const Host = defineComponent({
-    props: { recordId: { type: String, default: 'version-1' } },
+    props: {
+      recordId: { type: String, default: 'version-1' },
+      canUpdate: { type: Boolean, default: permissions.canUpdate },
+      canWork: { type: Boolean, default: permissions.canWork }
+    },
     setup: props => () => h(Suspense, null, {
       default: () => h(OutcomeAllocationDetail, {
         recordId: props.recordId,
         ...permissions,
+        canUpdate: props.canUpdate,
+        canWork: props.canWork,
         navigation: { collectionHref: '/en/agreements/agreement-1?section=extension:gcs-outcome-cost-allocation:agreement:outcome-cost-allocation', recordHref: (id: string) => `/en/agreements/agreement-1/extension/gcs-outcome-cost-allocation/outcome-cost-allocation/${id}` },
         extensionKey: 'gcs-outcome-cost-allocation',
         context: {
@@ -1212,11 +1221,18 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
     const fetchMock = vi.fn(async () => jsonResponse(response))
     const wrapper = await mountTab(fetchMock as typeof fetch, config, 'en', { id: 'completion-1' }, 'completion')
     const panel = wrapper.getComponent(CompletionPanel)
-    expect(panel.props()).toMatchObject({ entityType: 'gcs-outcome-cost-allocation:allocation-version', entityId: 'version-1', canComplete: false, canWorkWorkflow: true })
+    expect(panel.props()).toMatchObject({ entityType: 'gcs-outcome-cost-allocation:allocation-version', entityId: 'version-1', canComplete: false, canWorkWorkflow: true, mutationRoleAllowed: true })
     panel.vm.$emit('changed')
     await flushPromises()
     expect(fetchMock).toHaveBeenCalledTimes(2)
     expect(panel.props('canWorkWorkflow')).toBe(true)
+    await wrapper.setProps({ canUpdate: false })
+    expect(panel.props('mutationRoleAllowed')).toBe(false)
+    expect(panel.props('canWorkWorkflow')).toBe(true)
+    await wrapper.get('[data-view="workflows"]').trigger('click')
+    expect(wrapper.getComponent(WorkflowSection).props('mutationRoleAllowed')).toBe(false)
+    await wrapper.setProps({ canUpdate: true })
+    expect(wrapper.getComponent(WorkflowSection).props('mutationRoleAllowed')).toBe(true)
     wrapper.unmount()
   })
   it.each(['en', 'fr'])('shows corrupt catalog money in the retained Agreement currency with an explicit warning (%s)', async locale => {
@@ -1238,4 +1254,227 @@ describe('AgreementOutcomeCostAllocationTab select boundaries', () => {
     wrapper.unmount()
   })
 
+})
+
+
+describe('allocation detail request ownership', () => {
+  const staleAllocationResponse = () => ({
+    ...allocationResponse,
+    streamCommitments: [],
+    versions: [allocationResponse.versions[0], {
+      ...allocationResponse.versions[0], id: 'version-2', versionNumber: 2, status: 'active'
+    }],
+    allocations: ['version-1', 'version-2'].map(allocationVersionId => ({
+      allocationVersionId,
+      commitmentType: '1',
+      streamCommitmentId: 'stream-commitment-1',
+      agreementBudgetFiscalYearId: '1',
+      outcomeId: 'outcome-1',
+      allocationMethod: 'amount',
+      allocationValue: parseCurrencyMoney('100', 'cad')
+    }))
+  })
+
+  it.each(['replacement', 'replacement-return', 'permission', 'reopen', 'selection'])(
+    'ignores generation confirmation after %s invalidates its owner', async change => {
+      let settleConfirmation: (confirmed: boolean) => void = () => {}
+      const confirmRequest = vi.fn(() => new Promise<boolean>(resolve => { settleConfirmation = resolve }))
+      const wrapper = await mountTab(vi.fn(async () => jsonResponse(staleAllocationResponse())) as typeof fetch,
+        config, 'en', null, 'allocation', undefined, undefined, ref('en'), [], confirmRequest)
+
+      await findButton(wrapper, 'Generate rows').trigger('click')
+      await findButton(wrapper, 'Generate rows', 'last').trigger('click')
+      expect(confirmRequest).toHaveBeenCalledTimes(1)
+      await findButton(wrapper, 'Generate rows', 'last').trigger('click')
+      expect(confirmRequest).toHaveBeenCalledTimes(1)
+
+      if (change === 'replacement' || change === 'replacement-return') {
+        await wrapper.setProps({ recordId: 'version-2' })
+        if (change === 'replacement-return') await wrapper.setProps({ recordId: 'version-1' })
+      } else if (change === 'permission') {
+        await wrapper.setProps({ canWork: false })
+      } else if (change === 'selection') {
+        wrapper.getComponent(ArraySelectMenu).vm.$emit('update:modelValue', ['2'])
+      } else {
+        await wrapper.get('[data-control="generate-modal"] [data-control="dismiss-modal"]').trigger('click')
+        await findButton(wrapper, 'Generate rows').trigger('click')
+      }
+      await flushPromises()
+      const before = wrapper.get('[data-control="allocation-table"]').text()
+      expect(before).toContain('100')
+      settleConfirmation(true)
+      await flushPromises()
+      expect(wrapper.get('[data-control="allocation-table"]').text()).toBe(before)
+      if (change === 'selection' || change === 'reopen') {
+        expect(wrapper.find('[data-control="generate-modal"]').exists()).toBe(true)
+      }
+      wrapper.unmount()
+    }
+  )
+
+  it('keeps the current generation draft on cancellation and applies a subsequent confirmed plan', async () => {
+    let settleConfirmation: (confirmed: boolean) => void = () => {}
+    const confirmRequest = vi.fn(() => new Promise<boolean>(resolve => { settleConfirmation = resolve }))
+    const wrapper = await mountTab(vi.fn(async () => jsonResponse(staleAllocationResponse())) as typeof fetch,
+      config, 'en', null, 'allocation', undefined, undefined, ref('en'), [], confirmRequest)
+    await findButton(wrapper, 'Generate rows').trigger('click')
+    await findButton(wrapper, 'Generate rows', 'last').trigger('click')
+    settleConfirmation(false)
+    await flushPromises()
+    expect(wrapper.find('[data-control="generate-modal"]').exists()).toBe(true)
+    expect(wrapper.get('[data-control="allocation-table"]').text()).toContain('100')
+    await findButton(wrapper, 'Generate rows', 'last').trigger('click')
+    expect(confirmRequest).toHaveBeenCalledTimes(2)
+    settleConfirmation(true)
+    await flushPromises()
+    expect(wrapper.find('[data-control="generate-modal"]').exists()).toBe(false)
+    expect(wrapper.findAll('[data-row-index]')).toHaveLength(0)
+    wrapper.unmount()
+  })
+
+  it('does not apply a pending generation plan over freshly accepted allocation evidence', async () => {
+    let response = staleAllocationResponse()
+    let settleConfirmation: (confirmed: boolean) => void = () => {}
+    const confirmRequest = () => new Promise<boolean>(resolve => { settleConfirmation = resolve })
+    const wrapper = await mountTab(vi.fn(async () => jsonResponse(response)) as typeof fetch,
+      config, 'en', null, 'allocation', undefined, undefined, ref('en'), [], confirmRequest)
+    await findButton(wrapper, 'Generate rows').trigger('click')
+    await findButton(wrapper, 'Generate rows', 'last').trigger('click')
+    response = {
+      ...response,
+      allocations: response.allocations.map(allocation => ({
+        ...allocation, allocationValue: parseCurrencyMoney('75', 'cad')
+      }))
+    }
+    await wrapper.get('[data-view="workflows"]').trigger('click')
+    wrapper.getComponent(WorkflowSection).vm.$emit('changed')
+    await flushPromises()
+    await wrapper.get('[data-view="allocation"]').trigger('click')
+    const before = wrapper.get('[data-control="allocation-table"]').text()
+    expect(before).toContain('75')
+    settleConfirmation(true)
+    await flushPromises()
+    expect(wrapper.get('[data-control="allocation-table"]').text()).toBe(before)
+    wrapper.unmount()
+  })
+
+  it('does not refresh or report a saved previous version after selection changes', async () => {
+    let settleSave: (value: Response) => void = () => {}
+    const pendingSave = new Promise<Response>(resolve => { settleSave = resolve })
+    const response = {
+      ...allocationResponse,
+      versions: [allocationResponse.versions[0], { ...allocationResponse.versions[0], id: 'version-2', versionNumber: 2 }]
+    }
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) =>
+      init?.method === 'PUT' ? pendingSave : jsonResponse(response))
+    const toasts: Record<string, unknown>[] = []
+    const wrapper = await mountTab(fetchMock as typeof fetch, config, 'en', null, 'allocation', undefined, undefined, ref('en'), toasts)
+    await findButton(wrapper, 'Save').trigger('click')
+    await flushPromises()
+    await wrapper.setProps({ recordId: 'version-2' })
+    await flushPromises()
+    const requestsBeforeSettlement = fetchMock.mock.calls.length
+    settleSave(jsonResponse({ ok: true }))
+    await flushPromises()
+    expect(fetchMock).toHaveBeenCalledTimes(requestsBeforeSettlement)
+    expect(toasts).toHaveLength(0)
+    expect(findButton(wrapper, 'Save').attributes('loading')).not.toBe('true')
+    wrapper.unmount()
+  })
+
+  it('does not refresh or publish save feedback after the detail scope is disposed', async () => {
+    let settleSave: (value: Response) => void = () => {}
+    const pendingSave = new Promise<Response>(resolve => { settleSave = resolve })
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) =>
+      init?.method === 'PUT' ? pendingSave : jsonResponse(allocationResponse))
+    const toasts: Record<string, unknown>[] = []
+    const wrapper = await mountTab(fetchMock as typeof fetch, config, 'en', null, 'allocation', undefined, undefined, ref('en'), toasts)
+    await findButton(wrapper, 'Save').trigger('click')
+    await flushPromises()
+    wrapper.unmount()
+    const requestsBeforeSettlement = fetchMock.mock.calls.length
+    settleSave(jsonResponse({ ok: true }))
+    await flushPromises()
+    expect(fetchMock).toHaveBeenCalledTimes(requestsBeforeSettlement)
+    expect(toasts).toHaveLength(0)
+  })
+})
+
+it.each(['en', 'fr'])('retains an edited allocation across workflow metadata refresh and adopts its captured save (%s)', async locale => {
+  let response = { ...allocationResponse, allocations: [{
+    allocationVersionId: 'version-1', commitmentType: '1', streamCommitmentId: 'stream-commitment-1',
+    agreementBudgetFiscalYearId: '1', outcomeId: 'outcome-1', allocationMethod: 'amount', allocationValue: parseCurrencyMoney('25.00', 'cad')
+  }] }
+  const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    if (init?.method === 'PUT') {
+      response = { ...response, allocations: JSON.parse(String(init.body)).allocations }
+      return jsonResponse({ ok: true })
+    }
+    return jsonResponse(response)
+  })
+  const wrapper = await mountTab(fetchMock as typeof fetch, config, locale)
+  const editLabel = locale === 'fr' ? 'Modifier la répartition' : 'Edit allocation'
+  await findButton(wrapper, editLabel).trigger('click')
+  await wrapper.get('[data-control="allocation-modal"] input').setValue('70.00')
+  await wrapper.get('[data-control="allocation-modal"] form').trigger('submit')
+  const editedAmount = wrapper.get('[data-cell="amount"]').text()
+  await wrapper.get('[data-view="workflows"]').trigger('click')
+  wrapper.getComponent(WorkflowSection).vm.$emit('changed')
+  await flushPromises()
+  await wrapper.get('[data-view="allocation"]').trigger('click')
+  expect(wrapper.get('[data-cell="amount"]').text()).toBe(editedAmount)
+  await wrapper.get('[data-view="completion"]').trigger('click')
+  expect(wrapper.getComponent(CompletionPanel).props('canComplete')).toBe(false)
+  await wrapper.get('[data-view="allocation"]').trigger('click')
+  await findButton(wrapper, locale === 'fr' ? 'Enregistrer' : 'Save').trigger('click')
+  await flushPromises()
+  const savedRequest = fetchMock.mock.calls.find(([, init]) => init?.method === 'PUT')?.[1]
+  expect(JSON.parse(String(savedRequest?.body)).allocations[0].allocationValue).toEqual(parseCurrencyMoney('70', 'cad'))
+  expect(wrapper.get('[data-cell="amount"]').text()).toBe(editedAmount)
+  await wrapper.get('[data-view="completion"]').trigger('click')
+  expect(wrapper.getComponent(CompletionPanel).props('canComplete')).toBe(true)
+  wrapper.unmount()
+})
+
+it('retains an edited allocation after a workflow refresh fails and retries', async () => {
+  let unavailable = false
+  const response = { ...allocationResponse, allocations: [{
+    allocationVersionId: 'version-1', commitmentType: '1', streamCommitmentId: 'stream-commitment-1',
+    agreementBudgetFiscalYearId: '1', outcomeId: 'outcome-1', allocationMethod: 'amount', allocationValue: parseCurrencyMoney('25', 'cad')
+  }] }
+  const wrapper = await mountTab(vi.fn(async () => {
+    if (unavailable) throw new Error('offline')
+    return jsonResponse(response)
+  }) as typeof fetch)
+  await findButton(wrapper, 'Edit allocation').trigger('click')
+  await wrapper.get('[data-control="allocation-modal"] input').setValue('70.00')
+  await wrapper.get('[data-control="allocation-modal"] form').trigger('submit')
+  unavailable = true
+  await wrapper.get('[data-view="workflows"]').trigger('click')
+  wrapper.getComponent(WorkflowSection).vm.$emit('changed')
+  await flushPromises()
+  unavailable = false
+  await findButton(wrapper, 'Retry').trigger('click')
+  await flushPromises()
+  await wrapper.get('[data-view="allocation"]').trigger('click')
+  expect(wrapper.get('[data-cell="amount"]').text()).toBe('CA$70.00')
+  wrapper.unmount()
+})
+
+it('adopts immutable terminal allocation evidence over an older local draft', async () => {
+  let response = { ...allocationResponse, allocations: [{
+    allocationVersionId: 'version-1', commitmentType: '1', streamCommitmentId: 'stream-commitment-1',
+    agreementBudgetFiscalYearId: '1', outcomeId: 'outcome-1', allocationMethod: 'amount', allocationValue: parseCurrencyMoney('25', 'cad')
+  }] }
+  const wrapper = await mountTab(vi.fn(async () => jsonResponse(response)) as typeof fetch)
+  await findButton(wrapper, 'Edit allocation').trigger('click')
+  await wrapper.get('[data-control="allocation-modal"] input').setValue('70.00')
+  await wrapper.get('[data-control="allocation-modal"] form').trigger('submit')
+  response = { ...response, versions: response.versions.map(version => ({ ...version, status: 'active' })) }
+  await wrapper.get('[data-view="workflows"]').trigger('click')
+  wrapper.getComponent(WorkflowSection).vm.$emit('changed')
+  await flushPromises()
+  await wrapper.get('[data-view="allocation"]').trigger('click')
+  expect(wrapper.get('[data-cell="amount"]').text()).toBe('CA$25.00')
+  wrapper.unmount()
 })

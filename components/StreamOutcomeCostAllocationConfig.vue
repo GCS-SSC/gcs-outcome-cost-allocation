@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { StreamOutcomeCostAllocationConfigMessages } from '../i18n/StreamOutcomeCostAllocationConfig'
 
-import type { Ref } from 'vue'
+import { computed, ref, watch, type Ref } from 'vue'
+import { useAllocationRequest } from '../composables/useAllocationRequest'
 import type { GcsExtensionJsonConfig, GcsResolvedExtension } from '@gcs-ssc/extensions'
 import {
   ExtensionButton,
@@ -18,6 +19,7 @@ import {
   type CommitmentType,
   type OutcomeCostAllocationConfig,
   type StreamCommitmentMapping,
+  isCommitmentType,
   parseOutcomeCostAllocationConfig
 } from '../shared/allocation'
 import {
@@ -85,54 +87,67 @@ const lastSyncedConfigJson: Ref<string> = ref(JSON.stringify({
   mappings: localConfig.value.mappings
 }))
 const expandedRows: Ref<Record<string, boolean>> = ref({})
-const selectedAssociation: Ref<AssociationDraft | null> = ref(null)
-const isAssociationModalOpen: Ref<boolean> = ref(false)
+type AssociationEditor = { kind: 'closed' } | { kind: 'open'; draft: AssociationDraft }
+const associationEditor: Ref<AssociationEditor> = ref({ kind: 'closed' })
+const selectedAssociation = computed(() => associationEditor.value.kind === 'open' ? associationEditor.value.draft : null)
+const isAssociationModalOpen = computed({
+  get: () => associationEditor.value.kind === 'open',
+  set: (open: boolean) => { if (!open) associationEditor.value = { kind: 'closed' } }
+})
 
-const outcomesResponse: Ref<ListResponse<OutcomeItem> | null> = ref(null)
-const budgetsResponse: Ref<ListResponse<StreamBudgetItem> | null> = ref(null)
-const commitmentsResponse: Ref<ListResponse<StreamCommitmentItem> | null> = ref(null)
-const commitmentTypesResponse: Ref<ListResponse<CommitmentTypeItem> | null> = ref(null)
-const fetchList = async <T = unknown>(url: string): Promise<ListResponse<T>> => {
-  try {
-    const items: T[] = []
-    let page = 1
-    const limit = 100
-    while (true) {
-      const response = await hostApi.get<ListResponse<T>>(`${url}?page=${page}&limit=${limit}`)
-      items.push(...response.items)
-      if (response.items.length < limit || (response.total !== undefined && items.length >= response.total)) break
-      page += 1
-    }
-    return { items }
-  } catch {
-    return { items: [] }
+interface AllocationLookups {
+  outcomes: ListResponse<OutcomeItem>
+  budgets: ListResponse<StreamBudgetItem>
+  commitments: ListResponse<StreamCommitmentItem>
+  commitmentTypes: ListResponse<CommitmentTypeItem>
+}
+const lookupRequest = useAllocationRequest<AllocationLookups>()
+const fetchList = async <T = unknown>(url: string, signal: AbortSignal): Promise<ListResponse<T>> => {
+  const items: T[] = []
+  let page = 1
+  const limit = 100
+  while (true) {
+    signal.throwIfAborted()
+    const response = await hostApi.get<ListResponse<T>>(`${url}?page=${page}&limit=${limit}`, { signal })
+    signal.throwIfAborted()
+    items.push(...response.items)
+    if (response.items.length < limit || (response.total !== undefined && items.length >= response.total)) break
+    page += 1
   }
+  return { items }
 }
 const refreshLookups = async () => {
-  if (!transferPaymentId) {
+  const requestedProgramId = transferPaymentId
+  const requestedStreamId = streamId
+  if (!requestedProgramId) {
+    lookupRequest.invalidate()
     return
   }
-
-  const [outcomeItems, budgetItems, commitmentItems, commitmentTypeItems] = await Promise.all([
-    fetchList<OutcomeItem>(`/api/transfer-payments/${transferPaymentId}/outcomes`),
-    fetchList<StreamBudgetItem>(`/api/transfer-payments/${transferPaymentId}/streams/${streamId}/budgets`),
-    fetchList<StreamCommitmentItem>(`/api/transfer-payments/${transferPaymentId}/streams/${streamId}/chart-of-accounts`),
-    fetchList<CommitmentTypeItem>(`/api/transfer-payments/${transferPaymentId}/streams/${streamId}/commitment-types`)
-  ])
-  outcomesResponse.value = outcomeItems
-  budgetsResponse.value = budgetItems
-  commitmentsResponse.value = commitmentItems
-  commitmentTypesResponse.value = commitmentTypeItems
+  await lookupRequest.run(async signal => {
+    const [outcomes, budgets, commitments, commitmentTypes] = await Promise.all([
+      fetchList<OutcomeItem>(`/api/transfer-payments/${requestedProgramId}/outcomes`, signal),
+      fetchList<StreamBudgetItem>(`/api/transfer-payments/${requestedProgramId}/streams/${requestedStreamId}/budgets`, signal),
+      fetchList<StreamCommitmentItem>(`/api/transfer-payments/${requestedProgramId}/streams/${requestedStreamId}/chart-of-accounts`, signal),
+      fetchList<CommitmentTypeItem>(`/api/transfer-payments/${requestedProgramId}/streams/${requestedStreamId}/commitment-types`, signal)
+    ])
+    return { outcomes, budgets, commitments, commitmentTypes }
+  })
 }
+watch(() => [transferPaymentId, streamId, agencyId], () => {
+  associationEditor.value = { kind: 'closed' }
+  lookupRequest.invalidate()
+  void refreshLookups()
+}, { flush: 'sync' })
 await refreshLookups()
 
-const outcomes = computed<OutcomeItem[]>(() => outcomesResponse.value?.items ?? [])
-const budgets = computed<StreamBudgetItem[]>(() => budgetsResponse.value?.items ?? [])
-const commitments = computed<StreamCommitmentItem[]>(() => commitmentsResponse.value?.items ?? [])
-const commitmentTypes = computed<CommitmentTypeItem[]>(() => commitmentTypesResponse.value?.items ?? [])
+const outcomes = computed<OutcomeItem[]>(() => lookupRequest.data.value?.outcomes.items ?? [])
+const budgets = computed<StreamBudgetItem[]>(() => lookupRequest.data.value?.budgets.items ?? [])
+const commitments = computed<StreamCommitmentItem[]>(() => lookupRequest.data.value?.commitments.items ?? [])
+const commitmentTypes = computed<CommitmentTypeItem[]>(() => lookupRequest.data.value?.commitmentTypes.items ?? [])
 const isFrench = computed(() => locale.value === 'fr')
 
-const commitmentTypeOptions = computed(() => commitmentTypes.value.map(type => ({
+const availableCommitmentTypes = computed(() => commitmentTypes.value.filter(type => isCommitmentType(String(type.id))))
+const commitmentTypeOptions = computed(() => availableCommitmentTypes.value.map(type => ({
   label: isFrench.value ? type.egcs_ay_name_fr : type.egcs_ay_name_en,
   value: String(type.id)
 })))
@@ -191,6 +206,11 @@ const getStreamBudgetIdForChart = (commitment: StreamCommitmentItem) => budgets.
   .find(budget => String(budget.egcs_tp_fiscalyear) === String(commitment.egcs_ay_fiscalyear)
     && budget.egcs_tp_currency === commitment.egcs_ay_currency)?.id
 
+const canCreateAssociation = computed(() => lookupRequest.status.value === 'success'
+  && outcomes.value.length > 0
+  && availableCommitmentTypes.value.length > 0
+  && commitments.value.some(commitment => getStreamBudgetIdForChart(commitment)))
+
 const associationRows = computed<StreamOutcomeAssociationTableRow[]>(() => localConfig.value.mappings.map(mapping => {
   const commitment = findCommitment(mapping.streamCommitmentId)
   const commitmentTypeLabel = getCommitmentTypeLabel(mapping.commitmentType)
@@ -241,36 +261,42 @@ const findCommitment = (streamCommitmentId: string) =>
 const syncEnabledCommitmentTypes = (mappings: StreamCommitmentMapping[]) =>
   [...new Set(mappings.map(mapping => mapping.commitmentType))]
 
-const openCreateAssociation = (streamCommitmentId = '') => {
-  selectedAssociation.value = {
-    streamCommitmentId: streamCommitmentId || String(commitments.value[0]?.id ?? ''),
-    commitmentType: String(commitmentTypes.value[0]?.id ?? ''),
-    outcomeId: String(outcomes.value[0]?.id ?? '')
+const selectedAssociationMapping = computed<StreamCommitmentMapping | null>(() => {
+  const draft = selectedAssociation.value
+  if (lookupRequest.status.value !== 'success' || !draft
+    || !availableCommitmentTypes.value.some(type => String(type.id) === draft.commitmentType)
+    || !outcomes.value.some(outcome => String(outcome.id) === draft.outcomeId)) return null
+  const commitment = findCommitment(draft.streamCommitmentId)
+  const streamBudgetId = commitment ? getStreamBudgetIdForChart(commitment) : undefined
+  if (!commitment || !streamBudgetId) return null
+  return {
+    commitmentType: draft.commitmentType,
+    outcomeId: draft.outcomeId,
+    streamBudgetId: String(streamBudgetId),
+    streamCommitmentId: String(commitment.id)
   }
-  isAssociationModalOpen.value = true
+})
+
+const openCreateAssociation = (streamCommitmentId = '') => {
+  if (!canCreateAssociation.value) return
+  const commitment = commitments.value.find(item => String(item.id) === streamCommitmentId && getStreamBudgetIdForChart(item))
+    ?? commitments.value.find(item => getStreamBudgetIdForChart(item))
+  associationEditor.value = {
+    kind: 'open',
+    draft: {
+      streamCommitmentId: String(commitment?.id ?? ''),
+      commitmentType: String(availableCommitmentTypes.value[0]?.id ?? ''),
+      outcomeId: String(outcomes.value[0]?.id ?? '')
+    }
+  }
 }
 
 /**
  * Upserts the selected outcome mapping from its commitment line and recomputes enabled commitment types.
  */
 const saveAssociation = () => {
-  if (!selectedAssociation.value) {
-    return
-  }
-
-  const draft = selectedAssociation.value
-  const commitment = findCommitment(draft.streamCommitmentId)
-  const streamBudgetId = commitment ? getStreamBudgetIdForChart(commitment) : undefined
-  if (!commitment || !streamBudgetId || !draft.outcomeId) {
-    return
-  }
-
-  const nextMapping: StreamCommitmentMapping = {
-    commitmentType: draft.commitmentType,
-    outcomeId: draft.outcomeId,
-    streamBudgetId: String(streamBudgetId),
-    streamCommitmentId: String(commitment.id)
-  }
+  const nextMapping = selectedAssociationMapping.value
+  if (!nextMapping) return
   const mappings = [
     ...localConfig.value.mappings.filter(mapping =>
       mapping.streamCommitmentId !== nextMapping.streamCommitmentId
@@ -284,8 +310,7 @@ const saveAssociation = () => {
     enabledCommitmentTypes: syncEnabledCommitmentTypes(mappings),
     mappings
   }
-  isAssociationModalOpen.value = false
-  selectedAssociation.value = null
+  associationEditor.value = { kind: 'closed' }
 }
 
 const removeAssociation = (association: StreamCommitmentMapping) => {
@@ -345,7 +370,7 @@ watch(config, value => {
         :label="tLocal('addAssociation')"
         color="primary"
         class="cursor-default"
-        :disabled="outcomes.length === 0 || commitments.length === 0"
+        :disabled="!canCreateAssociation"
         @click="openCreateAssociation()" />
     </div>
 
@@ -353,7 +378,14 @@ watch(config, value => {
       {{ tLocal('noContext') }}
     </p>
 
-    <p v-if="outcomes.length === 0 || budgets.length === 0 || commitments.length === 0" class="text-sm text-zinc-500">
+    <p v-if="lookupRequest.status.value === 'pending'" role="status" class="text-sm text-muted">
+      {{ tLocal('loading') }}
+    </p>
+    <div v-else-if="lookupRequest.status.value === 'error'" role="alert" class="space-y-3">
+      <p>{{ tLocal('lookupError') }}</p>
+      <ExtensionButton :label="tLocal('retry')" @click="refreshLookups" />
+    </div>
+    <p v-else-if="lookupRequest.status.value === 'success' && !canCreateAssociation" class="text-sm text-zinc-500">
       {{ tLocal('noRows') }}
     </p>
 
@@ -450,6 +482,7 @@ watch(config, value => {
           <ExtensionFormField :label="tLocal('commitmentLine')" required data-ui-target="extension.gcs-outcome-cost-allocation.stream-outcome-cost-allocation-config.selected-association.stream-commitment-id">
             <ExtensionSelect
               v-model="selectedAssociation.streamCommitmentId"
+              aria-required="true"
               value-key="value"
               :items="commitmentLineOptions"
               class="w-full" />
@@ -457,6 +490,7 @@ watch(config, value => {
           <ExtensionFormField :label="tLocal('commitmentType')" required data-ui-target="extension.gcs-outcome-cost-allocation.stream-outcome-cost-allocation-config.selected-association.commitment-type">
             <ExtensionSelect
               v-model="selectedAssociation.commitmentType"
+              aria-required="true"
               value-key="value"
               :items="commitmentTypeOptions"
               class="w-full" />
@@ -464,6 +498,7 @@ watch(config, value => {
           <ExtensionFormField :label="tLocal('outcome')" required data-ui-target="extension.gcs-outcome-cost-allocation.stream-outcome-cost-allocation-config.selected-association.outcome-id">
             <ExtensionSelect
               v-model="selectedAssociation.outcomeId"
+              aria-required="true"
               value-key="value"
               :items="outcomeOptions"
               class="w-full" />
@@ -475,7 +510,7 @@ watch(config, value => {
               :label="tLocal('add')"
               color="primary"
               class="cursor-default"
-              :disabled="!selectedAssociation.streamCommitmentId || !selectedAssociation.outcomeId"
+              :disabled="!selectedAssociationMapping"
               @click="saveAssociation" />
           </div>
         </div>

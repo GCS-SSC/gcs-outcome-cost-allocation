@@ -685,4 +685,46 @@ describe('Agency coding workspace', () => {
     expect(savedBody(fetchMock).config.creditMemoRules[0]).toMatchObject({ currency: 'usd', commitmentCodingLineId: '31', lines: [{ codingLineId: '21', percentage: '100' }] })
   })
 
+  it('stops an obsolete paginated lookup before requesting further pages after an Agency switch', async () => {
+    let resolvePage!: (response: Response) => void
+    const pendingPage = new Promise<Response>(resolve => { resolvePage = resolve })
+    const fetchMock = fixture()
+    const original = fetchMock.getMockImplementation()!
+    fetchMock.mockImplementation(async (url, init) => {
+      if (url.startsWith('/api/agency/1/fiscal-years')) return await pendingPage
+      return await original(url, init)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = mount(AgencyCodingConfig, { props: { agencyId: '1' } })
+    await flushPromises()
+    const oldPage = fetchMock.mock.calls.find(([url]) => url.startsWith('/api/agency/1/fiscal-years'))!
+    await wrapper.setProps({ agencyId: '2' })
+    await flushPromises()
+    expect(oldPage[1]?.signal?.aborted).toBe(true)
+    resolvePage(json({ items: Array.from({ length: 100 }, (_, index) => ({ id: String(index), egcs_ay_fiscalyeardisplay: 'Obsolete year' })), total: 200 }))
+    await flushPromises()
+    expect(fetchMock.mock.calls.some(([url]) => url.includes('/api/agency/1/fiscal-years?page=2'))).toBe(false)
+    expect(fetchMock.mock.calls.some(([url]) => url.startsWith('/api/agency/1/chart-of-accounts'))).toBe(false)
+    expect(wrapper.get('[data-cell="period"]').text()).toBe('2026–2027')
+    wrapper.unmount()
+  })
+
+  it('aborts lookup ownership on unmount and does not continue its pagination', async () => {
+    let resolvePage!: (response: Response) => void
+    const pendingPage = new Promise<Response>(resolve => { resolvePage = resolve })
+    const fetchMock = fixture()
+    const original = fetchMock.getMockImplementation()!
+    fetchMock.mockImplementation(async (url, init) => url.includes('/fiscal-years') ? await pendingPage : await original(url, init))
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = mount(AgencyCodingConfig, { props: { agencyId: '1' } })
+    await flushPromises()
+    const pageRequest = fetchMock.mock.calls.find(([url]) => url.includes('/fiscal-years'))!
+    wrapper.unmount()
+    expect(pageRequest[1]?.signal?.aborted).toBe(true)
+    resolvePage(json({ items: Array.from({ length: 100 }, (_, index) => ({ id: String(index), egcs_ay_fiscalyeardisplay: 'Late year' })), total: 200 }))
+    await flushPromises()
+    expect(fetchMock.mock.calls.some(([url]) => url.includes('/fiscal-years?page=2'))).toBe(false)
+    expect(fetchMock.mock.calls.some(([url]) => url.includes('/chart-of-accounts'))).toBe(false)
+  })
+
 })

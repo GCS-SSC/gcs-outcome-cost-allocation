@@ -1,7 +1,8 @@
 <script setup lang="ts">
+import { useAllocationRequest } from '../composables/useAllocationRequest'
 import { AgreementOutcomeCostAllocationTabErrorMessages, AgreementOutcomeCostAllocationTabStatusMessages, AgreementOutcomeCostAllocationTabMessages } from '../i18n/AgreementOutcomeCostAllocationTab'
 
-import { h, type VNode, computed, ref, watch, type Ref } from 'vue'
+import { h, type VNode, computed, ref, shallowRef, onScopeDispose, watch, type Ref } from 'vue'
 import { compareMoney, isCanonicalMoney, majorMoneyText, parseMoney, parseCurrencyMoney, subtractMoney, sumMoney, zeroMoney, type MoneyInput } from '@gcs-ssc/extensions/money'
 import type {
   ExtensionEntityTabContext,
@@ -85,8 +86,12 @@ const { t: errorText } = useExtensionI18n(AgreementOutcomeCostAllocationTabError
 const { t: statusText } = useExtensionI18n(AgreementOutcomeCostAllocationTabStatusMessages)
 const toast = useExtensionToast()
 const allocations: Ref<VersionedOutcomeAllocationInput[]> = ref([])
+const acceptedVersionAllocations = ref('[]')
 const selectedVersionId = computed(() => recordId)
-const isSaving: Ref<boolean> = ref(false)
+type SaveState = { kind: 'idle' } | { kind: 'pending'; identity: string } | { kind: 'disposed' }
+const saveState = shallowRef<SaveState>({ kind: 'idle' })
+const isSaving = computed(() => saveState.value.kind === 'pending')
+onScopeDispose(() => { saveState.value = { kind: 'disposed' } })
 const workflowRefreshKey: Ref<number> = ref(0)
 const collapsed = ref(false)
 const views = computed(() => [
@@ -100,42 +105,68 @@ const { selectedTab: selectedView } = useExtensionUrlTabState({ tabs: views, def
 const saveFailure: Ref<{ kind: 'local'; key: 'pendingEffects' | 'readonly' | 'assignmentRequired' } | { kind: 'api'; message: string } | null> = ref(null)
 const saveError = computed(() => saveFailure.value?.kind === 'local' ? tLocal(saveFailure.value.key) : saveFailure.value?.message ?? '')
 const expandedRows: Ref<Record<string, boolean>> = ref({})
-const isGenerateModalOpen: Ref<boolean> = ref(false)
-const generationCommitmentType: Ref<CommitmentType> = ref('')
-const generationYearIds: Ref<string[]> = ref([])
+type GenerationDraft = { commitmentType: CommitmentType; yearIds: string[] }
+type GenerationState = { kind: 'closed' } | { kind: 'disposed' }
+  | { kind: 'editing'; draft: GenerationDraft }
+  | { kind: 'confirming'; draft: GenerationDraft; request: symbol }
+const generationState: Ref<GenerationState> = ref({ kind: 'closed' })
+const generationDraft = computed(() => generationState.value.kind === 'editing' || generationState.value.kind === 'confirming'
+  ? generationState.value.draft : null)
+const isGenerateModalOpen = computed({
+  get: () => generationDraft.value !== null,
+  set: open => { if (!open && generationState.value.kind !== 'disposed') generationState.value = { kind: 'closed' } }
+})
+const generationCommitmentType = computed<CommitmentType>({
+  get: () => generationDraft.value?.commitmentType ?? '',
+  set: commitmentType => {
+    if (generationDraft.value) generationState.value = { kind: 'editing', draft: { ...generationDraft.value, commitmentType } }
+  }
+})
+const generationYearIds = computed<string[]>({
+  get: () => generationDraft.value?.yearIds ?? [],
+  set: yearIds => {
+    if (generationDraft.value) generationState.value = { kind: 'editing', draft: { ...generationDraft.value, yearIds } }
+  }
+})
+onScopeDispose(() => { generationState.value = { kind: 'disposed' } })
 const confirm = useExtensionConfirmDialog()
 const api = useExtensionApi(extensionKey)
 const hostApi = useHostApi()
 
 const endpoint = computed(() => `/agreements/${context.agreementId}/allocations`)
-const data: Ref<AllocationResponse | null> = ref(null)
+const allocationRequest = useAllocationRequest<AllocationResponse>()
+const completionRequest = useAllocationRequest<boolean>()
+const { data, status } = allocationRequest
 const currency = (): string => {
   if (!data.value) throw new Error('Allocation money requires its owning Agreement currency.')
   return data.value.currency
 }
-const selectedVersionHasCompletion: Ref<boolean> = ref(false)
-const completionLoading = ref(true)
-const completionLoadFailed = ref(false)
-const status: Ref<'idle' | 'pending' | 'success' | 'error'> = ref('idle')
-let requestGeneration = 0
-const refresh = async () => {
-  const generation = ++requestGeneration
-  try {
-    status.value = 'pending'
-    const response = await api.get<AllocationResponse>(endpoint.value)
-    if (generation !== requestGeneration) return
-    data.value = response
-    status.value = 'success'
-  } catch {
-    if (generation !== requestGeneration) return
-    data.value = null
-    status.value = 'error'
-  }
+const completionLoading = computed(() => completionRequest.status.value === 'idle' || completionRequest.status.value === 'pending')
+const completionLoadFailed = computed(() => completionRequest.status.value === 'error')
+const selectedVersionHasCompletion = computed(() => selectedVersionId.value
+  ? completionRequest.status.value !== 'success' || completionRequest.data.value !== false
+  : false)
+const refresh = () => {
+  const requestedEndpoint = endpoint.value
+  return allocationRequest.run(signal => api.get<AllocationResponse>(requestedEndpoint, { signal }))
 }
+watch(endpoint, () => {
+  allocationRequest.invalidate()
+  void refresh()
+}, { flush: 'sync' })
 await refresh()
 
-const syncAllocationResponse = (value: AllocationResponse | null) => {
-  allocations.value = value?.allocations.map((allocation: VersionedOutcomeAllocationInput) => ({ ...allocation })) ?? []
+const syncAllocationResponse = (value: AllocationResponse | null, replaceDraft = false) => {
+  if (!value && !replaceDraft) return
+  const selectedDraft = allocations.value.filter(allocation => allocation.allocationVersionId === recordId)
+  const loaded = value?.allocations.map(allocation => ({ ...allocation })) ?? []
+  const retainDraft = !replaceDraft
+    && JSON.stringify(selectedDraft) !== acceptedVersionAllocations.value
+    && value?.versions.find(version => version.id === recordId)?.status === 'draft'
+  allocations.value = retainDraft
+    ? [...loaded.filter(allocation => allocation.allocationVersionId !== recordId), ...selectedDraft]
+    : loaded
+  acceptedVersionAllocations.value = JSON.stringify(loaded.filter(allocation => allocation.allocationVersionId === recordId))
 }
 
 watch(() => data.value, value => {
@@ -179,39 +210,23 @@ const warnEditingBlocked = () => {
 const isLoading = computed(() => status.value === 'pending')
 const streamConfig = computed(() => parseOutcomeCostAllocationConfig(config))
 
-let completionRequestGeneration = 0
-const refreshSelectedCompletion = async () => {
-  const generation = ++completionRequestGeneration
+const refreshSelectedCompletion = () => {
   const requestedVersionId = selectedVersionId.value
-  const requestedIdentity = `${context.agreementId}:${requestedVersionId}`
-  const isCurrentRequest = () => generation === completionRequestGeneration
-    && requestedIdentity === `${context.agreementId}:${selectedVersionId.value}`
-  completionLoading.value = true
-  completionLoadFailed.value = false
-  if (!requestedVersionId) {
-    selectedVersionHasCompletion.value = false
-    completionLoading.value = false
-    return
-  }
-  selectedVersionHasCompletion.value = true
-  try {
-    const query = new URLSearchParams({
-      entityType: 'gcs-outcome-cost-allocation:allocation-version',
-      entityId: requestedVersionId
-    })
-    const response = await hostApi.get<{ item: unknown | null }>(`/api/completions/runtime?${query.toString()}`)
-    if (!isCurrentRequest()) return
-    selectedVersionHasCompletion.value = response.item != null
-  } catch {
-    if (!isCurrentRequest()) return
-    selectedVersionHasCompletion.value = true
-    completionLoadFailed.value = true
-  } finally {
-    if (isCurrentRequest()) completionLoading.value = false
-  }
+  if (!requestedVersionId) return completionRequest.run(async () => false)
+  const query = new URLSearchParams({
+    entityType: 'gcs-outcome-cost-allocation:allocation-version',
+    entityId: requestedVersionId
+  })
+  return completionRequest.run(async signal => {
+    const response = await hostApi.get<{ item: unknown | null }>(`/api/completions/runtime?${query.toString()}`, { signal })
+    return response.item != null
+  })
 }
 
-watch([selectedVersionId, () => context.agreementId], refreshSelectedCompletion, { immediate: true })
+watch([selectedVersionId, () => context.agreementId], () => {
+  completionRequest.invalidate()
+  void refreshSelectedCompletion()
+}, { immediate: true, flush: 'sync' })
 
 const methodOptions = computed(() => [
   { label: tLocal('amount'), value: 'amount' },
@@ -455,26 +470,39 @@ const ensureAllocation = (association: ConfiguredAssociationRow) => {
 }
 
 type AllocationEditorDraft = Omit<VersionedOutcomeAllocationInput, 'allocationMethod' | 'allocationValue'> & { allocationMethod: 'amount' | 'percentage'; allocationValue: string }
-const allocationEditor: Ref<{ association: ConfiguredAssociationRow; allocation: AllocationEditorDraft } | null> = ref(null)
-const isAllocationModalOpen = ref(false)
-const allocationEditorFailure: Ref<'invalidValue' | 'yearTotalExceeded' | null> = ref(null)
+type EditorFailure = 'invalidValue' | 'yearTotalExceeded' | null
+type AllocationEditorState = { kind: 'closed' } | {
+  kind: 'editing'
+  editor: { association: ConfiguredAssociationRow; allocation: AllocationEditorDraft }
+  failure: EditorFailure
+}
+const allocationEditorState: Ref<AllocationEditorState> = ref({ kind: 'closed' })
+const allocationEditor = computed(() => allocationEditorState.value.kind === 'editing' ? allocationEditorState.value.editor : null)
+const allocationEditorFailure = computed<EditorFailure>({
+  get: () => allocationEditorState.value.kind === 'editing' ? allocationEditorState.value.failure : null,
+  set: failure => { if (allocationEditorState.value.kind === 'editing') allocationEditorState.value.failure = failure }
+})
+const isAllocationModalOpen = computed({
+  get: () => allocationEditorState.value.kind === 'editing',
+  set: open => { if (!open) allocationEditorState.value = { kind: 'closed' } }
+})
 const allocationEditorError = computed(() => allocationEditorFailure.value === 'invalidValue'
   ? tLocal('invalidValue')
   : allocationEditorFailure.value === 'yearTotalExceeded' ? errorText('GCS_OUTCOME_COST_ALLOCATION_YEAR_TOTAL_EXCEEDED') : '')
 
 const closeAllocationEditor = () => {
-  isAllocationModalOpen.value = false
-  allocationEditor.value = null
-  allocationEditorFailure.value = null
+  allocationEditorState.value = { kind: 'closed' }
 }
 
 const openAllocationEditor = (association: ConfiguredAssociationRow) => {
   if (warnEditingBlocked()) return
   if (warnPendingEffects() || !canEditSelectedVersion.value || hasPendingDraftMutation.value) return
   const allocation = getAllocation(association) ?? createAllocation(association)
-  allocationEditor.value = { association, allocation: { ...allocation, allocationValue: allocation.allocationMethod === 'amount' ? majorMoneyText(allocation.allocationValue) : allocation.allocationValue } }
-  allocationEditorFailure.value = null
-  isAllocationModalOpen.value = true
+  allocationEditorState.value = {
+    kind: 'editing',
+    editor: { association, allocation: { ...allocation, allocationValue: allocation.allocationMethod === 'amount' ? majorMoneyText(allocation.allocationValue) : allocation.allocationValue } },
+    failure: null
+  }
 }
 
 const editorMoneyInput = computed<MoneyInput>({
@@ -729,13 +757,17 @@ const getGenerationCandidates = () => {
 const openGenerateRows = () => {
   if (warnEditingBlocked()) return
   if (warnPendingEffects()) return
-  if (!canEditSelectedVersion.value || hasPendingDraftMutation.value) {
+  if (!canEditSelectedVersion.value || hasPendingDraftMutation.value || generationState.value.kind === 'disposed') {
     return
   }
 
-  generationCommitmentType.value = streamConfig.value.enabledCommitmentTypes[0] ?? ''
-  generationYearIds.value = fundedBudgetYears.value.map((year: AllocationBudgetYear) => String(year.id))
-  isGenerateModalOpen.value = true
+  generationState.value = {
+    kind: 'editing',
+    draft: {
+      commitmentType: streamConfig.value.enabledCommitmentTypes[0] ?? '',
+      yearIds: fundedBudgetYears.value.map((year: AllocationBudgetYear) => String(year.id))
+    }
+  }
 }
 
 /**
@@ -744,10 +776,12 @@ const openGenerateRows = () => {
 const applyGeneratedRows = async () => {
   if (warnEditingBlocked()) return
   if (warnPendingEffects()) return
-  if (!canEditSelectedVersion.value || hasPendingDraftMutation.value) {
+  if (!canEditSelectedVersion.value || hasPendingDraftMutation.value || generationState.value.kind !== 'editing') {
     return
   }
 
+  const requestedVersionId = selectedVersionId.value
+  const draft = generationState.value.draft
   const candidates = getGenerationCandidates()
   const candidateKeys = new Set(candidates.map(getAssociationKey))
   const existingKeys = new Set(selectedVersionAllocations.value.map(getAllocationKey))
@@ -762,13 +796,17 @@ const applyGeneratedRows = async () => {
   )
 
   if (deletions.length > 0) {
+    const request = Symbol('allocation-generation')
+    generationState.value = { kind: 'confirming', draft, request }
     const confirmed = await confirm({
       title: tLocal('removeRowsTitle'),
       description: tLocal('removeRowsDescription'),
       confirmLabel: tLocal('generateRows'),
       confirmColor: 'warning'
     })
+    if (generationState.value.kind !== 'confirming' || generationState.value.request !== request) return
     if (!confirmed) {
+      generationState.value = { kind: 'editing', draft }
       return
     }
   }
@@ -776,7 +814,7 @@ const applyGeneratedRows = async () => {
   const deletionKeys = new Set(deletions.map(getAllocationKey))
   allocations.value = [
     ...allocations.value.filter((allocation: VersionedOutcomeAllocationInput) =>
-      allocation.allocationVersionId !== selectedVersionId.value || !deletionKeys.has(getAllocationKey(allocation))
+      allocation.allocationVersionId !== requestedVersionId || !deletionKeys.has(getAllocationKey(allocation))
     ),
     ...additions
   ]
@@ -793,22 +831,32 @@ const save = async () => {
     return false
   }
 
+  if (saveState.value.kind === 'disposed') return false
+  const request = { kind: 'pending', identity: `${context.agreementId}:${recordId}` } satisfies SaveState
+  const requestedEndpoint = endpoint.value
+  const requestedVersionId = selectedVersionId.value
+  const submittedAllocations = JSON.stringify(activeAllocations.value)
+  const isCurrentSave = () => saveState.value === request && request.identity === `${context.agreementId}:${recordId}`
+  saveState.value = request
   try {
-    isSaving.value = true
     saveFailure.value = null
     await saveOutcomeAllocationsRequest(
-      api.path(endpoint.value),
-      selectedVersionId.value,
+      api.path(requestedEndpoint),
+      requestedVersionId,
       activeAllocations.value
     )
+    if (!isCurrentSave()) return false
+    acceptedVersionAllocations.value = submittedAllocations
     await refresh()
+    if (!isCurrentSave()) return false
     toast.add({ ...getOutcomeAllocationToastText(() => locale.value, 'saved'), color: 'success' })
     return true
   } catch (error: unknown) {
+    if (!isCurrentSave()) return false
     saveFailure.value = { kind: 'api', message: error instanceof Error ? error.message : String(error) }
     return false
   } finally {
-    isSaving.value = false
+    if (isCurrentSave()) saveState.value = { kind: 'idle' }
   }
 }
 
@@ -820,8 +868,14 @@ const handleWorkflowChanged = async () => {
 }
 
 const hasPendingDraftMutation = computed(() => isSaving.value || isLoading.value || completionLoading.value)
+watch([
+  selectedVersionId, () => context.agreementId, () => context.agencyId, () => context.streamId,
+  () => context.ownerType, () => context.ownerId, () => JSON.stringify(config), data,
+  () => JSON.stringify(selectedVersionAllocations.value),
+  canEditSelectedVersion, () => canUpdate, () => canWork, hasPendingDraftMutation, hasPendingEffects
+], () => { isGenerateModalOpen.value = false }, { flush: 'sync' })
 const isDirty = computed(() => JSON.stringify(selectedVersionAllocations.value)
-  !== JSON.stringify(data.value?.allocations.filter(allocation => allocation.allocationVersionId === recordId) ?? []))
+  !== acceptedVersionAllocations.value)
 const completionLabels = computed(() => ({
   title: tLocal('allocationCompletion'),
   description: tLocal('completionDescription'),
@@ -841,19 +895,20 @@ const breadcrumbItems = computed(() => [
   { label: versionTitle.value }
 ])
 watch(() => context.agreementId, () => {
-  data.value = null
+  saveState.value = { kind: 'idle' }
   saveFailure.value = null
   expandedRows.value = {}
   isGenerateModalOpen.value = false
-  refresh()
-})
+  syncAllocationResponse(null, true)
+}, { flush: 'sync' })
 watch(() => recordId, () => {
+  saveState.value = { kind: 'idle' }
   saveFailure.value = null
   expandedRows.value = {}
   isGenerateModalOpen.value = false
-  syncAllocationResponse(data.value)
+  syncAllocationResponse(data.value, true)
   closeAllocationEditor()
-})
+}, { flush: 'sync' })
 </script>
 
 <template>
@@ -1084,10 +1139,12 @@ watch(() => recordId, () => {
           <ExtensionWorkflowSection
             v-else-if="selectedView === 'workflows'" :key="recordId"
             entity-type="gcs-outcome-cost-allocation:allocation-version" :entity-id="recordId" :can-edit="!hasPendingDraftMutation"
+            :mutation-role-allowed="canUpdate"
             :refresh-key="workflowRefreshKey" @changed="handleWorkflowChanged" />
           <ExtensionCompletionPanel
             v-else-if="selectedView === 'completion'" :key="recordId"
             entity-type="gcs-outcome-cost-allocation:allocation-version" :entity-id="recordId"
+            :mutation-role-allowed="canUpdate"
             :can-complete="canUpdate && canWork && canEditSelectedVersion && !isDirty && !hasPendingDraftMutation && !hasPendingEffects"
             :can-work-workflow="!hasPendingDraftMutation" :labels="completionLabels" :show-header="false" :show-divider="false"
             :refresh-key="workflowRefreshKey" @changed="handleWorkflowChanged" />

@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { h, type VNode, computed, ref, watch, type Ref } from 'vue'
+import { h, type VNode, computed, onScopeDispose, ref, shallowRef, watch, type Ref } from 'vue'
 import type { ExtensionEntityTabContext, GcsExtensionJsonConfig, GcsExtensionRbacRequirement } from '@gcs-ssc/extensions'
 import { ExtensionBadge, ExtensionButton, ExtensionResourceLayout, useExtensionApi, useExtensionI18n, useExtensionToast } from '@gcs-ssc/extensions/ui'
+import { useAllocationRequest } from '../composables/useAllocationRequest'
 import { AgreementOutcomeCostAllocationTabMessages, AgreementOutcomeCostAllocationTabStatusMessages } from '../i18n/AgreementOutcomeCostAllocationTab'
 import { type AllocationMoney, type CostAllocationVersion, resolveAllocationAmounts } from '../shared/allocation'
 import { parseMoney, subtractMoney, sumMoney } from '@gcs-ssc/extensions/money'
@@ -28,42 +29,35 @@ const { locale, t } = useExtensionI18n(AgreementOutcomeCostAllocationTabMessages
 const { t: statusText } = useExtensionI18n(AgreementOutcomeCostAllocationTabStatusMessages)
 const api = useExtensionApi(extensionKey)
 const toast = useExtensionToast()
-const data: Ref<AllocationResponse | null> = ref(null)
+const request = useAllocationRequest<AllocationResponse>()
+const { data, status } = request
 const currency = (): string => {
   if (!data.value) throw new Error('Allocation money requires its owning Agreement currency.')
   return data.value.currency
 }
-const status: Ref<'idle' | 'pending' | 'success' | 'error'> = ref('idle')
 const search = ref('')
 const pagination = ref({ pageIndex: 0, pageSize: 10 })
-const isCreatingDraft = ref(false)
-const deletingVersionId = ref('')
+type MutationState = { kind: 'idle' } | { kind: 'creating' } | { kind: 'deleting'; versionId: string } | { kind: 'disposed' }
+const mutation = shallowRef<MutationState>({ kind: 'idle' })
+const isCreatingDraft = computed(() => mutation.value.kind === 'creating')
+const deletingVersionId = computed(() => mutation.value.kind === 'deleting' ? mutation.value.versionId : '')
+onScopeDispose(() => { mutation.value = { kind: 'disposed' } })
 const error: Ref<{ kind: 'local'; key: 'assignmentRequired' | 'pendingEffects' } | { kind: 'api'; message: string } | null> = ref(null)
 const saveError = computed(() => error.value?.kind === 'local' ? t(error.value.key) : error.value?.message ?? '')
 const endpoint = computed(() => `/agreements/${context.agreementId}/allocations`)
-let requestGeneration = 0
-const refresh = async () => {
-  const generation = ++requestGeneration
-  status.value = 'pending'
-  try {
-    const response = await api.get<AllocationResponse>(endpoint.value)
-    if (generation !== requestGeneration) return
-    data.value = response
-    status.value = 'success'
-  } catch {
-    if (generation !== requestGeneration) return
-    data.value = null
-    status.value = 'error'
-  }
+const refresh = () => {
+  const requestedEndpoint = endpoint.value
+  return request.run(signal => api.get<AllocationResponse>(requestedEndpoint, { signal }))
 }
-await refresh()
 watch(() => context.agreementId, () => {
-  data.value = null
+  request.invalidate()
+  mutation.value = { kind: 'idle' }
   error.value = null
   search.value = ''
   pagination.value.pageIndex = 0
-  refresh()
-})
+  void refresh()
+}, { flush: 'sync' })
+await refresh()
 const hasPendingMutation = computed(() => isCreatingDraft.value || Boolean(deletingVersionId.value))
 const hasDraftVersion = computed(() => data.value?.versions.some(version => version.status === 'draft') === true)
 const formatMoney = (value: AllocationMoney) => data.value?.currency
@@ -114,15 +108,19 @@ const createDraftVersion = async () => {
     toast.add({ title: getOutcomeAllocationToastText(() => locale.value, 'error').title, description: (): VNode => h('span', t(warningKey)), color: 'warning' })
     return
   }
-  isCreatingDraft.value = true
+  if (mutation.value.kind === 'disposed') return
+  const active: MutationState & { kind: 'creating' } = { kind: 'creating' }
+  const requestedEndpoint = endpoint.value
+  mutation.value = active
   error.value = null
   try {
-    await api.post<{ version?: CostAllocationVersion }>(getOutcomeAllocationVersionsEndpoint(endpoint.value))
+    await api.post<{ version?: CostAllocationVersion }>(getOutcomeAllocationVersionsEndpoint(requestedEndpoint))
+    if (mutation.value !== active) return
     await refresh()
   } catch (cause) {
-    error.value = { kind: 'api', message: cause instanceof Error ? cause.message : String(cause) }
+    if (mutation.value === active) error.value = { kind: 'api', message: cause instanceof Error ? cause.message : String(cause) }
   } finally {
-    isCreatingDraft.value = false
+    if (mutation.value === active) mutation.value = { kind: 'idle' }
   }
 }
 const deleteDraftVersion = async (versionId: string) => {
@@ -132,16 +130,21 @@ const deleteDraftVersion = async (versionId: string) => {
     return
   }
   if (hasPendingMutation.value) return
-  deletingVersionId.value = versionId
+  if (mutation.value.kind === 'disposed') return
+  const active: MutationState & { kind: 'deleting' } = { kind: 'deleting', versionId }
+  const requestedEndpoint = endpoint.value
+  mutation.value = active
   error.value = null
   try {
-    await deleteOutcomeAllocationDraftVersionRequest(api.path(getOutcomeAllocationVersionEndpoint(endpoint.value, encodeURIComponent(versionId))))
+    await deleteOutcomeAllocationDraftVersionRequest(api.path(getOutcomeAllocationVersionEndpoint(requestedEndpoint, encodeURIComponent(versionId))))
+    if (mutation.value !== active) return
     await refresh()
+    if (mutation.value !== active) return
     toast.add({ ...getOutcomeAllocationToastText(() => locale.value, 'deleted'), color: 'success' })
   } catch (cause) {
-    error.value = { kind: 'api', message: cause instanceof Error ? cause.message : String(cause) }
+    if (mutation.value === active) error.value = { kind: 'api', message: cause instanceof Error ? cause.message : String(cause) }
   } finally {
-    deletingVersionId.value = ''
+    if (mutation.value === active) mutation.value = { kind: 'idle' }
   }
 }
 </script>

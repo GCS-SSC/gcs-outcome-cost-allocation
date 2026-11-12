@@ -39,6 +39,7 @@ const jsonResponse = (value: unknown, status = 200) => new Response(JSON.stringi
 const mountCollection = async (fetcher: typeof fetch, permissions = { canUpdate: true, canDelete: true, canWork: true }) => {
   vi.stubGlobal('fetch', fetcher)
   const locale = ref('en')
+  const agreementId = ref('agreement-1')
   const runtime = installExtensionTestUiRuntime()
   const toasts: Record<string, unknown>[] = []
   runtime.composables.useToast = () => ({ add: notification => { toasts.push(notification) } })
@@ -49,12 +50,12 @@ const mountCollection = async (fetcher: typeof fetch, permissions = { canUpdate:
     setup: () => () => h(Suspense, null, { default: () => h(AgreementOutcomeCostAllocationTab, {
       ...permissions,
       extensionKey: 'gcs-outcome-cost-allocation', config: {}, rbac: { subject: 'agreement', action: 'update' },
-      context: { target: 'agreement', agreementId: 'agreement-1', agencyId: 'agency-1', ownerType: 'fundingcaseagreement', ownerId: 'agreement-1', scope: { type: 'agency', agencyId: 'agency-1' } },
+      context: { target: 'agreement', agreementId: agreementId.value, agencyId: 'agency-1', ownerType: 'fundingcaseagreement', ownerId: 'agreement-1', scope: { type: 'agency', agencyId: 'agency-1' } },
       navigation: { collectionHref: '/en/agreements/agreement-1', recordHref: (id: string) => `/en/agreements/agreement-1/extension/gcs-outcome-cost-allocation/outcome-cost-allocation/${id}` }
     }) })
   }))
   await flushPromises()
-  return { wrapper, locale, toasts }
+  return { wrapper, locale, toasts, agreementId }
 }
 const button = (wrapper: ReturnType<typeof mount>, label: string) => wrapper.findAll('button').find(item => item.text() === label || item.attributes('aria-label')?.startsWith(`${label}: `))!
 
@@ -92,6 +93,27 @@ describe('Agreement cost allocation collection', () => {
     expect(wrapper.text()).toContain('Aucune répartition des coûts ne correspond')
     await wrapper.get('input').setValue('ébauche')
     expect(wrapper.get('tr').attributes('data-version-id')).toBe('1')
+    wrapper.unmount()
+  })
+
+  it('does not refresh a replacement Agreement after an old create settles', async () => {
+    let finishCreate!: () => void
+    const create = new Promise<void>(resolve => { finishCreate = resolve })
+    const fetcher = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === 'POST') { await create; return jsonResponse({ version }) }
+      return jsonResponse({ ...response, versions: [], allocations: [] })
+    })
+    const { wrapper, agreementId } = await mountCollection(fetcher as typeof fetch)
+    await button(wrapper, 'New draft').trigger('click')
+    agreementId.value = 'agreement-2'
+    await flushPromises()
+    const requestsAfterSwitch = fetcher.mock.calls.length
+    finishCreate()
+    await flushPromises()
+    expect(fetcher.mock.calls).toHaveLength(requestsAfterSwitch)
+    expect(wrapper.findAll('tr')).toHaveLength(0)
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+    expect(button(wrapper, 'New draft').attributes('disabled')).toBeUndefined()
     wrapper.unmount()
   })
 
