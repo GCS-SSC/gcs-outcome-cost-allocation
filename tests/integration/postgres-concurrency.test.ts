@@ -633,6 +633,7 @@ describe('outcome allocation PostgreSQL concurrency', () => {
     `.execute(observerDb)
     await sql`
       CREATE TABLE "Funding_Case_Agreement_Budget_Line_Item" (
+        egcs_fc_pendingfunding boolean NOT NULL DEFAULT false,
         id bigint PRIMARY KEY,
         egcs_fc_fundingagreementbudgetfiscalyear bigint NOT NULL,
         egcs_fc_programfunding numeric NOT NULL CHECK (egcs_fc_programfunding = trunc(egcs_fc_programfunding)),

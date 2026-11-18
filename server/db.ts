@@ -58,6 +58,7 @@ export interface OutcomeCostAllocationHostDatabase {
     id: string
     egcs_fc_fundingagreementbudgetfiscalyear: string
     egcs_fc_programfunding: string
+    egcs_fc_pendingfunding: boolean
     egcs_fc_currency: string
     _deleted: boolean
   }

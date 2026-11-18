@@ -66,6 +66,18 @@ describe('Outcome allocation PostgreSQL native source contracts', () => {
     await capture('Same FY native chart mappings', 'CAD chart501→budget301; USD chart502→budget302', { mappings: [...mappings], lines })
   })
 
+  it('uses a pending line only after its funding is approved for the budget', async () => {
+    await sql`UPDATE "Funding_Case_Agreement_Budget_Line_Item" SET egcs_fc_pendingfunding=true`.execute(db)
+    const allocationDb = asOutcomeCostAllocationDb(db)
+    expect(await getAgreementBudgetYears(allocationDb, '1', '2')).toMatchObject([{
+      program_funding: moneyFromMinorUnits('0', 'CAD')
+    }])
+    await sql`UPDATE "Funding_Case_Agreement_Budget_Line_Item" SET egcs_fc_pendingfunding=false`.execute(db)
+    expect(await getAgreementBudgetYears(allocationDb, '1', '2')).toMatchObject([{
+      program_funding: moneyFromMinorUnits('12555', 'CAD')
+    }])
+  })
+
   it('rejects unsupported mixed funding without producing a scalar allocation basis', async () => {
     await sql`INSERT INTO "Funding_Case_Agreement_Budget_Line_Item" VALUES (102,10,8446,'usd',false)`.execute(db)
     const result = await getAgreementBudgetYears(asOutcomeCostAllocationDb(db), '1', '2').then(
