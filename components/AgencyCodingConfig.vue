@@ -197,6 +197,7 @@ onScopeDispose(() => { saveState.value = { kind: 'disposed' } })
     </div>
     <ExtensionAlert v-if="!result.success" color="error" :description="t('invalid')" />
     <ExtensionResourceLayout
+      table-id="extensions.gcs-outcome-cost-allocation.agency-coding-config"
       v-model:search="search" v-model:pagination="pagination"
       :data="visibleRows" :columns="columns" :total-records="filteredRows.length" :loading="loading"
       :show-button="!readOnly" :button-disabled="locked" :button-label="t(kind === 'receivableSets' ? 'addSet' : 'addRule')" :search-placeholder="t('search')" @add="openEditor()">

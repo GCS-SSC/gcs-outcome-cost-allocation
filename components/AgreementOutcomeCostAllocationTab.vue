@@ -158,6 +158,7 @@ const deleteDraftVersion = async (versionId: string) => {
       {{ t('pendingEffects') }}
     </p>
     <ExtensionResourceLayout
+      table-id="extensions.gcs-outcome-cost-allocation.agreement-outcome-cost-allocation-tab"
       v-model:search="search" v-model:pagination="pagination" :data="visibleRows" :columns="columns"
       :total-records="filteredRows.length" :loading="status === 'pending'" :request-status="status" :aria-label="t('allocationVersions')"
       :button-label="t('newDraft')" :show-button="canUpdate" :button-disabled="hasPendingMutation || status !== 'success' || hasDraftVersion" :search-placeholder="t('search')"
