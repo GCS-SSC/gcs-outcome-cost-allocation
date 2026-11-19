@@ -50,8 +50,61 @@ export const configureSingleApprovalSubmission = async (
   await ok(await page.request.post(streamBase, { data: { egcs_tp_workflow: workflow.id } }), 'Link interoperability submission')
 }
 
+type RiskRuntime = { current: { runtimeState: string }; reviews: Array<{ id: string; runtimeState: string }> }
+type RiskAssessment = { egcs_cn_assessmentschema: {
+  sections: Array<{ name: string; subSections: Array<{ name: string; questions: Array<{ name: string; options: Array<{ value: number }> }> }> }>
+  outcomes: Array<{ name: string; strategies: Array<{ name: string; label: { en: string; fr: string }; options: Array<{ value: string }> }> }>
+} }
+
+const completeAgreementRiskRating = async (page: Page, entityId: string): Promise<void> => {
+  const target = { entityType: 'fundingcaseagreement', entityId, purpose: 'risk_rating' }
+  await ok(await page.request.post('/api/workflows/start', { data: target }), 'Start the required Agreement risk rating')
+  const readRuntime = async () => {
+    const response = await page.request.get('/api/workflows/runtime', { params: target })
+    await ok(response, 'Read the required Agreement risk rating')
+    return await json<RiskRuntime>(response)
+  }
+  let runtime = await readRuntime()
+  while (runtime.current.runtimeState === 'active') {
+    const review = runtime.reviews.find(item => item.runtimeState === 'active')
+    if (!review) throw new Error('Expected an active seeded risk assessment.')
+    const assessmentUrl = `/api/reviews/${review.id}/assessment`
+    const response = await page.request.get(assessmentUrl)
+    await ok(response, 'Read the seeded risk assessment')
+    const { egcs_cn_assessmentschema: schema } = await json<RiskAssessment>(response)
+    const answers = schema.sections.flatMap(section => section.subSections.flatMap(subsection =>
+      subsection.questions.map(question => {
+        const option = question.options[0]
+        if (!option) throw new Error(`Missing risk answer option for ${question.name}.`)
+        return {
+          section: section.name, subsection: subsection.name, question: question.name, value: option.value,
+          comment: 'Low risk supported by the disposable financial fixture.'
+        }
+      })))
+    const outcomes = schema.outcomes.flatMap(section => section.strategies.map(strategy => {
+      const option = strategy.options[0]
+      if (!option) throw new Error(`Missing risk strategy option for ${strategy.name}.`)
+      return {
+        section: section.name, subsection: strategy.name, nameEn: strategy.label.en, nameFr: strategy.label.fr,
+        recommendedStrategy: option.value, selectedStrategy: option.value, accepted: true, justification: '',
+        comment: 'Accept low-risk monitoring for the disposable financial fixture.'
+      }
+    }))
+    const assessmentResponse = { answers, outcomes, customOutcomes: [], egcs_cn_reviewalignment: false, egcs_cn_reviewalignmentnarrative: '' }
+    await ok(await page.request.patch(assessmentUrl, { data: assessmentResponse }), 'Save the prepared Agreement risk assessment')
+    await ok(await page.request.post('/api/completions/complete', { data: {
+      entityType: 'commonreview', entityId: review.id, comments: 'Agreement risk assessment completed.',
+      payload: { assessmentResponse }
+    } }), 'Complete the Agreement risk assessment')
+    runtime = await readRuntime()
+    expect(runtime.reviews.find(item => item.id === review.id)?.runtimeState).not.toBe('active')
+  }
+  expect(runtime.current.runtimeState).toBe('succeeded')
+}
+
 export const completeAndApprove = async (page: Page, approver: Page, entityType: string, entityId: string): Promise<void> => {
   if (entityType === 'fundingcaseagreement') {
+    await completeAgreementRiskRating(page, entityId)
     await ok(await page.request.post('/api/workflows/start', { data: { entityType, entityId, purpose: 'approval_submission' } }), 'Start the explicit Agreement approval submission')
   } else {
     await ok(await page.request.post('/api/completions/complete', { data: { entityType, entityId, comments: 'Package-owned financial interoperability evidence.' } }), 'Complete interoperability evidence')

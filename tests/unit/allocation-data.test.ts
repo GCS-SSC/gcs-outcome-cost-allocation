@@ -810,6 +810,7 @@ describe('outcome allocation data reads', () => {
             '=',
             'Funding_Case_Agreement_Budget_Fiscal_Year.id'
           ],
+          ['on', 'Funding_Case_Agreement_Budget_Line_Item.egcs_fc_pendingfunding', '=', false],
           ['on', 'Funding_Case_Agreement_Budget_Line_Item._deleted', '=', false]
         ]
       },

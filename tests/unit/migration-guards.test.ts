@@ -244,6 +244,7 @@ describe('outcome allocation generated-record database guards', () => {
         egcs_fc_fundingagreementbudgetfiscalyear bigint NOT NULL,
         egcs_fc_currency text NOT NULL DEFAULT 'cad',
         egcs_fc_programfunding numeric NOT NULL CHECK (egcs_fc_programfunding = trunc(egcs_fc_programfunding)),
+        egcs_fc_pendingfunding boolean NOT NULL DEFAULT false,
         _deleted boolean NOT NULL DEFAULT false
       )
     `.execute(db)
