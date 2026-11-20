@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest'
-import { mount, flushPromises } from '@vue/test-utils'
+import { mount } from '@vue/test-utils'
 import { defineComponent, h, ref, Suspense } from 'vue'
 import UToaster from '@nuxt/ui/components/Toaster.vue'
 import { useToast } from '@nuxt/ui/composables/useToast'
@@ -35,25 +35,35 @@ it('renders retained Nuxt UI warning and success toasts after the producing comp
     }) })
   } })
   const wrapper = mount(defineComponent({ setup: () => () => h(UToaster, { portal: false, duration: 0 }, { default: () => producerVisible.value ? h(Producer) : null }) }))
+  const viewport = () => wrapper.get('[role="region"][aria-label^="Notifications"]')
+  const toastDescriptions = () => viewport().findAll('[data-slot="description"]').map(node => node.text())
   try {
-    await flushPromises()
-    expect(wrapper.text()).toContain('Allocation saved.')
-    expect(wrapper.text()).toContain('Draft allocation deleted.')
+    await expect.poll(toastDescriptions, { timeout: 3_000 }).toEqual(['Allocation saved.', 'Draft allocation deleted.'])
     await wrapper.findAll('button').find(button => button.text() === 'New draft')!.trigger('click')
-    await flushPromises()
-    expect(wrapper.text()).toContain('pending payments')
+    await expect.poll(toastDescriptions).toEqual([
+      'Allocation saved.',
+      'Draft allocation deleted.',
+      expect.stringContaining('pending payments')
+    ])
+
     producerVisible.value = false
     locale.value = 'fr'
-    await flushPromises()
-    expect(wrapper.findAll('[role="alert"][aria-live="off"]').every(node => node.attributes('aria-hidden') !== 'true')).toBe(true)
-    expect(wrapper.findAll('[role="alert"][aria-live="off"]').map(node => node.text()).join(' ')).toContain('Répartition enregistrée.')
-    expect(wrapper.findAll('[role="alert"][aria-live="off"]').map(node => node.text()).join(' ')).not.toContain('pending payments')
-    expect(wrapper.text()).toContain('Répartition enregistrée.')
-    expect(wrapper.text()).toContain('Ébauche supprimée.')
-    expect(wrapper.text()).toContain('Erreur')
-    expect(wrapper.text()).toContain('paiements')
-    expect(wrapper.findAll('[data-slot="description"]').map(node => node.text()).join(' ')).not.toContain('pending payments')
-    expect(wrapper.findAll('[data-slot="description"]').map(node => node.text()).join(' ')).not.toContain('Allocation saved.')
+    await expect.poll(toastDescriptions).toEqual([
+      'Répartition enregistrée.',
+      'Ébauche supprimée.',
+      expect.stringContaining('paiements')
+    ])
+    expect(wrapper.findComponent(AgreementOutcomeCostAllocationTab).exists()).toBe(false)
+    const notices = viewport().findAll('li')
+    expect(notices).toHaveLength(3)
+    for (const notice of notices) {
+      expect(notice.isVisible()).toBe(true)
+      expect(notice.attributes('aria-hidden')).not.toBe('true')
+      expect(notice.attributes('inert')).toBeUndefined()
+    }
+    expect(viewport().findAll('[data-slot="title"]').map(node => node.text())).toEqual(['Succès', 'Succès', 'Erreur'])
+    expect(viewport().text()).not.toContain('pending payments')
+    expect(viewport().text()).not.toContain('Allocation saved.')
   } finally {
     wrapper.unmount()
     vi.unstubAllGlobals()
